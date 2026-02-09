@@ -26,38 +26,51 @@ This server calls Microsoft's Teams APIs directly (Substrate, chatsvc, CSA)  - t
 - A Microsoft account with Teams access
 - Google Chrome, Microsoft Edge, or Chromium browser installed
 
-### Setup
-
-Clone and build:
-
-```bash
-git clone https://github.com/m0nkmaster/msteams-mcp.git
-cd teams-mcp-server
-npm install && npm run build
-```
-
 ### Configure Your MCP Client
 
-Add to your MCP client configuration (e.g., Claude Desktop, Cursor):
+Add to your MCP client configuration (e.g., Claude Desktop, Windsurf, Cursor):
 
 ```json
 {
   "mcpServers": {
     "teams": {
-      "command": "/path/to/teams-mcp-server/bin/run.sh"
+      "command": "npx",
+      "args": ["-y", "msteams-mcp@latest"]
     }
   }
 }
 ```
 
-Replace `/path/to/teams-mcp-server` with the actual path where you cloned the repo.
+That's it. `npx` will automatically download and run the latest version.
+
+### From Source (alternative)
+
+If you prefer to run from a local clone:
+
+```bash
+git clone https://github.com/m0nkmaster/msteams-mcp.git
+cd msteams-mcp
+npm install && npm run build
+```
+
+Then configure your MCP client to use the `run.sh` script:
+
+```json
+{
+  "mcpServers": {
+    "teams": {
+      "command": "/path/to/msteams-mcp/bin/run.sh"
+    }
+  }
+}
+```
 
 The `run.sh` script checks for updates on startup:
 - If remote has new commits, pulls and rebuilds (~5-10s)
 - If already up-to-date, starts immediately (~200ms overhead)
 - If offline, runs the existing build
 
-**Windows users:** Use Git Bash or WSL to run the script, or run directly with `node /path/to/teams-mcp-server/dist/index.js` (manual updates with `git pull && npm install && npm run build`).
+**Windows users:** Use Git Bash or WSL to run the script, or run directly with `node /path/to/msteams-mcp/dist/index.js` (manual updates with `git pull && npm install && npm run build`).
 
 The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authentication.
 
