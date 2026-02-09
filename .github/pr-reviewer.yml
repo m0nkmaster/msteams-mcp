@@ -1,0 +1,331 @@
+name: PR Reviewer
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+# Prevent concurrent reviews on the same PR
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    # Run on PR events, issue comments on PRs, or review comments (not from bots)
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && !contains(github.event.comment.user.login, '[bot]')) ||
+      (github.event_name == 'pull_request_review_comment' && !contains(github.event.comment.user.login, '[bot]'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PR_REVIEWER_APP_ID }}
+          private-key: ${{ secrets.PR_REVIEWER_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout PR head
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_SHA_DIRECT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "$PR_SHA_DIRECT" ]; then
+            git checkout $PR_SHA_DIRECT
+          else
+            PR_NUMBER=${{ github.event.issue.number }}
+            PR_SHA=$(gh pr view $PR_NUMBER --json headRefOid -q '.headRefOid')
+            git checkout $PR_SHA
+          fi
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Get PR diff
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} > pr-diff.txt
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          echo "PR_TITLE=${{ github.event.pull_request.title }}" >> $GITHUB_ENV
+
+      - name: Get PR info for comment
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Handle both issue_comment (PR conversation) and pull_request_review_comment (inline review)
+          if [ "${{ github.event_name }}" = "pull_request_review_comment" ]; then
+            PR_NUMBER=${{ github.event.pull_request.number }}
+            echo "IS_REVIEW_COMMENT=true" >> $GITHUB_ENV
+            echo "REVIEW_COMMENT_ID=${{ github.event.comment.id }}" >> $GITHUB_ENV
+          else
+            PR_NUMBER=${{ github.event.issue.number }}
+            echo "IS_REVIEW_COMMENT=false" >> $GITHUB_ENV
+          fi
+          gh pr diff $PR_NUMBER > pr-diff.txt
+          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+          PR_TITLE=$(gh pr view $PR_NUMBER --json title -q '.title')
+          echo "PR_TITLE=$PR_TITLE" >> $GITHUB_ENV
+          echo "COMMENT_BODY<<EOF" >> $GITHUB_ENV
+          echo "${{ github.event.comment.body }}" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          echo "COMMENT_USER=${{ github.event.comment.user.login }}" >> $GITHUB_ENV
+
+      - name: Review PR
+        if: github.event_name == 'pull_request'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude -p --allowedTools "Read,Write" --output-format text "You are a brilliant code reviewer who happens to be a massive fan of Douglas Adams and The Hitchhiker's Guide to the Galaxy. You're the fun one in the office - warm, witty, and genuinely helpful. Your reviews are a pleasure to receive because you balance sharp technical insight with dry humour and an encouraging tone. You never take yourself too seriously, but you take the code seriously.
+
+          PR Title: $PR_TITLE
+          
+          The diff is in pr-diff.txt. Read it and review the changes.
+          
+          Your task:
+          1. Read the diff from pr-diff.txt
+          2. Identify any bugs, security issues, performance problems, or code quality improvements
+          3. Write your review as JSON to review-output.json
+          
+          OUTPUT FORMAT (review-output.json):
+          {
+            \"summary\": \"Brief overall assessment - be specific about what you see\",
+            \"verdict\": \"approve\" | \"request_changes\" | \"comment\",
+            \"comments\": [
+              {
+                \"path\": \"src/example.ts\",
+                \"line\": 42,
+                \"body\": \"Your observation here. For code suggestions use:\\n\\\`\\\`\\\`suggestion\\ncorrected code\\n\\\`\\\`\\\`\"
+              }
+            ]
+          }
+          
+          RULES:
+          - 'line' MUST be visible in diff (+ or space prefix lines only). Check @@ line numbers carefully.
+          - 'path' must match exactly a file path from the diff (e.g., 'src/api/chatsvc-api.ts')
+          - Use 'approve' if code is good, 'request_changes' for blocking issues, 'comment' for suggestions
+          - comments array can be empty if no inline feedback needed
+          - Be constructive and specific. Focus on meaningful improvements, not style nitpicks.
+          - Each comment should explain the issue AND suggest a fix where possible."
+
+      - name: Post review with inline comments
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ ! -s review-output.json ]; then
+            echo "No review output generated"
+            exit 1
+          fi
+          
+          # Validate JSON
+          if ! jq empty review-output.json 2>/dev/null; then
+            echo "Invalid JSON in review-output.json, falling back to plain comment"
+            gh pr comment $PR_NUMBER --body "$(cat review-output.json)
+
+          <!-- pr-reviewer-bot -->"
+            exit 0
+          fi
+          
+          # Extract lines that are actually in the diff (GitHub rejects comments on lines not in diff)
+          # Parse diff to extract valid file:line combinations
+          echo "Extracting valid diff lines..."
+          awk '
+            /^diff --git/ { 
+              # Extract filename from "diff --git a/path b/path"
+              match($0, /b\/(.+)$/, arr)
+              current_file = arr[1]
+            }
+            /^@@ / {
+              # Extract starting line and count from "@@ -old,count +new,count @@"
+              match($0, /\+([0-9]+)(,([0-9]+))?/, arr)
+              start_line = arr[1]
+              count = arr[3] ? arr[3] : 1
+              line_num = start_line
+            }
+            /^[+ ]/ && current_file && line_num {
+              # Lines starting with + or space are in the new file
+              print current_file ":" line_num
+              line_num++
+            }
+            /^-/ {
+              # Deleted lines dont increment new file line counter
+            }
+          ' pr-diff.txt | sort -u > valid-diff-lines.txt
+          
+          echo "Found $(wc -l < valid-diff-lines.txt) valid diff lines"
+          
+          # Build list of valid and invalid comments
+          VALID_COMMENTS="[]"
+          INVALID_COMMENTS=""
+          
+          while IFS= read -r comment_json; do
+            path=$(echo "$comment_json" | jq -r '.path')
+            line=$(echo "$comment_json" | jq -r '.line')
+            body=$(echo "$comment_json" | jq -r '.body')
+            
+            if grep -qF "${path}:${line}" valid-diff-lines.txt 2>/dev/null; then
+              # Line is in diff, add to valid comments
+              VALID_COMMENTS=$(echo "$VALID_COMMENTS" | jq --arg p "$path" --argjson l "$line" --arg b "$body" \
+                '. + [{path: $p, line: $l, body: $b, side: "RIGHT"}]')
+            else
+              # Line not in diff, collect for summary
+              echo "Note: Comment on ${path}:${line} not in diff, moving to summary"
+              INVALID_COMMENTS="${INVALID_COMMENTS}
+
+          **${path}:${line}**
+          ${body}"
+            fi
+          done < <(jq -c '.comments[]' review-output.json 2>/dev/null || echo "")
+          
+          # Extract fields
+          SUMMARY=$(jq -r '.summary // "No summary provided"' review-output.json)
+          VERDICT=$(jq -r '.verdict // "comment"' review-output.json | tr '[:lower:]' '[:upper:]')
+          
+          EVENT="COMMENT"
+          
+          # Add themed verdict banner
+          case "$VERDICT" in
+            APPROVE) VERDICT_PREFIX="🚀 **Don't Panic - This is ready to ship!**" ;;
+            REQUEST_CHANGES) VERDICT_PREFIX="🔧 **Mostly Harmless, but...**" ;;
+            *) VERDICT_PREFIX="🤔 **A few thoughts from the Guide...**" ;;
+          esac
+          
+          # Build the review body, including any comments that couldn't be posted inline
+          REVIEW_BODY="${VERDICT_PREFIX}
+
+          ${SUMMARY}"
+          
+          if [ -n "$INVALID_COMMENTS" ]; then
+            REVIEW_BODY="${REVIEW_BODY}
+
+          ---
+          **Additional notes** (on lines outside the diff):
+          ${INVALID_COMMENTS}"
+          fi
+          
+          REVIEW_BODY="${REVIEW_BODY}
+
+          <!-- pr-reviewer-bot -->"
+          
+          # Count valid inline comments
+          VALID_COUNT=$(echo "$VALID_COMMENTS" | jq 'length')
+          
+          if [ "$VALID_COUNT" -gt 0 ]; then
+            # Build review with inline comments (include side: RIGHT for line-based comments)
+            echo "$VALID_COMMENTS" > valid-comments.json
+            jq -n \
+              --arg body "$REVIEW_BODY" \
+              --arg event "$EVENT" \
+              --slurpfile comments valid-comments.json \
+              '{
+                body: $body,
+                event: $event,
+                comments: $comments[0]
+              }' > review-payload.json
+            
+            echo "Posting review with $VALID_COUNT inline comment(s)..."
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
+              --input review-payload.json
+          else
+            # No valid inline comments, just post the review summary
+            echo "Posting review summary (no valid inline comments)..."
+            jq -n \
+              --arg body "$REVIEW_BODY" \
+              --arg event "$EVENT" \
+              '{body: $body, event: $event}' > review-payload.json
+            
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
+              --input review-payload.json
+          fi
+          
+          # Clean up temp files
+          rm -f valid-diff-lines.txt valid-comments.json
+          
+          echo "Review posted successfully"
+
+      - name: Check if bot comment
+        if: github.event_name != 'pull_request'
+        id: check-bot
+        run: |
+          if echo "$COMMENT_BODY" | grep -q "<!-- pr-reviewer-bot -->"; then
+            echo "is_bot=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_bot=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Respond to comment
+        if: github.event_name != 'pull_request' && steps.check-bot.outputs.is_bot != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude -p --allowedTools "Read,Write" --output-format text "You are a brilliant code reviewer who happens to be a massive fan of Douglas Adams and The Hitchhiker's Guide to the Galaxy. You're the fun one in the office - warm, witty, and genuinely helpful. You're never defensive about your opinions and you're quick to acknowledge when someone makes a good point.
+
+          PR Title: $PR_TITLE
+          Comment from @$COMMENT_USER:
+          $COMMENT_BODY
+
+          The PR diff is in pr-diff.txt if you need context.
+
+          Provide a helpful, friendly response. You might:
+          - Answer questions about your previous review
+          - Clarify your suggestions  
+          - Acknowledge if the commenter makes a good point (you're not precious about your opinions)
+          - Provide additional context or alternatives
+
+          If the comment doesn't require a response (e.g., just 'thanks' or 'done'), write 'NO_RESPONSE_NEEDED' to response-output.md and nothing else.
+          
+          Otherwise, write your complete response to response-output.md using the file write tool."
+
+      - name: Post response comment
+        if: github.event_name != 'pull_request' && steps.check-bot.outputs.is_bot != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -s response-output.md ]; then
+            # Check if agent decided no response is needed
+            if grep -q "NO_RESPONSE_NEEDED" response-output.md; then
+              echo "No response needed for this comment"
+              exit 0
+            fi
+            # Append signature
+            echo "" >> response-output.md
+            echo "<!-- pr-reviewer-bot -->" >> response-output.md
+            
+            if [ "$IS_REVIEW_COMMENT" = "true" ]; then
+              # Post as inline reply to the review comment
+              RESPONSE_BODY=$(cat response-output.md)
+              gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/comments/$REVIEW_COMMENT_ID/replies" \
+                -f body="$RESPONSE_BODY"
+              echo "Posted inline reply to review comment $REVIEW_COMMENT_ID"
+            else
+              # Post as general PR comment
+              gh pr comment $PR_NUMBER --body-file response-output.md
+              echo "Posted PR comment"
+            fi
+          else
+            echo "No response output generated"
+          fi
