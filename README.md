@@ -53,24 +53,18 @@ cd msteams-mcp
 npm install && npm run build
 ```
 
-Then configure your MCP client to use the `run.sh` script:
+Then configure your MCP client:
 
 ```json
 {
   "mcpServers": {
     "teams": {
-      "command": "/path/to/msteams-mcp/bin/run.sh"
+      "command": "node",
+      "args": ["/path/to/msteams-mcp/dist/index.js"]
     }
   }
 }
 ```
-
-The `run.sh` script checks for updates on startup:
-- If remote has new commits, pulls and rebuilds (~5-10s)
-- If already up-to-date, starts immediately (~200ms overhead)
-- If offline, runs the existing build
-
-**Windows users:** Use Git Bash or WSL to run the script, or run directly with `node /path/to/msteams-mcp/dist/index.js` (manual updates with `git pull && npm install && npm run build`).
 
 The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authentication.
 
