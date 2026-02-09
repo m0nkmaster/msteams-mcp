@@ -4,7 +4,7 @@ This document captures project knowledge to help AI agents work effectively with
 
 ## Repository
 
-- **Repository**: https://github.twdcgrid.net/MACDR029/teams-mcp-server
+- **Repository**: https://github.com/m0nkmaster/msteams-mcp
 - **Install**: Clone the repo, then point your MCP client to `bin/run.sh` (auto-updates and builds on startup)
 
 ## Project Overview

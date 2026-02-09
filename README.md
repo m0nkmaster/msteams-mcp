@@ -1,6 +1,6 @@
 # Teams MCP Server
 
-[![CI](https://github.twdcgrid.net/MACDR029/teams-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.twdcgrid.net/MACDR029/teams-mcp-server/actions/workflows/ci.yml)
+[![CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
 
@@ -31,7 +31,7 @@ This server calls Microsoft's Teams APIs directly (Substrate, chatsvc, CSA)  - t
 Clone and build:
 
 ```bash
-git clone https://github.twdcgrid.net/MACDR029/teams-mcp-server.git
+git clone https://github.com/m0nkmaster/msteams-mcp.git
 cd teams-mcp-server
 npm install && npm run build
 ```
@@ -222,7 +222,7 @@ If your session expires, call `teams_login` or delete the config directory.
 For local development:
 
 ```bash
-git clone https://github.twdcgrid.net/MACDR029/teams-mcp-server.git
+git clone https://github.com/m0nkmaster/msteams-mcp.git
 cd microsoft-teams-mcp
 npm install
 npm run build

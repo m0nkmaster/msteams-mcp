@@ -1,6 +1,6 @@
 {
   "name": "teams-mcp-server",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "MCP server for Microsoft Teams - search messages, send replies, manage favourites",
   "type": "module",
   "main": "dist/index.js",
@@ -13,11 +13,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.twdcgrid.net/MACDR029/teams-mcp-server.git"
+    "url": "git+https://github.com/m0nkmaster/msteams-mcp.git"
   },
-  "homepage": "https://github.twdcgrid.net/MACDR029/teams-mcp-server#readme",
+  "homepage": "https://github.com/m0nkmaster/msteams-mcp#readme",
   "bugs": {
-    "url": "https://github.twdcgrid.net/MACDR029/teams-mcp-server/issues"
+    "url": "https://github.com/m0nkmaster/msteams-mcp/issues"
   },
   "engines": {
     "node": ">=18"
