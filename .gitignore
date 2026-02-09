@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment and secrets
+.env
+.env.local
+
+# Persistent browser data (contains session cookies)
+.user-data/
+
+# Session storage
+session-state.json
+token-cache.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Debug output
+debug-output/
+research-findings.json
+search-api-findings.json
+
+# SSO research output (contains sensitive auth data)
+scripts/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Ignore examples folder (may contain real chat exports with sensitive data)
+examples/
+notes/
+private/
