@@ -2,6 +2,7 @@
 
 | Priority | Feature | Description | Difficulty | Notes |
 |----------|---------|-------------|------------|-------|
+| ~~Bug~~ | ~~When authenticating through the browser after a period of time the user goes through SSO but as soon as Teams starts to load you are briefly shown the Auth complete model and the page closes. However, the tokens have not been refreshed. Upon trying again and going through the SSO process again the tokens are refreshed and the app works as expected.~~ | ~~Medium~~ | Fixed in v0.2.3 — added post-refresh token validation; headless SSO now falls back to visible browser if tokens weren't actually refreshed |
 | P2 | Meeting attendees | Filter meetings by attendee (not just organiser) | Medium | Need to research attendee list in calendar API response |
 | P2 | Find team | Search/discover teams by name | Easy | Teams List API |
 | P2 | Get person details | Detailed profile info (working hours, OOO status) | Easy | Delve API |

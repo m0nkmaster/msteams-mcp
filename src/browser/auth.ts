@@ -9,6 +9,7 @@ import {
   OVERLAY_STEP_PAUSE_MS,
   OVERLAY_COMPLETE_PAUSE_MS,
 } from '../constants.js';
+import { extractSubstrateToken, clearTokenCache } from '../auth/token-extractor.js';
 
 /**
  * Default Teams URL for initial login.
@@ -604,7 +605,18 @@ export async function waitForManualLogin(
 
       // Save the session state with fresh tokens
       await saveSessionState(context);
+      clearTokenCache();
       log('Session state saved.');
+
+      // Verify tokens were actually acquired
+      const token = extractSubstrateToken();
+      if (!token || token.expiry.getTime() <= Date.now()) {
+        log('Warning: No valid Substrate token found after login. You may need to try again.');
+        if (showOverlay) {
+          await showLoginProgress(page, 'error', { pause: true });
+        }
+        throw new Error('Login completed but token acquisition failed. Please try again.');
+      }
 
       if (showOverlay) {
         await showLoginProgress(page, 'complete', { pause: true });
@@ -652,6 +664,10 @@ export async function ensureAuthenticated(
   if (status.isAuthenticated) {
     log('Already authenticated.');
 
+    // Snapshot token expiry before refresh attempt
+    const beforeToken = extractSubstrateToken();
+    const beforeExpiry = beforeToken?.expiry?.getTime() ?? 0;
+
     if (showOverlay) {
       await showLoginProgress(page, 'refreshing');
     }
@@ -665,6 +681,28 @@ export async function ensureAuthenticated(
 
     // Save the session state with fresh tokens
     await saveSessionState(context);
+
+    // Clear token cache so we re-extract from the freshly saved session
+    clearTokenCache();
+
+    // Verify tokens were actually refreshed
+    const afterToken = extractSubstrateToken();
+    const afterExpiry = afterToken?.expiry?.getTime() ?? 0;
+    const tokenIsValid = afterToken !== null && afterExpiry > Date.now();
+    const tokenWasRefreshed = afterExpiry > beforeExpiry;
+
+    if (!tokenIsValid) {
+      log('Warning: No valid token found after refresh attempt.');
+      if (headless) {
+        throw new Error('Token refresh failed: no valid token after SSO. Browser-based re-authentication required.');
+      }
+    } else if (!tokenWasRefreshed && beforeToken && beforeExpiry <= Date.now() + 10 * 60 * 1000) {
+      // Token was close to expiry but wasn't refreshed - MSAL likely didn't initialise in time
+      log('Warning: Token was not refreshed despite being close to expiry.');
+      if (headless) {
+        throw new Error('Token refresh failed: token not refreshed despite being close to expiry. Browser-based re-authentication required.');
+      }
+    }
 
     if (showOverlay) {
       await showLoginProgress(page, 'complete', { pause: true });
