@@ -5,7 +5,7 @@ This document captures project knowledge to help AI agents work effectively with
 ## Repository
 
 - **Repository**: https://github.com/m0nkmaster/msteams-mcp
-- **Install**: Clone the repo, then point your MCP client to `bin/run.sh` (auto-updates and builds on startup)
+- **Install**: `npx -y msteams-mcp@latest` or clone the repo, `npm install && npm run build`, then point your MCP client to `dist/index.js`
 
 ## Project Overview
 
