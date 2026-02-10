@@ -2,7 +2,8 @@
 
 | Priority | Feature | Description | Difficulty | Notes |
 |----------|---------|-------------|------------|-------|
-| ~~Bug~~ | ~~When authenticating through the browser after a period of time the user goes through SSO but as soon as Teams starts to load you are briefly shown the Auth complete model and the page closes. However, the tokens have not been refreshed. Upon trying again and going through the SSO process again the tokens are refreshed and the app works as expected.~~ | ~~Medium~~ | Fixed in v0.2.3 — added post-refresh token validation; headless SSO now falls back to visible browser if tokens weren't actually refreshed |
+| Bug | Message formatting | Sending messages with formatting (newlines, bold, code) currently tries HTML which doesn't work - markup prints as plaintext | Medium | Research correct format for chatsvc API (likely needs specific content type or message properties) |
+| P2 | Meeting transcripts | Retrieve meeting transcripts | Hard | Extends existing meeting tools; needs research into transcript API surface |
 | P2 | Meeting attendees | Filter meetings by attendee (not just organiser) | Medium | Need to research attendee list in calendar API response |
 | P2 | Find team | Search/discover teams by name | Easy | Teams List API |
 | P2 | Get person details | Detailed profile info (working hours, OOO status) | Easy | Delve API |
