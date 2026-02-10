@@ -22,6 +22,7 @@ import {
   buildOneOnOneConversationId,
   decodeBase64Guid,
   extractActivityTimestamp,
+  markdownToTeamsHtml,
 } from './parsers.js';
 import {
   searchResultItem,
@@ -657,5 +658,109 @@ describe('extractActivityTimestamp', () => {
     };
     // Negative timestamps are invalid
     expect(extractActivityTimestamp(msg)).toBeNull();
+  });
+});
+
+describe('markdownToTeamsHtml', () => {
+  it('wraps plain text in paragraph tags', () => {
+    expect(markdownToTeamsHtml('Hello world')).toBe('<p>Hello world</p>');
+  });
+
+  it('escapes HTML special characters', () => {
+    expect(markdownToTeamsHtml('1 < 2 & 3 > 0')).toBe('<p>1 &lt; 2 &amp; 3 &gt; 0</p>');
+  });
+
+  it('converts bold markdown', () => {
+    expect(markdownToTeamsHtml('This is **bold** text')).toBe('<p>This is <b>bold</b> text</p>');
+    expect(markdownToTeamsHtml('This is __bold__ text')).toBe('<p>This is <b>bold</b> text</p>');
+  });
+
+  it('converts italic markdown', () => {
+    expect(markdownToTeamsHtml('This is *italic* text')).toBe('<p>This is <i>italic</i> text</p>');
+  });
+
+  it('converts strikethrough markdown', () => {
+    expect(markdownToTeamsHtml('This is ~~deleted~~ text')).toBe('<p>This is <s>deleted</s> text</p>');
+  });
+
+  it('converts inline code', () => {
+    expect(markdownToTeamsHtml('Use `console.log()` here')).toBe('<p>Use <code>console.log()</code> here</p>');
+  });
+
+  it('does not process markdown inside inline code', () => {
+    expect(markdownToTeamsHtml('Use `**not bold**` here')).toBe('<p>Use <code>**not bold**</code> here</p>');
+  });
+
+  it('escapes HTML inside inline code', () => {
+    expect(markdownToTeamsHtml('Use `<div>` tag')).toBe('<p>Use <code>&lt;div&gt;</code> tag</p>');
+  });
+
+  it('converts fenced code blocks', () => {
+    expect(markdownToTeamsHtml('```\nconst x = 1;\n```')).toBe('<pre><code>const x = 1;</code></pre>');
+  });
+
+  it('converts fenced code blocks with language', () => {
+    expect(markdownToTeamsHtml('```js\nconst x = 1;\n```')).toBe('<pre><code>const x = 1;</code></pre>');
+  });
+
+  it('escapes HTML inside code blocks', () => {
+    expect(markdownToTeamsHtml('```\n<div>test</div>\n```')).toBe('<pre><code>&lt;div&gt;test&lt;/div&gt;</code></pre>');
+  });
+
+  it('handles text before and after code blocks', () => {
+    const input = 'Before\n\n```\ncode\n```\n\nAfter';
+    expect(markdownToTeamsHtml(input)).toBe('<p>Before</p><pre><code>code</code></pre><p>After</p>');
+  });
+
+  it('converts single newlines to br tags', () => {
+    expect(markdownToTeamsHtml('Line 1\nLine 2')).toBe('<p>Line 1<br>Line 2</p>');
+  });
+
+  it('converts double newlines to separate paragraphs', () => {
+    expect(markdownToTeamsHtml('Para 1\n\nPara 2')).toBe('<p>Para 1</p><p>Para 2</p>');
+  });
+
+  it('converts unordered lists', () => {
+    expect(markdownToTeamsHtml('- Item 1\n- Item 2\n- Item 3')).toBe(
+      '<ul><li>Item 1</li><li>Item 2</li><li>Item 3</li></ul>'
+    );
+  });
+
+  it('converts unordered lists with * marker', () => {
+    expect(markdownToTeamsHtml('* Item 1\n* Item 2')).toBe(
+      '<ul><li>Item 1</li><li>Item 2</li></ul>'
+    );
+  });
+
+  it('converts ordered lists', () => {
+    expect(markdownToTeamsHtml('1. First\n2. Second\n3. Third')).toBe(
+      '<ol><li>First</li><li>Second</li><li>Third</li></ol>'
+    );
+  });
+
+  it('handles inline formatting inside list items', () => {
+    expect(markdownToTeamsHtml('- **Bold** item\n- *Italic* item')).toBe(
+      '<ul><li><b>Bold</b> item</li><li><i>Italic</i> item</li></ul>'
+    );
+  });
+
+  it('handles combined formatting', () => {
+    const input = '**Bold** and *italic* and `code`';
+    expect(markdownToTeamsHtml(input)).toBe('<p><b>Bold</b> and <i>italic</i> and <code>code</code></p>');
+  });
+
+  it('handles complex multi-paragraph message', () => {
+    const input = 'Hello **team**!\n\nHere are the updates:\n\n- Item 1\n- Item 2\n\nThanks!';
+    expect(markdownToTeamsHtml(input)).toBe(
+      '<p>Hello <b>team</b>!</p><p>Here are the updates:</p><ul><li>Item 1</li><li>Item 2</li></ul><p>Thanks!</p>'
+    );
+  });
+
+  it('returns empty paragraph for empty string', () => {
+    expect(markdownToTeamsHtml('')).toBe('<p></p>');
+  });
+
+  it('handles whitespace-only input', () => {
+    expect(markdownToTeamsHtml('   ')).toBe('<p></p>');
   });
 });

@@ -2,7 +2,7 @@
 
 | Priority | Feature | Description | Difficulty | Notes |
 |----------|---------|-------------|------------|-------|
-| Bug | Message formatting | Sending messages with formatting (newlines, bold, code) currently tries HTML which doesn't work - markup prints as plaintext | Medium | Research correct format for chatsvc API (likely needs specific content type or message properties) |
+| ~~Bug~~ | ~~Message formatting~~ | ~~Fixed: markdownToTeamsHtml converts markdown to Teams HTML (bold, italic, strikethrough, code, lists, newlines)~~ | ~~Medium~~ | ~~Done~~ |
 | P2 | Meeting transcripts | Retrieve meeting transcripts | Hard | Extends existing meeting tools; needs research into transcript API surface |
 | P2 | Meeting attendees | Filter meetings by attendee (not just organiser) | Medium | Need to research attendee list in calendar API response |
 | P2 | Find team | Search/discover teams by name | Easy | Teams List API |

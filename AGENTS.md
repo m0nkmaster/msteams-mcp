@@ -90,6 +90,8 @@ src/
 
 9. **Shared Constants**: Magic numbers are centralised in `constants.ts` for maintainability (page sizes, timeouts, thresholds).
 
+10. **Markdown to Teams HTML**: Outgoing messages support markdown formatting via `markdownToTeamsHtml()` in `utils/parsers.ts`. This converts markdown (`**bold**`, `*italic*`, `` `code` ``, ` ```code blocks``` `, `~~strikethrough~~`, lists, newlines) to the HTML that Teams expects for `RichText/Html` messages. The converter is used by `sendMessage()` and `editMessage()` in `chatsvc-api.ts`. When messages contain @mentions or links, `parseContentWithMentionsAndLinks()` applies the same conversion to text segments between inline elements.
+
 ## How It Works
 
 ### Authentication Flow

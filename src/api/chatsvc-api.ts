@@ -11,7 +11,7 @@ import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import { getUserDisplayName } from '../auth/token-extractor.js';
 import { requireMessageAuth, getRegion, getTeamsBaseUrl } from '../utils/auth-guards.js';
-import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, extractActivityTimestamp, parseVirtualConversationMessage, type ExtractedLink } from '../utils/parsers.js';
+import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, extractActivityTimestamp, parseVirtualConversationMessage, markdownToTeamsHtml, type ExtractedLink } from '../utils/parsers.js';
 import { DEFAULT_ACTIVITY_LIMIT, SAVED_MESSAGES_ID, FOLLOWED_THREADS_ID, VIRTUAL_CONVERSATION_PREFIX, SELF_CHAT_ID, MRI_ORGID_PREFIX } from '../constants.js';
 
 // Reusable date formatter for human-readable timestamps with day of week
@@ -189,24 +189,19 @@ export async function sendMessage(
   // Generate unique message ID
   const clientMessageId = Date.now().toString();
 
-  // Process content: handle mentions and links
-  let processedContent: string;
+  // Process content: handle mentions, links, and markdown formatting
+  let htmlContent: string;
   let mentionsToSend: Mention[] = [];
 
   // If content is already HTML, pass through as-is
   if (content.startsWith('<')) {
-    processedContent = content;
+    htmlContent = content;
   } else {
-    // Process mentions and links together
+    // Check for mentions/links that need special processing
     const parsed = parseContentWithMentionsAndLinks(content);
-    processedContent = parsed.html;
+    htmlContent = parsed.html;
     mentionsToSend = parsed.mentions;
   }
-
-  // Wrap content in paragraph if not already HTML
-  const htmlContent = processedContent.startsWith('<') 
-    ? processedContent 
-    : `<p>${processedContent}</p>`;
 
   // Build the message body
   const body: Record<string, unknown> = {
@@ -626,8 +621,8 @@ export async function editMessage(
   const { region, baseUrl } = getApiConfig();
   const displayName = getUserDisplayName() || 'User';
   
-  // Wrap content in paragraph if not already HTML
-  const htmlContent = newContent.startsWith('<') ? newContent : `<p>${escapeHtml(newContent)}</p>`;
+  // Convert markdown formatting to Teams HTML
+  const htmlContent = newContent.startsWith('<') ? newContent : markdownToTeamsHtml(newContent);
 
   // Build the edit request body
   // The API requires the message structure with updated content
@@ -929,16 +924,24 @@ function parseContentWithMentionsAndLinks(content: string): { html: string; ment
     ...findAll(linkPattern, 'link'),
   ].sort((a, b) => a.index - b.index);
   
-  // Build result
+  // No mentions or links - use full markdown conversion
+  if (matches.length === 0) {
+    return { html: markdownToTeamsHtml(content), mentions: [] };
+  }
+  
+  // Build result with mentions/links as inline elements
+  // Text segments between mentions/links get markdown conversion
   const mentions: Mention[] = [];
   let result = '';
   let lastIndex = 0;
   let mentionId = 0;
   
   for (const m of matches) {
-    // Add escaped text before this match
+    // Add markdown-converted text before this match
     const textBefore = content.substring(lastIndex, m.index);
-    result += escapeHtml(textBefore);
+    if (textBefore) {
+      result += markdownToTeamsHtml(textBefore);
+    }
     
     if (m.type === 'mention') {
       mentions.push({ mri: m.target, displayName: m.text });
@@ -954,8 +957,11 @@ function parseContentWithMentionsAndLinks(content: string): { html: string; ment
     lastIndex = m.index + m.length;
   }
   
-  // Add remaining text
-  result += escapeHtml(content.substring(lastIndex));
+  // Add remaining text with markdown conversion
+  const remaining = content.substring(lastIndex);
+  if (remaining) {
+    result += markdownToTeamsHtml(remaining);
+  }
   
   return { html: result, mentions };
 }
