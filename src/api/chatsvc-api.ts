@@ -190,18 +190,11 @@ export async function sendMessage(
   const clientMessageId = Date.now().toString();
 
   // Process content: handle mentions, links, and markdown formatting
-  let htmlContent: string;
-  let mentionsToSend: Mention[] = [];
-
-  // If content is already HTML, pass through as-is
-  if (content.startsWith('<')) {
-    htmlContent = content;
-  } else {
-    // Check for mentions/links that need special processing
-    const parsed = parseContentWithMentionsAndLinks(content);
-    htmlContent = parsed.html;
-    mentionsToSend = parsed.mentions;
-  }
+  // Always convert through markdown→HTML pipeline (never pass raw HTML through,
+  // as Teams requires proper block-level wrapping like <p> tags)
+  const parsed = parseContentWithMentionsAndLinks(content);
+  const htmlContent = parsed.html;
+  const mentionsToSend = parsed.mentions;
 
   // Build the message body
   const body: Record<string, unknown> = {
@@ -621,8 +614,9 @@ export async function editMessage(
   const { region, baseUrl } = getApiConfig();
   const displayName = getUserDisplayName() || 'User';
   
-  // Convert markdown formatting to Teams HTML
-  const htmlContent = newContent.startsWith('<') ? newContent : markdownToTeamsHtml(newContent);
+  // Always convert through markdown→HTML pipeline (never pass raw HTML through,
+  // as Teams requires proper block-level wrapping like <p> tags)
+  const htmlContent = markdownToTeamsHtml(newContent);
 
   // Build the edit request body
   // The API requires the message structure with updated content

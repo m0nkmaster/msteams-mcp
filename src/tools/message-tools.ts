@@ -108,13 +108,13 @@ export const GetFollowedThreadsInputSchema = z.object({
 
 const sendMessageToolDefinition: Tool = {
   name: 'teams_send_message',
-  description: 'Send a message to a Teams conversation. Supports markdown formatting: **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions using @[Name](mri) syntax inline. Example: "Hey @[John Smith](8:orgid:abc...), check this". Get MRI from teams_search_people. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId.',
+  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions using @[Name](mri) syntax inline. Example: "Hey @[John Smith](8:orgid:abc...), check this". Get MRI from teams_search_people. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId.',
   inputSchema: {
     type: 'object',
     properties: {
       content: {
         type: 'string',
-        description: 'The message content. Supports markdown: **bold**, *italic*, ~~strikethrough~~, `inline code`, ```code blocks```, bullet lists (- item), numbered lists (1. item), and newlines. For @mentions, use @[DisplayName](mri) syntax. Example: "Hey @[John Smith](8:orgid:abc...), can you review this?"',
+        description: 'The message content in markdown (not HTML). Supports: **bold**, *italic*, ~~strikethrough~~, `inline code`, ```code blocks```, bullet lists (- item), numbered lists (1. item), and newlines. Do NOT send raw HTML tags. For @mentions, use @[DisplayName](mri) syntax. Example: "Hey @[John Smith](8:orgid:abc...), can you review this?"',
       },
       conversationId: {
         type: 'string',
