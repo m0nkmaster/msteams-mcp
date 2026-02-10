@@ -934,7 +934,7 @@ function parseContentWithMentionsAndLinks(content: string): { html: string; ment
   let placeholderContent = content;
   for (let i = matches.length - 1; i >= 0; i--) {
     const m = matches[i];
-    const placeholder = `\x00MCP_PH_${i}\x00`;
+    const placeholder = `\uE000MCP_PH_${i}\uE001`;
     
     let html: string;
     if (m.type === 'mention') {
