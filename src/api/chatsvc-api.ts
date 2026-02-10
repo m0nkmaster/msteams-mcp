@@ -923,38 +923,43 @@ function parseContentWithMentionsAndLinks(content: string): { html: string; ment
     return { html: markdownToTeamsHtml(content), mentions: [] };
   }
   
-  // Build result with mentions/links as inline elements
-  // Text segments between mentions/links get markdown conversion
+  // Strategy: replace mentions/links with unique placeholders, run the whole
+  // content through markdownToTeamsHtml (so links stay inline within their
+  // paragraph), then substitute placeholders back with actual HTML.
   const mentions: Mention[] = [];
-  let result = '';
-  let lastIndex = 0;
+  const placeholders: Map<string, string> = new Map();
   let mentionId = 0;
   
-  for (const m of matches) {
-    // Add markdown-converted text before this match
-    const textBefore = content.substring(lastIndex, m.index);
-    if (textBefore) {
-      result += markdownToTeamsHtml(textBefore);
-    }
+  // Build content with placeholders (process in reverse to preserve indices)
+  let placeholderContent = content;
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const m = matches[i];
+    const placeholder = `\x00MCP_PH_${i}\x00`;
     
+    let html: string;
     if (m.type === 'mention') {
       mentions.push({ mri: m.target, displayName: m.text });
-      result += buildMentionHtml(m.text, mentionId);
+      html = buildMentionHtml(m.text, mentionId);
       mentionId++;
     } else {
-      // Link
       const safeText = escapeHtml(m.text);
       const safeUrl = m.target.replace(/"/g, '&quot;');
-      result += `<a href="${safeUrl}">${safeText}</a>`;
+      html = `<a href="${safeUrl}">${safeText}</a>`;
     }
+    placeholders.set(placeholder, html);
     
-    lastIndex = m.index + m.length;
+    placeholderContent = placeholderContent.substring(0, m.index) + placeholder + placeholderContent.substring(m.index + m.length);
   }
   
-  // Add remaining text with markdown conversion
-  const remaining = content.substring(lastIndex);
-  if (remaining) {
-    result += markdownToTeamsHtml(remaining);
+  // Reverse mentions array since we processed in reverse order
+  mentions.reverse();
+  
+  // Convert the whole content (with placeholders) through markdown pipeline
+  let result = markdownToTeamsHtml(placeholderContent);
+  
+  // Substitute placeholders back with actual HTML
+  for (const [placeholder, html] of placeholders) {
+    result = result.replace(placeholder, html);
   }
   
   return { html: result, mentions };
