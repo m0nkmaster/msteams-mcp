@@ -57,6 +57,12 @@ This is a test script for verifying all MCP tools work correctly before release.
 | `teams_remove_reaction` | Remove an emoji reaction from a message |
 | `teams_search_emoji` | Search for emojis by name (standard + custom org emojis) |
 
+### Calendar & Meetings
+| Tool | Purpose |
+|------|---------|
+| `teams_get_meetings` | Get meetings from calendar (defaults to next 7 days, set startDate to past for recent) |
+| `teams_get_transcript` | Get meeting transcript (requires threadId from teams_get_meetings) |
+
 ### Favourites
 | Tool | Purpose |
 |------|---------|
@@ -160,6 +166,14 @@ When reading channel messages with `teams_get_thread`:
 2. teams_get_thread conversationId="sourceConversationId" → read thread content
 ```
 
+### Get a meeting transcript
+```
+1. teams_get_meetings startDate="past date" → find the meeting, get threadId
+2. teams_get_transcript threadId="19:meeting_xxx@thread.v2" meetingDate="startTime from step 1"
+```
+Returns: meeting title, speakers list, entry count, and full formatted transcript with timestamps.
+Note: Only works for meetings where transcription was enabled.
+
 ### React to a message
 ```
 1. teams_search or teams_get_thread → find the message
@@ -207,6 +221,9 @@ Quick reactions: `like` (👍), `heart` (❤️), `laugh` (😂), `surprised` (�
 
 ### Channel monitoring
 > "Check the [channel name] channel for recent activity and summarise any important updates."
+
+### Meeting transcript
+> "Get the transcript from my last standup meeting and summarise the key decisions."
 
 ### People lookup
 > "Find [person name]'s contact details and check if I have any recent conversations with them."

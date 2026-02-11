@@ -121,13 +121,14 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 
 **Quick reactions:** `like`, `heart`, `laugh`, `surprised`, `sad`, `angry` can be used directly without searching.
 
-### Calendar
+### Calendar & Meetings
 
 | Tool | Description |
 |------|-------------|
 | `teams_get_meetings` | Get meetings from calendar (defaults to next 7 days) |
+| `teams_get_transcript` | Get meeting transcript (requires `threadId` from `teams_get_meetings`) |
 
-Returns: subject, times, organiser, join URL, `threadId` for meeting chat. Use with `teams_get_thread` to read meeting discussions.
+`teams_get_meetings` returns: subject, times, organiser, join URL, `threadId` for meeting chat. Use `threadId` with `teams_get_thread` to read meeting chat, or with `teams_get_transcript` to get the full transcript with speakers and timestamps.
 
 ### Session
 

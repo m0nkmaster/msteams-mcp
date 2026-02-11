@@ -8,7 +8,7 @@ on:
   pull_request_review_comment:
     types: [created]
 
-# Prevent concurrent reviews on the same PR
+# Prevent concurrent reviews on the same PR (one at a time per PR)
 concurrency:
   group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false

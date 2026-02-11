@@ -39,7 +39,8 @@ src/
 │   ├── substrate-api.ts  # Search and people APIs (Substrate v2)
 │   ├── chatsvc-api.ts    # Messaging, threads, save/unsave (chatsvc)
 │   ├── csa-api.ts        # Favorites API (CSA)
-│   └── calendar-api.ts   # Calendar/meetings API
+│   ├── calendar-api.ts   # Calendar/meetings API
+│   └── transcript-api.ts # Meeting transcripts (Graph API)
 ├── browser/              # Playwright browser automation (login only)
 │   ├── context.ts        # Browser/context management with encrypted session
 │   └── auth.ts           # Authentication detection and manual login handling
@@ -136,6 +137,7 @@ Different Teams APIs use different authentication mechanisms:
 | **Favorites** (csa/conversationFolders) | CSA token from MSAL + `skypetoken_asm` | `auth/token-extractor` | `extractCsaToken()` + `extractMessageAuth()` |
 | **Threads** (chatsvc) | `skypetoken_asm` cookie | `auth/token-extractor` | `extractMessageAuth()` |
 | **Calendar** (mt/part/calendarView) | Skype Spaces token (`api.spaces.skype.com` scope) + `skypetoken_asm` | `auth/token-extractor` | `extractSkypeSpacesToken()` |
+| **Transcripts** (Substrate WorkingSetFiles) | Same JWT as Search (Substrate scope) + `Prefer` header | `auth/token-extractor` | `getValidSubstrateToken()` |
 
 **Important**: The CSA API (for favorites) requires a GET request to retrieve data, POST only for modifications. The Substrate suggestions API requires `cvid` and `logicalId` correlation IDs in the request body.
 
@@ -186,6 +188,7 @@ Session state and token cache files are protected by:
 | `teams_add_reaction` | Add an emoji reaction to a message |
 | `teams_remove_reaction` | Remove an emoji reaction from a message |
 | `teams_get_meetings` | Get meetings from calendar (upcoming/past by date range) |
+| `teams_get_transcript` | Get meeting transcript (requires threadId from teams_get_meetings) |
 
 ### Design Philosophy
 
