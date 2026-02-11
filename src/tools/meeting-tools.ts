@@ -7,6 +7,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { getCalendarView } from '../api/calendar-api.js';
+import { getTranscriptContent } from '../api/transcript-api.js';
 import {
   DEFAULT_MEETING_LIMIT,
   MAX_MEETING_LIMIT,
@@ -20,6 +21,11 @@ export const GetMeetingsInputSchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   limit: z.number().min(1).max(MAX_MEETING_LIMIT).optional().default(DEFAULT_MEETING_LIMIT),
+});
+
+export const GetTranscriptInputSchema = z.object({
+  threadId: z.string(),
+  meetingDate: z.string().optional(),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +76,43 @@ async function handleGetMeetings(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Transcript Tool
+// ─────────────────────────────────────────────────────────────────────────────
+
+const getTranscriptToolDefinition: Tool = {
+  name: 'teams_get_transcript',
+  description: 'Get the transcript of a Teams meeting. Requires the meeting\'s threadId (from teams_get_meetings). Returns the full transcript with timestamps and speakers, formatted as readable text. The meeting must have had transcription enabled. Optionally pass meetingDate (ISO string, e.g. the startTime from teams_get_meetings) to narrow the search.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      threadId: {
+        type: 'string',
+        description: 'The meeting thread ID (from the threadId field of teams_get_meetings results, e.g., "19:meeting_xxx@thread.v2").',
+      },
+      meetingDate: {
+        type: 'string',
+        description: 'Optional ISO date/time of the meeting (e.g., the startTime from teams_get_meetings). Helps narrow the search for recurring meetings.',
+      },
+    },
+    required: ['threadId'],
+  },
+};
+
+async function handleGetTranscript(
+  input: z.infer<typeof GetTranscriptInputSchema>,
+  _ctx: ToolContext
+): Promise<ToolResult> {
+  const result = await getTranscriptContent(input.threadId, input.meetingDate);
+
+  return handleApiResult(result, (value) => ({
+    meetingTitle: value.meetingTitle,
+    speakers: value.speakers,
+    entryCount: value.entryCount,
+    transcript: value.formattedText,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Exports
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -79,5 +122,11 @@ export const getMeetingsTool: RegisteredTool<typeof GetMeetingsInputSchema> = {
   handler: handleGetMeetings,
 };
 
+export const getTranscriptTool: RegisteredTool<typeof GetTranscriptInputSchema> = {
+  definition: getTranscriptToolDefinition,
+  schema: GetTranscriptInputSchema,
+  handler: handleGetTranscript,
+};
+
 /** All meeting-related tools. */
-export const meetingTools = [getMeetingsTool];
+export const meetingTools = [getMeetingsTool, getTranscriptTool];

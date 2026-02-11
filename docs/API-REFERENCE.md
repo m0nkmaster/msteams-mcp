@@ -14,8 +14,9 @@ Complete reference for the undocumented Microsoft Teams APIs used by this MCP se
 8. [Activity & Notifications](#activity--notifications)
 9. [Reactions & Emoji](#reactions--emoji)
 10. [Calendar & Scheduling](#calendar--scheduling)
-11. [Files & Attachments](#files--attachments)
-12. [Common Gotchas](#common-gotchas)
+11. [Transcripts](#transcripts)
+12. [Files & Attachments](#files--attachments)
+13. [Common Gotchas](#common-gotchas)
 
 ---
 
@@ -29,6 +30,7 @@ Teams uses multiple authentication mechanisms depending on the API surface:
 | **Bearer (CSA)** | `Authorization: Bearer {csaToken}` | MSAL, `chatsvcagg.teams.microsoft.com` audience | Teams list, Favorites |
 | **Bearer (Spaces)** | `Authorization: Bearer {spacesToken}` | MSAL, `api.spaces.skype.com` audience | Calendar/Meetings |
 | **Skype Token** | `Authentication: skypetoken={token}` | Cookie `skypetoken_asm` | Messaging, Threads, Calendar |
+| **Bearer (Substrate + Prefer)** | `Authorization: Bearer {token}` + `Prefer` header | Same as Substrate search token | Transcripts (WorkingSetFiles) |
 
 ### Required Headers
 
@@ -277,8 +279,8 @@ Same as people search, but with empty `QueryString`. Returns ranked list of freq
       "Suggestions": [
         {
           "Name": "AI In Testing",
-          "ThreadId": "19:ca554e7ce3ab4a2f8099765fba3079bf@thread.tacv2",
-          "TeamName": "PE AI Excellence",
+          "ThreadId": "19:ca554e7ce33b4a2f8099765fba3079bf@thread.tacv2",
+          "TeamName": "AI Team",
           "GroupId": "df865310-bf69-4f1b-8dc7-ebd0cbfa090f",
           "EntityType": "ChannelSuggestion",
           "ChannelType": "Standard",
@@ -1399,6 +1401,147 @@ GET /api/mt/part/{region}/v2.0/me/calendars/default/calendarView
 
 ---
 
+## Transcripts
+
+### Meeting Transcript via WorkingSetFiles
+
+**Endpoint:** `GET https://substrate.office.com/api/beta/me/WorkingSetFiles/`
+
+**Auth:** Bearer (Substrate) — same token as Search
+
+**Critical Header:**
+```
+Prefer: substrate.flexibleschema,outlook.data-source="Substrate",exchange.behavior="SubstrateFiles"
+```
+
+Without this `Prefer` header, the API returns `400 Resource not found for the segment 'WorkingSetFiles'`.
+
+**How It Works:**
+
+The Teams web app stores meeting recordings on SharePoint/OneDrive. The Substrate WorkingSetFiles API indexes these files with meeting metadata, including the **full transcript JSON** embedded in `ItemProperties.Default.TranscriptJson`.
+
+This means the transcript can be retrieved in a **single API call** using the existing Substrate search token — no Graph API permissions or Azure App registration required.
+
+**Query Parameters:**
+
+| Parameter | Description | Example |
+|-----------|-------------|--------|
+| `$filter` | Filter by meeting thread ID and optional date range | See below |
+| `$orderby` | Sort order | `FileCreatedTime desc` |
+| `$select` | Fields to return | See below |
+
+**Filter by Meeting Thread ID:**
+```
+$filter=ItemProperties/Default/MeetingThreadId eq '19:meeting_xxx@thread.v2'
+  AND FileCreatedTime gt 2026-02-09T00:00:00.000Z
+  AND FileCreatedTime lt 2026-02-11T00:00:00.000Z
+```
+
+**Alternative Filter (by ICalUId):**
+```
+$filter=ItemProperties/Default/MeetingICalUId eq '040000008200E00074C5B7101A82E008...'
+```
+
+**Recommended Select Fields:**
+```
+SharePointItem,Visualization,
+ItemProperties/Default/MeetingCallId,
+ItemProperties/Default/DriveId,
+ItemProperties/Default/RecordingStartDateTime,
+ItemProperties/Default/RecordingEndDateTime,
+ItemProperties/Default/TranscriptJson,
+ItemProperties/Default/DocumentLink
+```
+
+**Full Example URL:**
+```
+GET https://substrate.office.com/api/beta/me/WorkingSetFiles/
+  ?$filter=ItemProperties/Default/MeetingThreadId eq '19:meeting_abc@thread.v2'
+    AND FileCreatedTime gt 2026-02-09T00:00:00.000Z
+    AND FileCreatedTime lt 2026-02-11T00:00:00.000Z
+  &$orderby=FileCreatedTime desc
+  &$select=SharePointItem,Visualization,ItemProperties/Default/TranscriptJson,...
+```
+
+**Response:**
+```json
+{
+  "value": [
+    {
+      "SharePointItem": {
+        "SitePath": "https://tenant-my.sharepoint.com/personal/user_company_com",
+        "SiteId": "62a4d642-7d66-4def-bc88-68f1be573afb",
+        "UniqueId": "534d9639-9296-4662-bb7e-76cd9f957e55",
+        "FileUrl": "https://...Recordings/Meeting-Recording.mp4",
+        "MediaDuration": 3134
+      },
+      "Visualization": {
+        "Title": "Weekly Standup",
+        "Type": "Video",
+        "StaticTeaser": "50d6a4c6-...\r\nSmith, John: Hello everyone...."
+      },
+      "ItemProperties": {
+        "Default": {
+          "MeetingCallId": "d10867a1-17f2-4024-880e-1876e23f83a6",
+          "DriveId": "b!QtakaGZ97028iGjRvlc6-...",
+          "RecordingStartDateTime": "2026-02-10T17:00:26Z",
+          "RecordingEndDateTime": "2026-02-10T17:52:40Z",
+          "TranscriptJson": "{\"$schema\":\"http://stream.office.com/schemas/transcript.json\",...}",
+          "DocumentLink": "https://...Recordings/Meeting-Recording.mp4"
+        }
+      }
+    }
+  ]
+}
+```
+
+**TranscriptJson Format:**
+
+The `TranscriptJson` field is a JSON string containing the full transcript:
+
+```json
+{
+  "$schema": "http://stream.office.com/schemas/transcript.json",
+  "version": "1.0.0",
+  "type": "Transcript",
+  "entries": [
+    {
+      "id": "45de8890-da20-4a5f-8a9d-5d4d831402c2/8",
+      "text": "Hello everyone.",
+      "speakerId": "b71f4d0f-ed13-4f3e-abdf-037e146be579@56b731a8-...",
+      "speakerDisplayName": "Smith, John",
+      "confidence": 0.54141116,
+      "startOffset": "00:00:22.2871418",
+      "endOffset": "00:00:23.1671418",
+      "hasBeenEdited": false,
+      "spokenLanguageTag": "en-gb"
+    }
+  ]
+}
+```
+
+**Transcript Entry Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `text` | Spoken text content |
+| `speakerDisplayName` | Speaker's display name |
+| `speakerId` | Speaker's MRI (objectId@tenantId) |
+| `startOffset` | Start time (HH:MM:SS.mmmmmmm) |
+| `endOffset` | End time (HH:MM:SS.mmmmmmm) |
+| `confidence` | Speech recognition confidence (0-1) |
+| `spokenLanguageTag` | Language (e.g., `en-gb`, `en-us`) |
+| `hasBeenEdited` | Whether the entry was manually edited |
+
+**Notes:**
+- The transcript is the **full content** — not paginated or progressive
+- Only meetings with recording/transcription enabled will have entries
+- The recording must be stored on SharePoint/OneDrive (standard for Teams)
+- `Visualization.StaticTeaser` contains a short preview of the transcript
+- The SharePoint `media/transcripts` endpoint is also available for streaming the transcript separately (used by the Teams web player), but the WorkingSetFiles approach is simpler as it returns everything in one call
+
+---
+
 ## Files & Attachments
 
 ### Files Shared in Conversation
@@ -1460,11 +1603,12 @@ GET /api/mt/part/{region}/v2.0/me/calendars/default/calendarView
 
 To discover new endpoints:
 
-1. Clear session: `rm -rf ~/.teams-mcp-server/` (or `%APPDATA%\teams-mcp-server\` on Windows)
-2. Run: `npm run research`
-3. Log in to Teams when prompted
-4. Perform actions (click Activity, Calendar, etc.)
-5. Press Ctrl+C to stop
-6. Check terminal output for captured requests/responses
+1. Run: `npm run research`
+2. Log in to Teams when prompted (uses system Chrome/Edge, reuses existing encrypted session)
+3. Navigate to features you want to investigate
+4. Press Ctrl+C to stop — findings are saved to `research-findings.json`
+5. Analyse the JSON file for request/response patterns
 
-For initial boot capture, clear all Teams data before starting the research script.
+The research script monitors network requests matching interesting patterns (search, messaging, calendar, transcript, etc.) and captures both request headers and response bodies.
+
+For a clean session, clear: `rm -rf ~/.teams-mcp-server/` (or `%APPDATA%\teams-mcp-server\` on Windows).

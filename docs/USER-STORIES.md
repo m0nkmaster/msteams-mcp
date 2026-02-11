@@ -589,16 +589,18 @@ This document defines user stories and personas to guide development of the Team
 **Flow:**
 1. Get recent meetings via `teams_get_meetings` with past date range
 2. Get the meeting thread ID from the response
-3. Fetch chat messages via `teams_get_thread` using the thread ID
-4. AI summarises the meeting discussion
+3. If transcription was enabled: fetch transcript via `teams_get_transcript` using `threadId`
+4. Otherwise: fetch chat messages via `teams_get_thread` using the thread ID
+5. AI summarises the meeting from transcript or chat
 
 **Required Tools:**
 | Tool | Status |
 |------|--------|
 | `teams_get_meetings` | ✅ Implemented |
-| `teams_get_thread` | ✅ Implemented |
+| `teams_get_transcript` | ✅ Implemented |
+| `teams_get_thread` | ✅ Implemented (fallback for meetings without transcription) |
 
-**Status:** ✅ Implemented - set `startDate` to past to get recent meetings, then use `threadId` with `teams_get_thread`.
+**Status:** ✅ Implemented - set `startDate` to past to get recent meetings. Use `teams_get_transcript` for full transcript with speakers/timestamps, or `teams_get_thread` for meeting chat.
 
 ---
 
@@ -673,7 +675,26 @@ This document defines user stories and personas to guide development of the Team
 
 ---
 
-#### 9.8 Check free time
+#### 9.8 Get meeting transcript
+> "Get the transcript from yesterday's standup"
+
+**Flow:**
+1. Get recent meetings via `teams_get_meetings` with past date range
+2. Identify the target meeting, get its `threadId` and `startTime`
+3. Fetch transcript via `teams_get_transcript` with `threadId` and optionally `meetingDate`
+4. AI presents or summarises the transcript
+
+**Required Tools:**
+| Tool | Status |
+|------|--------|
+| `teams_get_meetings` | ✅ Implemented |
+| `teams_get_transcript` | ✅ Implemented |
+
+**Status:** ✅ Implemented - returns formatted transcript with speaker names, timestamps, and spoken text. Only available for meetings where transcription was enabled.
+
+---
+
+#### 9.9 Check free time
 > "When am I free this afternoon?"
 
 **Flow:**
@@ -892,7 +913,8 @@ Based on user value and API readiness:
 | 9.2 Count meetings | `teams_get_meetings` | ✅ Done |
 | 9.3 Meeting summary | `teams_get_meetings`, `teams_get_thread` | ✅ Done |
 | 9.4 Meetings with person | `teams_get_meetings`, `teams_search_people` | ✅ Done (organiser only) |
-| 9.5-9.8 Other meeting stories | `teams_get_meetings` | ✅ Done |
+| 9.5-9.7, 9.9 Other meeting stories | `teams_get_meetings` | ✅ Done |
+| 9.8 Meeting transcript | `teams_get_meetings`, `teams_get_transcript` | ✅ Done |
 
 ### Phase 5 - Remaining Gaps
 | Story | Tools Needed | Effort |
@@ -941,8 +963,9 @@ The following tools are implemented:
 **Chat Management:**
 - `teams_get_chat` - Get 1:1 conversation ID
 
-**Calendar:**
+**Calendar & Meetings:**
 - `teams_get_meetings` - Get meetings from calendar
+- `teams_get_transcript` - Get meeting transcript (speakers, timestamps, text)
 
 ### Remaining Gaps
 

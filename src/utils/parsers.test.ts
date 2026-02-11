@@ -23,6 +23,7 @@ import {
   decodeBase64Guid,
   extractActivityTimestamp,
   markdownToTeamsHtml,
+  formatTranscriptText,
 } from './parsers.js';
 import {
   searchResultItem,
@@ -762,5 +763,42 @@ describe('markdownToTeamsHtml', () => {
 
   it('handles whitespace-only input', () => {
     expect(markdownToTeamsHtml('   ')).toBe('<p></p>');
+  });
+});
+
+describe('formatTranscriptText', () => {
+  it('formats entries with speaker names and timestamps', () => {
+    const entries = [
+      { startTime: '00:00:01.000', endTime: '00:00:05.000', speaker: 'Alice', text: 'Hello everyone.' },
+      { startTime: '00:00:06.000', endTime: '00:00:10.000', speaker: 'Bob', text: 'Hi Alice!' },
+    ];
+    const result = formatTranscriptText(entries);
+    expect(result).toBe(
+      '[00:00:01.000] Alice:\nHello everyone.\n\n[00:00:06.000] Bob:\nHi Alice!'
+    );
+  });
+
+  it('merges consecutive entries from the same speaker', () => {
+    const entries = [
+      { startTime: '00:00:01.000', endTime: '00:00:03.000', speaker: 'Alice', text: 'First part.' },
+      { startTime: '00:00:03.000', endTime: '00:00:06.000', speaker: 'Alice', text: 'Second part.' },
+      { startTime: '00:00:07.000', endTime: '00:00:10.000', speaker: 'Bob', text: 'Response.' },
+    ];
+    const result = formatTranscriptText(entries);
+    expect(result).toBe(
+      '[00:00:01.000] Alice:\nFirst part. Second part.\n\n[00:00:07.000] Bob:\nResponse.'
+    );
+  });
+
+  it('handles entries without speaker names', () => {
+    const entries = [
+      { startTime: '00:00:01.000', endTime: '00:00:05.000', speaker: '', text: 'Unknown speaker.' },
+    ];
+    const result = formatTranscriptText(entries);
+    expect(result).toBe('[00:00:01.000]\nUnknown speaker.');
+  });
+
+  it('returns empty string for empty entries', () => {
+    expect(formatTranscriptText([])).toBe('');
   });
 });

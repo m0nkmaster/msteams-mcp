@@ -13,11 +13,15 @@ import { chromium, type Browser, type BrowserContext, type Page, type Request, t
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  PROJECT_ROOT,
+  USER_DATA_DIR,
+  SESSION_STATE_PATH,
+  hasSessionState,
+  readSessionState,
+  writeSessionState,
+} from '../auth/session-store.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = path.resolve(__dirname, '../..');
-const USER_DATA_DIR = path.join(PROJECT_ROOT, '.user-data');
-const SESSION_STATE_PATH = path.join(PROJECT_ROOT, 'session-state.json');
 const FINDINGS_PATH = path.join(PROJECT_ROOT, 'research-findings.json');
 
 interface NetworkCapture {
@@ -49,7 +53,7 @@ const capturedNetworkData: NetworkCapture = {
   responses: [],
 };
 
-// Patterns that indicate search-related API calls
+// Patterns that indicate interesting API calls
 const SEARCH_PATTERNS = [
   /search/i,
   /query/i,
@@ -59,6 +63,13 @@ const SEARCH_PATTERNS = [
   /teams.*api/i,
   /chatservice/i,
   /emea\.ng\.msg/i,
+  /transcript/i,
+  /recording/i,
+  /onlineMeeting/i,
+  /callRecord/i,
+  /\.vtt/i,
+  /asyncgw/i,
+  /mediaservice/i,
 ];
 
 function isInterestingUrl(url: string): boolean {
@@ -127,7 +138,7 @@ async function captureResponse(response: Response): Promise<void> {
   let body: string | undefined;
   try {
     const contentType = response.headers()['content-type'] || '';
-    if (contentType.includes('application/json')) {
+    if (contentType.includes('application/json') || contentType.includes('text/vtt') || contentType.includes('text/plain')) {
       body = await response.text();
     }
   } catch {
@@ -243,17 +254,19 @@ async function main(): Promise<void> {
 
   try {
     // Launch browser with persistent context
+    const channel = process.platform === 'win32' ? 'msedge' : 'chrome';
     browser = await chromium.launch({
       headless: false, // Must be visible for manual login
+      channel,
     });
 
-    // Check if we have saved session state
-    const hasSessionState = fs.existsSync(SESSION_STATE_PATH);
+    // Check if we have saved session state (uses encrypted store)
+    const existingState = readSessionState();
 
-    if (hasSessionState) {
+    if (existingState) {
       console.log('📂 Found existing session state, attempting to restore...');
       context = await browser.newContext({
-        storageState: SESSION_STATE_PATH,
+        storageState: existingState as any,
         viewport: { width: 1280, height: 800 },
       });
     } else {
@@ -281,7 +294,8 @@ async function main(): Promise<void> {
       
       // Save session state after successful authentication
       console.log('💾 Saving session state...');
-      await context.storageState({ path: SESSION_STATE_PATH });
+      const state = await context.storageState();
+      writeSessionState(state as any);
       console.log('✅ Session state saved!');
     } else {
       console.log('✅ Already authenticated!');
@@ -308,23 +322,29 @@ async function main(): Promise<void> {
       });
     });
 
-    // Save session state before closing
-    console.log('💾 Saving final session state...');
-    await context.storageState({ path: SESSION_STATE_PATH });
-
-    // Save research findings
+    // Save research findings FIRST (before browser might close)
     await saveFindings();
 
+    // Try to save session state (may fail if browser already closed)
+    try {
+      console.log('💾 Saving final session state...');
+      const finalState = await context.storageState();
+      writeSessionState(finalState as any);
+    } catch {
+      console.log('⚠️  Could not save session state (browser already closed)');
+    }
+
   } catch (error) {
+    // Still try to save findings on error
+    await saveFindings();
     console.error('❌ Error:', error);
-    throw error;
   } finally {
-    if (context) {
-      await context.close();
-    }
-    if (browser) {
-      await browser.close();
-    }
+    try {
+      if (context) await context.close();
+    } catch { /* already closed */ }
+    try {
+      if (browser) await browser.close();
+    } catch { /* already closed */ }
   }
 
   console.log('\n✅ Research session complete!');

@@ -1079,3 +1079,64 @@ export function parseVirtualConversationMessage(
     links: links.length > 0 ? links : undefined,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Transcript Formatting
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A single entry from a meeting transcript. */
+export interface TranscriptEntry {
+  /** Start time (e.g., "00:00:22.287"). */
+  startTime: string;
+  /** End time (e.g., "00:00:23.167"). */
+  endTime: string;
+  /** Speaker display name. */
+  speaker: string;
+  /** Spoken text content. */
+  text: string;
+}
+
+/**
+ * Formats transcript entries into a readable text format.
+ * 
+ * Merges consecutive entries from the same speaker into a single block
+ * to reduce noise and improve readability.
+ * 
+ * @param entries - Transcript entries
+ * @returns Formatted transcript string
+ */
+export function formatTranscriptText(entries: TranscriptEntry[]): string {
+  if (entries.length === 0) return '';
+  
+  const blocks: string[] = [];
+  let currentSpeaker: string | null = null;
+  let currentTexts: string[] = [];
+  let blockStartTime = '';
+  
+  for (const entry of entries) {
+    if (entry.speaker !== currentSpeaker) {
+      // Flush previous block
+      if (currentTexts.length > 0) {
+        const prefix = currentSpeaker
+          ? `[${blockStartTime}] ${currentSpeaker}:`
+          : `[${blockStartTime}]`;
+        blocks.push(`${prefix}\n${currentTexts.join(' ')}`);
+      }
+      currentSpeaker = entry.speaker;
+      currentTexts = [entry.text];
+      blockStartTime = entry.startTime;
+    } else {
+      currentTexts.push(entry.text);
+    }
+  }
+  
+  // Flush last block
+  if (currentTexts.length > 0) {
+    const prefix = currentSpeaker
+      ? `[${blockStartTime}] ${currentSpeaker}:`
+      : `[${blockStartTime}]`;
+    blocks.push(`${prefix}\n${currentTexts.join(' ')}`);
+  }
+  
+  return blocks.join('\n\n');
+}
