@@ -206,6 +206,10 @@ When adding or modifying tools, ensure the `description` field in the tool defin
 
 For manual testing of all tools, see `docs/MANUAL-TEST-SCRIPT.md`.
 
+## Roadmap Management
+
+When a roadmap item is completed, **remove it entirely** from `ROADMAP.md`. Do not cross it out or mark it as done — just delete the row.
+
 ## Development
 
 ### Commands
