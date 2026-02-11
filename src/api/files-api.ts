@@ -27,7 +27,7 @@ export interface SharedFile {
   fileName?: string;
   /** File extension (for files). */
   fileExtension?: string;
-  /** URL to access the file or link. */
+  /** URL to access the file or link. For files, this is the SharePoint/OneDrive URL. */
   webUrl?: string;
   /** File size in bytes (for files). */
   fileSize?: number;
@@ -39,6 +39,8 @@ export interface SharedFile {
   sharedTime?: string;
   /** Title (for links). */
   title?: string;
+  /** Preview image URL (for images/files with previews). */
+  previewUrl?: string;
 }
 
 /** Result of getting shared files. */
@@ -156,15 +158,19 @@ export async function getSharedFiles(
 
     if (itemType === 'File') {
       const fileData = item.FileData as Record<string, unknown> | undefined;
+      // FileUrl is the SharePoint URL for uploaded files; WebUrl is often null for chat uploads
+      const fileUrl = (fileData?.FileUrl ?? fileData?.WebUrl) as string | undefined;
+      const previewUrl = fileData?.PreviewUrl as string | undefined;
       files.push({
         itemType: 'File',
         fileName: fileData?.FileName as string | undefined,
         fileExtension: fileData?.FileExtension as string | undefined,
-        webUrl: fileData?.WebUrl as string | undefined,
+        webUrl: fileUrl || undefined,
         fileSize: fileData?.FileSize as number | undefined,
         sharedBy: item.SharedByDisplayName as string | undefined,
         sharedByEmail: item.SharedBySmtp as string | undefined,
-        sharedTime: item.SharedTime as string | undefined,
+        sharedTime: (item.SharedDateTime ?? item.SharedTime) as string | undefined,
+        previewUrl: previewUrl || undefined,
       });
     } else if (itemType === 'Link') {
       const linkData = item.WeblinkData as Record<string, unknown> | undefined;
@@ -174,7 +180,7 @@ export async function getSharedFiles(
         title: linkData?.Title as string | undefined,
         sharedBy: item.SharedByDisplayName as string | undefined,
         sharedByEmail: item.SharedBySmtp as string | undefined,
-        sharedTime: item.SharedTime as string | undefined,
+        sharedTime: (item.SharedDateTime ?? item.SharedTime) as string | undefined,
       });
     }
   }
