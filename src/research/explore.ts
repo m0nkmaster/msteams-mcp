@@ -12,12 +12,9 @@
 import { chromium, type Browser, type BrowserContext, type Page, type Request, type Response } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 import {
   PROJECT_ROOT,
   USER_DATA_DIR,
-  SESSION_STATE_PATH,
-  hasSessionState,
   readSessionState,
   writeSessionState,
 } from '../auth/session-store.js';
@@ -266,7 +263,7 @@ async function main(): Promise<void> {
     if (existingState) {
       console.log('📂 Found existing session state, attempting to restore...');
       context = await browser.newContext({
-        storageState: existingState as any,
+        storageState: existingState as Parameters<typeof browser.newContext>[0] extends { storageState?: infer S } ? S : never,
         viewport: { width: 1280, height: 800 },
       });
     } else {
@@ -295,7 +292,7 @@ async function main(): Promise<void> {
       // Save session state after successful authentication
       console.log('💾 Saving session state...');
       const state = await context.storageState();
-      writeSessionState(state as any);
+      writeSessionState(state as ReturnType<typeof JSON.parse>);
       console.log('✅ Session state saved!');
     } else {
       console.log('✅ Already authenticated!');
@@ -329,7 +326,7 @@ async function main(): Promise<void> {
     try {
       console.log('💾 Saving final session state...');
       const finalState = await context.storageState();
-      writeSessionState(finalState as any);
+      writeSessionState(finalState as ReturnType<typeof JSON.parse>);
     } catch {
       console.log('⚠️  Could not save session state (browser already closed)');
     }
