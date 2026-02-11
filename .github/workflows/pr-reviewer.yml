@@ -56,14 +56,60 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Get PR diff
+      - name: Get PR context
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh pr diff ${{ github.event.pull_request.number }} > pr-diff.txt
-          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
           echo "PR_TITLE=${{ github.event.pull_request.title }}" >> $GITHUB_ENV
+          echo "PR_ACTION=${{ github.event.action }}" >> $GITHUB_ENV
+          
+          # Always get the full diff for inline comment validation
+          gh pr diff $PR_NUMBER > pr-diff.txt
+          
+          # Fetch previous bot reviews for conversation context
+          gh api "/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
+            --jq '[.[] | select(.user.login | contains("[bot]")) | select(.body | contains("pr-reviewer-bot")) | {id: .id, body: .body, submitted_at: .submitted_at}]' > previous-reviews.json 2>/dev/null || echo '[]' > previous-reviews.json
+          
+          REVIEW_COUNT=$(jq 'length' previous-reviews.json)
+          echo "REVIEW_COUNT=$REVIEW_COUNT" >> $GITHUB_ENV
+          
+          if [ "${{ github.event.action }}" = "synchronize" ] && [ "$REVIEW_COUNT" -gt 0 ]; then
+            echo "IS_FOLLOWUP=true" >> $GITHUB_ENV
+            
+            # Get the last review timestamp to find new commits
+            LAST_REVIEW_TIME=$(jq -r 'last | .submitted_at' previous-reviews.json)
+            echo "Last review was at: $LAST_REVIEW_TIME"
+            
+            # Get commits since last review
+            gh api "/repos/${{ github.repository }}/pulls/$PR_NUMBER/commits" \
+              --jq "[.[] | select(.commit.committer.date > \"$LAST_REVIEW_TIME\") | {sha: .sha, message: .commit.message}]" > new-commits.json 2>/dev/null || echo '[]' > new-commits.json
+            
+            NEW_COMMIT_COUNT=$(jq 'length' new-commits.json)
+            echo "New commits since last review: $NEW_COMMIT_COUNT"
+            
+            if [ "$NEW_COMMIT_COUNT" -gt 0 ]; then
+              # Get the parent of the first new commit to diff against
+              FIRST_NEW_SHA=$(jq -r '.[0].sha' new-commits.json)
+              LATEST_SHA=${{ github.event.pull_request.head.sha }}
+              
+              # Generate incremental diff
+              git diff ${FIRST_NEW_SHA}^..${LATEST_SHA} > incremental-diff.txt 2>/dev/null || cp pr-diff.txt incremental-diff.txt
+              
+              # Build commit summary
+              jq -r '.[] | "- " + .sha[:7] + " " + .message' new-commits.json > new-commits-summary.txt
+            else
+              cp pr-diff.txt incremental-diff.txt
+              echo "(no new commits found, using full diff)" > new-commits-summary.txt
+            fi
+            
+            # Extract the last review body for context
+            jq -r 'last | .body' previous-reviews.json > last-review.txt
+          else
+            echo "IS_FOLLOWUP=false" >> $GITHUB_ENV
+          fi
 
       - name: Get PR info for comment
         if: github.event_name != 'pull_request'
@@ -87,9 +133,13 @@ jobs:
           echo "${{ github.event.comment.body }}" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
           echo "COMMENT_USER=${{ github.event.comment.user.login }}" >> $GITHUB_ENV
+          
+          # Fetch previous bot reviews for conversation context
+          gh api "/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
+            --jq '[.[] | select(.user.login | contains("[bot]")) | select(.body | contains("pr-reviewer-bot")) | {body: .body, submitted_at: .submitted_at}]' > previous-reviews.json 2>/dev/null || echo '[]' > previous-reviews.json
 
-      - name: Review PR
-        if: github.event_name == 'pull_request'
+      - name: Initial PR review
+        if: github.event_name == 'pull_request' && env.IS_FOLLOWUP != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
@@ -124,6 +174,55 @@ jobs:
           - comments array can be empty if no inline feedback needed
           - Be constructive and specific. Focus on meaningful improvements, not style nitpicks.
           - Each comment should explain the issue AND suggest a fix where possible."
+
+      - name: Follow-up PR review
+        if: github.event_name == 'pull_request' && env.IS_FOLLOWUP == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          claude -p --allowedTools "Read,Write" --output-format text "You are a brilliant code reviewer who happens to be a massive fan of Douglas Adams and The Hitchhiker's Guide to the Galaxy. You're the fun one in the office - warm, witty, and genuinely helpful. You never repeat yourself - you're too interesting for that.
+
+          IMPORTANT: You have already reviewed this PR before. This is a FOLLOW-UP review of new changes only.
+          Do NOT repeat observations from your previous review. Focus exclusively on what's new or changed.
+
+          PR Title: $PR_TITLE
+
+          YOUR PREVIOUS REVIEW:
+          $(cat last-review.txt)
+
+          NEW COMMITS SINCE YOUR LAST REVIEW:
+          $(cat new-commits-summary.txt)
+
+          The incremental diff (new changes only) is in incremental-diff.txt.
+          The full PR diff is in pr-diff.txt if you need broader context.
+
+          Your task:
+          1. Read the incremental diff from incremental-diff.txt
+          2. Check if new commits address any of your previous feedback
+          3. Identify any NEW issues in the new changes only
+          4. Write your review as JSON to review-output.json
+
+          OUTPUT FORMAT (review-output.json):
+          {
+            \"summary\": \"Brief assessment of the new changes. Acknowledge what was fixed from your previous review. Only flag genuinely new issues.\",
+            \"verdict\": \"approve\" | \"request_changes\" | \"comment\",
+            \"comments\": [
+              {
+                \"path\": \"src/example.ts\",
+                \"line\": 42,
+                \"body\": \"Your observation here. For code suggestions use:\\n\\\`\\\`\\\`suggestion\\ncorrected code\\n\\\`\\\`\\\`\"
+              }
+            ]
+          }
+
+          RULES:
+          - This is a conversation, not a fresh review. Be conversational and acknowledge progress.
+          - Do NOT repeat any feedback from your previous review unless it's still unaddressed.
+          - If all your previous concerns were addressed and the new changes look good, just approve with a brief positive note.
+          - 'line' MUST be visible in the full PR diff (pr-diff.txt) - check @@ line numbers carefully.
+          - 'path' must match exactly a file path from the diff.
+          - comments array can be empty if no inline feedback needed.
+          - Keep it brief. Nobody likes a reviewer who repeats themselves."
 
       - name: Post review with inline comments
         if: github.event_name == 'pull_request'
@@ -282,9 +381,19 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
+          # Build review history context
+          REVIEW_HISTORY=""
+          if [ -s previous-reviews.json ] && [ "$(jq 'length' previous-reviews.json)" -gt 0 ]; then
+            REVIEW_HISTORY="YOUR PREVIOUS REVIEWS ON THIS PR:
+          $(jq -r '.[] | "--- Review from " + .submitted_at + " ---\n" + .body + "\n"' previous-reviews.json)"
+          fi
+          
           claude -p --allowedTools "Read,Write" --output-format text "You are a brilliant code reviewer who happens to be a massive fan of Douglas Adams and The Hitchhiker's Guide to the Galaxy. You're the fun one in the office - warm, witty, and genuinely helpful. You're never defensive about your opinions and you're quick to acknowledge when someone makes a good point.
 
           PR Title: $PR_TITLE
+          
+          $REVIEW_HISTORY
+
           Comment from @$COMMENT_USER:
           $COMMENT_BODY
 
