@@ -153,8 +153,8 @@ import { DEFAULT_TEAMS_BASE_URL } from './api-config.js';
 /** Default region when session config is unavailable. */
 const DEFAULT_REGION = 'amer';
 
-/** Cached region config to avoid repeated localStorage parsing. */
-let cachedRegionConfig: RegionConfig | null = null;
+/** Cached region config (undefined = not yet extracted, null = extraction failed). */
+let cachedRegionConfig: RegionConfig | null | undefined = undefined;
 
 /**
  * Gets the user's region from session, with caching.
@@ -163,7 +163,7 @@ let cachedRegionConfig: RegionConfig | null = null;
  * Falls back to 'amer' if not available (shouldn't happen with valid session).
  */
 export function getRegion(): string {
-  if (!cachedRegionConfig) {
+  if (cachedRegionConfig === undefined) {
     cachedRegionConfig = extractRegionConfig();
   }
   return cachedRegionConfig?.region ?? DEFAULT_REGION;
@@ -177,7 +177,7 @@ export function getRegion(): string {
  * Falls back to default if config not available.
  */
 export function getTeamsBaseUrl(): string {
-  if (!cachedRegionConfig) {
+  if (cachedRegionConfig === undefined) {
     cachedRegionConfig = extractRegionConfig();
   }
   return cachedRegionConfig?.teamsBaseUrl ?? DEFAULT_TEAMS_BASE_URL;
@@ -189,7 +189,7 @@ export function getTeamsBaseUrl(): string {
  * Returns null if no valid session - caller should handle auth error.
  */
 export function getRegionConfig(): RegionConfig | null {
-  if (!cachedRegionConfig) {
+  if (cachedRegionConfig === undefined) {
     cachedRegionConfig = extractRegionConfig();
   }
   return cachedRegionConfig;
@@ -200,7 +200,7 @@ export function getRegionConfig(): RegionConfig | null {
  * Call this after login/logout to pick up new session.
  */
 export function clearRegionCache(): void {
-  cachedRegionConfig = null;
+  cachedRegionConfig = undefined;
   cachedTenantId = undefined;
 }
 
