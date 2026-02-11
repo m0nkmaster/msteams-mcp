@@ -87,7 +87,7 @@ src/
    - Easier testing of individual tools
    - Simpler addition of new tools
 
-8. **Auth Guards**: Reusable authentication check utilities in `utils/auth-guards.ts` return `Result` types for consistent error handling across API modules.
+8. **Auth Guards**: Reusable authentication check utilities in `utils/auth-guards.ts` return `Result` types for consistent error handling across API modules. Also provides `getTenantId()` (cached) for deep link construction.
 
 9. **Shared Constants**: Magic numbers are centralised in `constants.ts` for maintainability (page sizes, timeouts, thresholds).
 

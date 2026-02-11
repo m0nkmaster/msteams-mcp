@@ -9,7 +9,7 @@ import { SUBSTRATE_API, getBearerHeaders } from '../utils/api-config.js';
 import { ErrorCode } from '../types/errors.js';
 import { type Result, ok } from '../types/result.js';
 import { clearTokenCache } from '../auth/token-extractor.js';
-import { requireSubstrateTokenAsync } from '../utils/auth-guards.js';
+import { requireSubstrateTokenAsync, getTenantId, getTeamsBaseUrl } from '../utils/auth-guards.js';
 import {
   parseSearchResults,
   parsePeopleResults,
@@ -17,6 +17,7 @@ import {
   filterChannelsByName,
   type PersonSearchResult,
   type ChannelSearchResult,
+  type LinkContext,
 } from '../utils/parsers.js';
 import { getMyTeamsAndChannels } from './csa-api.js';
 import type { TeamsSearchResult, SearchPaginationResult } from '../types/teams.js';
@@ -106,8 +107,13 @@ export async function searchMessages(
   }
 
   const data = response.value.data;
+  const linkContext: LinkContext = {
+    tenantId: getTenantId() ?? undefined,
+    teamsBaseUrl: getTeamsBaseUrl(),
+  };
   const { results, total } = parseSearchResults(
-    data.EntitySets as unknown[] | undefined
+    data.EntitySets as unknown[] | undefined,
+    linkContext
   );
 
   const maxResults = options.maxResults ?? size;

@@ -95,41 +95,84 @@ export function getConversationType(conversationId: string): 'channel' | 'meetin
 /** Default Teams base URL for message links. */
 const DEFAULT_TEAMS_LINK_BASE = 'https://teams.microsoft.com';
 
+/** Options for building a message deep link. */
+export interface MessageLinkOptions {
+  /** The conversation/channel/chat ID (e.g., "19:xxx@thread.tacv2"). */
+  conversationId: string;
+  /** The message timestamp in epoch milliseconds. */
+  messageId: string | number;
+  /** Tenant ID (GUID) - required for reliable deep links. */
+  tenantId?: string;
+  /** For channel messages: the team's group ID (GUID). */
+  groupId?: string;
+  /** For channel messages: the parent/root message ID (epoch ms). If omitted for channels, messageId is used. */
+  parentMessageId?: string;
+  /** Teams base URL (for GCC/GCC-High support). */
+  teamsBaseUrl?: string;
+}
+
 /**
  * Builds a deep link to open a message in Teams.
  * 
- * Different conversation types require different URL formats:
- * - Channels: /l/message/{channelId}/{msgId}?parentMessageId={parentId} (for thread replies)
- * - Chats/Meetings: /l/message/{chatId}/{msgId}?context={"contextType":"chat"}
+ * Uses Microsoft's documented deep link formats:
+ * - Channels: /l/message/{channelId}/{msgId}?tenantId=...&groupId=...&parentMessageId=...
+ * - Chats/Meetings: /l/message/{chatId}/{msgId}?tenantId=...&context={"contextType":"chat"}
  * 
- * @param conversationId - The conversation/thread ID (e.g., "19:xxx@thread.tacv2")
- * @param messageTimestamp - The message timestamp in epoch milliseconds
- * @param parentMessageId - For channel thread replies, the ID of the parent/root message
- * @param teamsBaseUrl - Optional Teams base URL (for GCC/GCC-High support)
+ * @see https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams
+ */
+export function buildMessageLink(opts: MessageLinkOptions): string;
+/**
+ * @deprecated Use the options object overload instead.
  */
 export function buildMessageLink(
   conversationId: string,
   messageTimestamp: string | number,
   parentMessageId?: string,
-  teamsBaseUrl: string = DEFAULT_TEAMS_LINK_BASE
+  teamsBaseUrl?: string
+): string;
+export function buildMessageLink(
+  optsOrConversationId: MessageLinkOptions | string,
+  messageTimestamp?: string | number,
+  parentMessageId?: string,
+  teamsBaseUrl?: string
 ): string {
-  const timestamp = typeof messageTimestamp === 'string' ? messageTimestamp : String(messageTimestamp);
-  const linkUrl = `${teamsBaseUrl}/l/message/${encodeURIComponent(conversationId)}/${timestamp}`;
-  
-  const convType = getConversationType(conversationId);
-  
-  // Chats and meetings require the context parameter
-  if (convType === 'chat' || convType === 'meeting') {
-    const context = encodeURIComponent('{"contextType":"chat"}');
-    return `${linkUrl}?context=${context}`;
+  // Normalise arguments: support both old positional and new options-object signatures
+  let opts: MessageLinkOptions;
+  if (typeof optsOrConversationId === 'string') {
+    opts = {
+      conversationId: optsOrConversationId,
+      messageId: messageTimestamp!,
+      parentMessageId,
+      teamsBaseUrl,
+    };
+  } else {
+    opts = optsOrConversationId;
   }
-  
-  // Channel messages - add parentMessageId for thread replies
-  if (convType === 'channel' && parentMessageId && parentMessageId !== timestamp) {
-    return `${linkUrl}?parentMessageId=${parentMessageId}`;
+
+  const base = opts.teamsBaseUrl ?? DEFAULT_TEAMS_LINK_BASE;
+  const msgId = typeof opts.messageId === 'string' ? opts.messageId : String(opts.messageId);
+  const convType = getConversationType(opts.conversationId);
+
+  // Build the base URL path — encode the conversationId for URL safety
+  const linkUrl = `${base}/l/message/${encodeURIComponent(opts.conversationId)}/${msgId}`;
+
+  const params = new URLSearchParams();
+
+  if (convType === 'channel') {
+    // Channel deep links require tenantId, groupId, and parentMessageId
+    if (opts.tenantId) params.set('tenantId', opts.tenantId);
+    if (opts.groupId) params.set('groupId', opts.groupId);
+    // parentMessageId is always required — for top-level posts it equals the messageId
+    params.set('parentMessageId', opts.parentMessageId ?? msgId);
+    params.set('createdTime', msgId);
+  } else {
+    // Chat and meeting deep links require tenantId and context
+    if (opts.tenantId) params.set('tenantId', opts.tenantId);
+    params.set('context', '{"contextType":"chat"}');
   }
-  
-  return linkUrl;
+
+  const qs = params.toString();
+  return qs ? `${linkUrl}?${qs}` : linkUrl;
 }
 
 /**
@@ -225,10 +268,18 @@ export function parsePersonSuggestion(item: Record<string, unknown>): PersonSear
   };
 }
 
+/** Context for building reliable message deep links. */
+export interface LinkContext {
+  /** Tenant ID (GUID) from session. */
+  tenantId?: string;
+  /** Teams base URL (for GCC/GCC-High support). */
+  teamsBaseUrl?: string;
+}
+
 /**
  * Parses a v2 query result item into a search result.
  */
-export function parseV2Result(item: Record<string, unknown>): TeamsSearchResult | null {
+export function parseV2Result(item: Record<string, unknown>, linkContext?: LinkContext): TeamsSearchResult | null {
   const content = item.HitHighlightedSummary as string || 
                   item.Summary as string || 
                   '';
@@ -303,7 +354,13 @@ export function parseV2Result(item: Record<string, unknown>): TeamsSearchResult 
   // Build message link if we have the required data
   let messageLink: string | undefined;
   if (conversationId && messageTimestamp) {
-    messageLink = buildMessageLink(conversationId, messageTimestamp, parentMessageId);
+    messageLink = buildMessageLink({
+      conversationId,
+      messageId: messageTimestamp,
+      tenantId: linkContext?.tenantId,
+      parentMessageId,
+      teamsBaseUrl: linkContext?.teamsBaseUrl,
+    });
   }
 
   return {
@@ -402,7 +459,8 @@ export function calculateTokenStatus(
  * @returns Parsed results and total count if available
  */
 export function parseSearchResults(
-  entitySets: unknown[] | undefined
+  entitySets: unknown[] | undefined,
+  linkContext?: LinkContext
 ): { results: TeamsSearchResult[]; total?: number } {
   const results: TeamsSearchResult[] = [];
   let total: number | undefined;
@@ -428,7 +486,7 @@ export function parseSearchResults(
         const items = rs.Results as unknown[] | undefined;
         if (Array.isArray(items)) {
           for (const item of items) {
-            const parsed = parseV2Result(item as Record<string, unknown>);
+            const parsed = parseV2Result(item as Record<string, unknown>, linkContext);
             if (parsed) results.push(parsed);
           }
         }
@@ -1022,7 +1080,8 @@ export interface VirtualConversationItem {
  */
 export function parseVirtualConversationMessage(
   msg: Record<string, unknown>,
-  referencePattern: RegExp
+  referencePattern: RegExp,
+  linkContext?: LinkContext
 ): VirtualConversationItem | null {
   // Skip non-message types
   const messageType = msg.messagetype as string || msg.type as string;
@@ -1058,7 +1117,12 @@ export function parseVirtualConversationMessage(
 
   // Build message link to original message
   const messageLink = sourceConversationId && sourceReferenceId
-    ? buildMessageLink(sourceConversationId, sourceReferenceId)
+    ? buildMessageLink({
+        conversationId: sourceConversationId,
+        messageId: sourceReferenceId,
+        tenantId: linkContext?.tenantId,
+        teamsBaseUrl: linkContext?.teamsBaseUrl,
+      })
     : undefined;
 
   // Extract links before stripping HTML

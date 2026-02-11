@@ -14,6 +14,7 @@ import {
   extractSubstrateToken,
   extractSkypeSpacesToken,
   extractRegionConfig,
+  getUserProfile,
   type MessageAuthInfo,
   type RegionConfig,
 } from '../auth/token-extractor.js';
@@ -195,9 +196,33 @@ export function getRegionConfig(): RegionConfig | null {
 }
 
 /**
- * Clears the cached region config.
+ * Clears the cached region config and tenant ID.
  * Call this after login/logout to pick up new session.
  */
 export function clearRegionCache(): void {
   cachedRegionConfig = null;
+  cachedTenantId = undefined;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tenant ID
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Cached tenant ID (undefined = not yet extracted, null = extraction failed). */
+let cachedTenantId: string | null | undefined = undefined;
+
+/**
+ * Gets the tenant ID from the user's session (JWT tokens).
+ * 
+ * Required for building reliable Teams deep links.
+ * Returns null if no valid session is available.
+ */
+export function getTenantId(): string | null {
+  if (cachedTenantId !== undefined) {
+    return cachedTenantId;
+  }
+  const profile = getUserProfile();
+  const tid = profile?.tenantId ?? null;
+  cachedTenantId = tid;
+  return tid;
 }
