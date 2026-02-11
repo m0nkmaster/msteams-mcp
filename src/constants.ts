@@ -158,6 +158,16 @@ export const DEFAULT_MEETING_LIMIT = 50;
 export const MAX_MEETING_LIMIT = 200;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Files
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Default page size for shared files. */
+export const DEFAULT_FILES_PAGE_SIZE = 25;
+
+/** Maximum page size for shared files. */
+export const MAX_FILES_PAGE_SIZE = 100;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Token Refresh
 // ─────────────────────────────────────────────────────────────────────────────
 

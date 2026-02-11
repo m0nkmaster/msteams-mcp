@@ -1,0 +1,188 @@
+/**
+ * Files API client for shared file operations.
+ * 
+ * Uses the Substrate AllFiles API to retrieve files and links
+ * shared in a Teams conversation.
+ */
+
+import { httpRequest } from '../utils/http.js';
+import { type Result, ok, err } from '../types/result.js';
+import { ErrorCode, createError } from '../types/errors.js';
+import { clearTokenCache } from '../auth/token-extractor.js';
+import { requireSubstrateTokenAsync, getTenantId } from '../utils/auth-guards.js';
+import { extractObjectId } from '../utils/parsers.js';
+import { requireMessageAuth } from '../utils/auth-guards.js';
+import { DEFAULT_FILES_PAGE_SIZE } from '../constants.js';
+import { DEFAULT_SUBSTRATE_BASE_URL } from '../utils/api-config.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A file shared in a conversation. */
+export interface SharedFile {
+  /** Item type: "File" or "Link". */
+  itemType: 'File' | 'Link';
+  /** File name (for files). */
+  fileName?: string;
+  /** File extension (for files). */
+  fileExtension?: string;
+  /** URL to access the file or link. */
+  webUrl?: string;
+  /** File size in bytes (for files). */
+  fileSize?: number;
+  /** Display name of the person who shared the item. */
+  sharedBy?: string;
+  /** Email of the person who shared the item. */
+  sharedByEmail?: string;
+  /** When the item was shared (ISO timestamp). */
+  sharedTime?: string;
+  /** Title (for links). */
+  title?: string;
+}
+
+/** Result of getting shared files. */
+export interface GetSharedFilesResult {
+  conversationId: string;
+  files: SharedFile[];
+  returned: number;
+  /** Continuation token for pagination (if more results available). */
+  skipToken?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Gets files and links shared in a Teams conversation.
+ * 
+ * Uses the Substrate AllFiles API which indexes files shared across
+ * Teams conversations. Supports both files (SharePoint/OneDrive) and
+ * links shared in chat.
+ * 
+ * @param conversationId - The conversation ID to get files for
+ * @param options.pageSize - Number of items per page (default: 25, max: 100)
+ * @param options.skipToken - Continuation token for pagination
+ */
+export async function getSharedFiles(
+  conversationId: string,
+  options: { pageSize?: number; skipToken?: string } = {}
+): Promise<Result<GetSharedFilesResult>> {
+  // Need both Substrate token (for the API) and message auth (for user MRI)
+  const [tokenResult, authResult] = await Promise.all([
+    requireSubstrateTokenAsync(),
+    Promise.resolve(requireMessageAuth()),
+  ]);
+
+  if (!tokenResult.ok) return tokenResult;
+  if (!authResult.ok) return authResult;
+
+  const token = tokenResult.value;
+  const auth = authResult.value;
+
+  // Extract user's object ID from their MRI
+  const userId = extractObjectId(auth.userMri);
+  if (!userId) {
+    return err(createError(
+      ErrorCode.AUTH_REQUIRED,
+      'Could not extract user ID from session. Please try logging in again.',
+      { suggestions: ['Call teams_login to re-authenticate'] }
+    ));
+  }
+
+  // Get tenant ID
+  const tenantId = getTenantId();
+  if (!tenantId) {
+    return err(createError(
+      ErrorCode.AUTH_REQUIRED,
+      'Could not determine tenant ID. Please try logging in again.',
+      { suggestions: ['Call teams_login to re-authenticate'] }
+    ));
+  }
+
+  const pageSize = options.pageSize ?? DEFAULT_FILES_PAGE_SIZE;
+
+  // Build the AllFiles API URL
+  const userPrincipal = `OID:${userId}@${tenantId}`;
+  const params = new URLSearchParams();
+  params.set('ThreadId', conversationId);
+  params.set('ItemTypes', 'File');
+  params.append('ItemTypes', 'Link');
+  params.set('PageSize', String(pageSize));
+
+  if (options.skipToken) {
+    params.set('$skiptoken', options.skipToken);
+  }
+
+  const url = `${DEFAULT_SUBSTRATE_BASE_URL}/AllFiles/api/users('${encodeURIComponent(userPrincipal)}')/AllShared?${params.toString()}`;
+
+  const response = await httpRequest<Record<string, unknown>>(
+    url,
+    {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    if (response.error.code === ErrorCode.AUTH_EXPIRED) {
+      clearTokenCache();
+    }
+    return response;
+  }
+
+  const data = response.value.data;
+  const rawItems = data.Items as Array<Record<string, unknown>> | undefined;
+  const skipToken = data.SkipToken as string | undefined;
+
+  if (!rawItems || rawItems.length === 0) {
+    return ok({
+      conversationId,
+      files: [],
+      returned: 0,
+      skipToken: undefined,
+    });
+  }
+
+  const files: SharedFile[] = [];
+
+  for (const item of rawItems) {
+    const itemType = item.ItemType as string;
+
+    if (itemType === 'File') {
+      const fileData = item.FileData as Record<string, unknown> | undefined;
+      files.push({
+        itemType: 'File',
+        fileName: fileData?.FileName as string | undefined,
+        fileExtension: fileData?.FileExtension as string | undefined,
+        webUrl: fileData?.WebUrl as string | undefined,
+        fileSize: fileData?.FileSize as number | undefined,
+        sharedBy: item.SharedByDisplayName as string | undefined,
+        sharedByEmail: item.SharedBySmtp as string | undefined,
+        sharedTime: item.SharedTime as string | undefined,
+      });
+    } else if (itemType === 'Link') {
+      const linkData = item.WeblinkData as Record<string, unknown> | undefined;
+      files.push({
+        itemType: 'Link',
+        webUrl: linkData?.WebUrl as string | undefined,
+        title: linkData?.Title as string | undefined,
+        sharedBy: item.SharedByDisplayName as string | undefined,
+        sharedByEmail: item.SharedBySmtp as string | undefined,
+        sharedTime: item.SharedTime as string | undefined,
+      });
+    }
+  }
+
+  return ok({
+    conversationId,
+    files,
+    returned: files.length,
+    skipToken: skipToken || undefined,
+  });
+}
