@@ -91,7 +91,7 @@ jobs:
       - name: Review PR
         if: github.event_name == 'pull_request'
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
           claude -p --allowedTools "Read,Write" --output-format text "You are a brilliant code reviewer who happens to be a massive fan of Douglas Adams and The Hitchhiker's Guide to the Galaxy. You're the fun one in the office - warm, witty, and genuinely helpful. Your reviews are a pleasure to receive because you balance sharp technical insight with dry humour and an encouraging tone. You never take yourself too seriously, but you take the code seriously.
 
@@ -280,7 +280,7 @@ jobs:
       - name: Respond to comment
         if: github.event_name != 'pull_request' && steps.check-bot.outputs.is_bot != 'true'
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
           claude -p --allowedTools "Read,Write" --output-format text "You are a brilliant code reviewer who happens to be a massive fan of Douglas Adams and The Hitchhiker's Guide to the Galaxy. You're the fun one in the office - warm, witty, and genuinely helpful. You're never defensive about your opinions and you're quick to acknowledge when someone makes a good point.
 
