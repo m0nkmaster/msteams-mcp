@@ -81,7 +81,7 @@ async function handleGetMeetings(
 
 const getTranscriptToolDefinition: Tool = {
   name: 'teams_get_transcript',
-  description: 'Get the transcript of a Teams meeting. Requires the meeting\'s threadId (from teams_get_meetings). Returns the full transcript with timestamps and speakers, formatted as readable text. The meeting must have had transcription enabled. Optionally pass meetingDate (ISO string, e.g. the startTime from teams_get_meetings) to narrow the search.',
+  description: 'Get the transcript of a Teams meeting. Requires the meeting\'s threadId (from teams_get_meetings). Returns formatted transcript text with timestamps and speaker names, ready for reading or summarization. The meeting must have had transcription enabled. Optionally pass meetingDate (ISO string, e.g. the startTime from teams_get_meetings) to narrow the search.',
   inputSchema: {
     type: 'object',
     properties: {

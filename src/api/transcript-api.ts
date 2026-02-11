@@ -143,10 +143,10 @@ export async function getTranscriptContent(
   let transcriptData: { entries?: Array<Record<string, unknown>> };
   try {
     transcriptData = JSON.parse(transcriptJsonStr);
-  } catch {
+  } catch (parseError) {
     return err(createError(
       ErrorCode.UNKNOWN,
-      'Failed to parse transcript data.',
+      `Failed to parse transcript data: ${parseError instanceof Error ? parseError.message : 'unknown error'}`,
     ));
   }
 
@@ -159,6 +159,7 @@ export async function getTranscriptContent(
   }
 
   // Map to TranscriptEntry format
+  // Substrate returns timestamps with microsecond precision (extra 4 trailing zeros) — normalise to milliseconds
   const entries: TranscriptEntry[] = rawEntries.map(e => ({
     startTime: (e.startOffset as string || '').replace(/0{4}$/, ''),
     endTime: (e.endOffset as string || '').replace(/0{4}$/, ''),

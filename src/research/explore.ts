@@ -263,7 +263,7 @@ async function main(): Promise<void> {
     if (existingState) {
       console.log('📂 Found existing session state, attempting to restore...');
       context = await browser.newContext({
-        storageState: existingState as Parameters<typeof browser.newContext>[0] extends { storageState?: infer S } ? S : never,
+        storageState: existingState as any,
         viewport: { width: 1280, height: 800 },
       });
     } else {
