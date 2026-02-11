@@ -68,4 +68,5 @@ export * from './message-tools.js';
 export * from './people-tools.js';
 export * from './auth-tools.js';
 export * from './meeting-tools.js';
+export * from './file-tools.js';
 export * from './registry.js';

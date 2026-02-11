@@ -27,6 +27,7 @@ src/
 │   ├── message-tools.ts  # Messaging, favourites, save/unsave tools
 │   ├── people-tools.ts   # People search and profile tools
 │   ├── meeting-tools.ts  # Calendar and meeting tools
+│   ├── file-tools.ts     # Shared files tools
 │   └── auth-tools.ts     # Login and status tools
 ├── auth/                 # Authentication and credential management
 │   ├── index.ts          # Module exports
@@ -40,7 +41,8 @@ src/
 │   ├── chatsvc-api.ts    # Messaging, threads, save/unsave (chatsvc)
 │   ├── csa-api.ts        # Favorites API (CSA)
 │   ├── calendar-api.ts   # Calendar/meetings API
-│   └── transcript-api.ts # Meeting transcripts (Graph API)
+│   ├── transcript-api.ts # Meeting transcripts (Substrate WorkingSetFiles)
+│   └── files-api.ts      # Shared files (Substrate AllFiles)
 ├── browser/              # Playwright browser automation (login only)
 │   ├── context.ts        # Browser/context management with encrypted session
 │   └── auth.ts           # Authentication detection and manual login handling
@@ -138,6 +140,7 @@ Different Teams APIs use different authentication mechanisms:
 | **Threads** (chatsvc) | `skypetoken_asm` cookie | `auth/token-extractor` | `extractMessageAuth()` |
 | **Calendar** (mt/part/calendarView) | Skype Spaces token (`api.spaces.skype.com` scope) + `skypetoken_asm` | `auth/token-extractor` | `extractSkypeSpacesToken()` |
 | **Transcripts** (Substrate WorkingSetFiles) | Same JWT as Search (Substrate scope) + `Prefer` header | `auth/token-extractor` | `getValidSubstrateToken()` |
+| **Files** (Substrate AllFiles) | Same JWT as Search (Substrate scope) + message auth for user MRI | `auth/token-extractor` | `getValidSubstrateToken()` + `extractMessageAuth()` |
 
 **Important**: The CSA API (for favorites) requires a GET request to retrieve data, POST only for modifications. The Substrate suggestions API requires `cvid` and `logicalId` correlation IDs in the request body.
 
@@ -189,6 +192,7 @@ Session state and token cache files are protected by:
 | `teams_remove_reaction` | Remove an emoji reaction from a message |
 | `teams_get_meetings` | Get meetings from calendar (upcoming/past by date range) |
 | `teams_get_transcript` | Get meeting transcript (requires threadId from teams_get_meetings) |
+| `teams_get_shared_files` | Get files and links shared in a conversation |
 
 ### Design Philosophy
 
@@ -422,7 +426,6 @@ Based on API research, these tools could be implemented:
 | Tool | API | Difficulty |
 |------|-----|------------|
 | `teams_get_person` | Delve person API | Easy |
-| `teams_get_files` | AllFiles API | Medium |
 
 **Known Limitations:**
 - **Chat list** - Partially addressed by `teams_get_favorites` (pinned chats) and `teams_get_frequent_contacts` (common contacts), but no full chat list API
