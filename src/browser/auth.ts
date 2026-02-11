@@ -9,7 +9,6 @@ import {
   OVERLAY_STEP_PAUSE_MS,
   OVERLAY_COMPLETE_PAUSE_MS,
 } from '../constants.js';
-import { extractSubstrateToken, clearTokenCache } from '../auth/token-extractor.js';
 
 /**
  * Default Teams URL for initial login.
@@ -652,9 +651,16 @@ export async function waitForManualLogin(
         await showLoginProgress(page, 'acquiring');
       }
 
-      // Wait for Teams SPA to fully load, then trigger search for token acquisition
-      await waitForTeamsReady(page, log);
+      // Trigger a search to cause MSAL to acquire the Substrate token
       const acquired = await triggerTokenAcquisition(page, log);
+
+      if (!acquired) {
+        log('Warning: Substrate API call was not detected after login.');
+        if (showOverlay) {
+          await showLoginProgress(page, 'error', { pause: true });
+        }
+        throw new Error('Login completed but token acquisition failed. Please try again.');
+      }
 
       if (showOverlay) {
         await showLoginProgress(page, 'saving');
@@ -662,18 +668,7 @@ export async function waitForManualLogin(
 
       // Save the session state with fresh tokens
       await saveSessionState(context);
-      clearTokenCache();
       log('Session state saved.');
-
-      // Verify tokens were actually acquired
-      const token = extractSubstrateToken();
-      if (!token || token.expiry.getTime() <= Date.now()) {
-        log(`Warning: No valid Substrate token after login (Substrate API detected: ${acquired}).`);
-        if (showOverlay) {
-          await showLoginProgress(page, 'error', { pause: true });
-        }
-        throw new Error('Login completed but token acquisition failed. Please try again.');
-      }
 
       if (showOverlay) {
         await showLoginProgress(page, 'complete', { pause: true });
@@ -725,8 +720,16 @@ export async function ensureAuthenticated(
       await showLoginProgress(page, 'refreshing');
     }
 
-    // Wait for Teams SPA to fully load, then trigger search for token acquisition
+    // Trigger a search to cause MSAL to acquire/refresh the Substrate token
     const acquired = await triggerTokenAcquisition(page, log);
+
+    if (!acquired) {
+      log('Token refresh failed: Substrate API call was not detected.');
+      if (showOverlay) {
+        await showLoginProgress(page, 'error', { pause: true });
+      }
+      throw new Error('Token refresh failed. Please use teams_login with forceNew to re-authenticate.');
+    }
 
     if (showOverlay) {
       await showLoginProgress(page, 'saving');
@@ -734,22 +737,6 @@ export async function ensureAuthenticated(
 
     // Save the session state with fresh tokens
     await saveSessionState(context);
-
-    // Clear token cache so we re-extract from the freshly saved session
-    clearTokenCache();
-
-    // Verify tokens were actually refreshed
-    const afterToken = extractSubstrateToken();
-    const tokenIsValid = afterToken !== null && afterToken.expiry.getTime() > Date.now();
-
-    if (!tokenIsValid) {
-      const msg = `Token refresh failed: no valid token after refresh (Substrate API detected: ${acquired}).`;
-      log(msg);
-      if (showOverlay) {
-        await showLoginProgress(page, 'error', { pause: true });
-      }
-      throw new Error(msg + ' Please use teams_login with forceNew to re-authenticate.');
-    }
 
     if (showOverlay) {
       await showLoginProgress(page, 'complete', { pause: true });
