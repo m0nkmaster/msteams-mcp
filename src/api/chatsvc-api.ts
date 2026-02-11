@@ -10,7 +10,7 @@ import { CHATSVC_API, getMessagingHeaders, getSkypeAuthHeaders, getTeamsHeaders 
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import { getUserDisplayName } from '../auth/token-extractor.js';
-import { requireMessageAuth, getRegion, getTeamsBaseUrl } from '../utils/auth-guards.js';
+import { requireMessageAuth, getRegion, getTeamsBaseUrl, getTenantId } from '../utils/auth-guards.js';
 import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, extractActivityTimestamp, parseVirtualConversationMessage, markdownToTeamsHtml, type ExtractedLink } from '../utils/parsers.js';
 import { DEFAULT_ACTIVITY_LIMIT, SAVED_MESSAGES_ID, FOLLOWED_THREADS_ID, VIRTUAL_CONVERSATION_PREFIX, SELF_CHAT_ID, MRI_ORGID_PREFIX } from '../constants.js';
 
@@ -318,9 +318,20 @@ export async function getThreadMessages(
       msg.composetime as string ||
       new Date(parseInt(id, 10)).toISOString();
 
-    // Build message link
+    // Extract thread root ID for channel messages
+    // When rootMessageId differs from id, this message is a reply within a thread
+    const rootMessageId = msg.rootMessageId as string | undefined;
+    const isThreadReply = !!rootMessageId && rootMessageId !== id;
+
+    // Build message link with tenant context for reliable deep links
     const messageLink = /^\d+$/.test(id)
-      ? buildMessageLink(conversationId, id)
+      ? buildMessageLink({
+          conversationId,
+          messageId: id,
+          tenantId: getTenantId() ?? undefined,
+          parentMessageId: isThreadReply ? rootMessageId : undefined,
+          teamsBaseUrl: getTeamsBaseUrl(),
+        })
       : undefined;
 
     // Extract links before stripping HTML
@@ -328,11 +339,6 @@ export async function getThreadMessages(
 
     // Format human-readable date with day of week to help LLMs
     const when = formatHumanReadableDate(timestamp);
-
-    // Extract thread root ID for channel messages
-    // When rootMessageId differs from id, this message is a reply within a thread
-    const rootMessageId = msg.rootMessageId as string | undefined;
-    const isThreadReply = !!rootMessageId && rootMessageId !== id;
 
     messages.push({
       id,
@@ -417,7 +423,8 @@ export async function getSavedMessages(
   for (const raw of rawMessages) {
     const parsed = parseVirtualConversationMessage(
       raw as Record<string, unknown>,
-      SAVED_MESSAGE_PATTERN
+      SAVED_MESSAGE_PATTERN,
+      { tenantId: getTenantId() ?? undefined, teamsBaseUrl: getTeamsBaseUrl() }
     );
     if (!parsed) continue;
 
@@ -480,7 +487,8 @@ export async function getFollowedThreads(
   for (const raw of rawMessages) {
     const parsed = parseVirtualConversationMessage(
       raw as Record<string, unknown>,
-      FOLLOWED_THREAD_PATTERN
+      FOLLOWED_THREAD_PATTERN,
+      { tenantId: getTenantId() ?? undefined, teamsBaseUrl: getTeamsBaseUrl() }
     );
     if (!parsed) continue;
 
@@ -1521,7 +1529,12 @@ export async function getActivityFeed(
     // Skip virtual conversations (48:xxx) as they don't produce working deep links
     let activityLink: string | undefined;
     if (conversationId && !conversationId.startsWith(VIRTUAL_CONVERSATION_PREFIX) && /^\d+$/.test(id)) {
-      activityLink = buildMessageLink(conversationId, id);
+      activityLink = buildMessageLink({
+        conversationId,
+        messageId: id,
+        tenantId: getTenantId() ?? undefined,
+        teamsBaseUrl: getTeamsBaseUrl(),
+      });
     }
 
     const activityType = detectActivityType(msg);
