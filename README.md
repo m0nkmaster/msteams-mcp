@@ -130,6 +130,14 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 
 `teams_get_meetings` returns: subject, times, organiser, join URL, `threadId` for meeting chat. Use `threadId` with `teams_get_thread` to read meeting chat, or with `teams_get_transcript` to get the full transcript with speakers and timestamps.
 
+### Files
+
+| Tool | Description |
+|------|-------------|
+| `teams_get_shared_files` | Get files and links shared in a conversation (supports pagination) |
+
+Returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
+
 ### Session
 
 | Tool | Description |
