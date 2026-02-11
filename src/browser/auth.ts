@@ -329,21 +329,77 @@ async function hasAuthenticatedContent(page: Page): Promise<boolean> {
 }
 
 /**
+ * Waits for the Teams SPA to be fully loaded and interactive.
+ * 
+ * Teams is a heavy SPA — after navigation, the shell loads quickly but MSAL
+ * (which manages tokens) needs time to bootstrap. We wait for key UI elements
+ * that only render after the app has fully initialised, then wait for network
+ * activity to settle (indicating MSAL token requests have completed).
+ */
+async function waitForTeamsReady(
+  page: Page,
+  log: (msg: string) => void,
+  timeoutMs: number = 60000
+): Promise<boolean> {
+  log('Waiting for Teams to fully load...');
+
+  try {
+    // Wait for any SPA UI element that indicates the app has bootstrapped
+    await page.waitForSelector(
+      AUTH_SUCCESS_SELECTORS.join(', '),
+      { timeout: timeoutMs }
+    );
+    log('Teams UI elements detected.');
+
+    // Wait for network to settle — MSAL token refresh requests should complete
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 15000 });
+      log('Network settled.');
+    } catch {
+      // Network may not become fully idle (websockets, polling), that's OK
+      log('Network did not fully settle, continuing...');
+    }
+
+    return true;
+  } catch {
+    log('Teams did not fully load within timeout.');
+    return false;
+  }
+}
+
+/**
  * Triggers MSAL to acquire the Substrate token.
  * 
  * MSAL only acquires tokens for specific scopes when the app makes API calls
  * requiring those scopes. The Substrate API is only used for search, so we
- * perform a minimal search ("is:Messages") to trigger token acquisition.
+ * perform a search to trigger token acquisition.
+ * 
+ * Returns true if a Substrate API call was detected, false otherwise.
  */
 async function triggerTokenAcquisition(
   page: Page,
   log: (msg: string) => void
-): Promise<void> {
+): Promise<boolean> {
   log('Triggering token acquisition...');
 
   try {
-    // Wait for the app to be ready
-    await page.waitForTimeout(5000);
+    // Wait for Teams SPA to be fully loaded (MSAL must bootstrap first)
+    const ready = await waitForTeamsReady(page, log);
+    if (!ready) {
+      log('Teams did not load — cannot trigger token acquisition.');
+      return false;
+    }
+
+    // Set up Substrate API listener BEFORE triggering search
+    let substrateDetected = false;
+    const substratePromise = page.waitForResponse(
+      resp => resp.url().includes('substrate.office.com') && resp.status() === 200,
+      { timeout: 30000 }
+    ).then(() => {
+      substrateDetected = true;
+    }).catch(() => {
+      // Timeout — no Substrate call detected
+    });
 
     // Try multiple methods to trigger search
     let searchTriggered = false;
@@ -355,7 +411,6 @@ async function triggerTokenAcquisition(
         waitUntil: 'domcontentloaded',
         timeout: 30000,
       });
-      await page.waitForTimeout(5000);
       searchTriggered = true;
       log('Search results page loaded.');
     } catch (e) {
@@ -406,31 +461,32 @@ async function triggerTokenAcquisition(
       searchTriggered = true;
     }
 
-    // Wait for the Substrate search API call to complete
-    log('Waiting for search API...');
-    try {
-      // Wait for the actual API request to substrate.office.com
-      await Promise.race([
-        page.waitForResponse(
-          resp => resp.url().includes('substrate.office.com') && resp.status() === 200,
-          { timeout: 15000 }
-        ),
-        page.waitForTimeout(15000),
-      ]);
-      log('Substrate API call detected.');
-    } catch {
-      log('No Substrate API call detected, continuing...');
+    // Wait for the Substrate API response
+    log('Waiting for Substrate API...');
+    await substratePromise;
+
+    if (substrateDetected) {
+      log('Substrate API call detected — tokens acquired.');
+    } else {
+      log('No Substrate API call detected within timeout.');
     }
+
+    // Give MSAL a moment to persist tokens to localStorage
     await page.waitForTimeout(2000);
 
     // Close search and reset
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(1000);
+    try {
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(500);
+    } catch {
+      // Page may have navigated, ignore
+    }
 
     log('Token acquisition complete.');
+    return substrateDetected;
   } catch (error) {
     log(`Token acquisition warning: ${error instanceof Error ? error.message : String(error)}`);
-    await page.waitForTimeout(3000);
+    return false;
   }
 }
 
@@ -596,8 +652,9 @@ export async function waitForManualLogin(
         await showLoginProgress(page, 'acquiring');
       }
 
-      // Trigger a search to cause MSAL to acquire the Substrate token
-      await triggerTokenAcquisition(page, log);
+      // Wait for Teams SPA to fully load, then trigger search for token acquisition
+      await waitForTeamsReady(page, log);
+      const acquired = await triggerTokenAcquisition(page, log);
 
       if (showOverlay) {
         await showLoginProgress(page, 'saving');
@@ -611,7 +668,7 @@ export async function waitForManualLogin(
       // Verify tokens were actually acquired
       const token = extractSubstrateToken();
       if (!token || token.expiry.getTime() <= Date.now()) {
-        log('Warning: No valid Substrate token found after login. You may need to try again.');
+        log(`Warning: No valid Substrate token after login (Substrate API detected: ${acquired}).`);
         if (showOverlay) {
           await showLoginProgress(page, 'error', { pause: true });
         }
@@ -664,16 +721,12 @@ export async function ensureAuthenticated(
   if (status.isAuthenticated) {
     log('Already authenticated.');
 
-    // Snapshot token expiry before refresh attempt
-    const beforeToken = extractSubstrateToken();
-    const beforeExpiry = beforeToken?.expiry?.getTime() ?? 0;
-
     if (showOverlay) {
       await showLoginProgress(page, 'refreshing');
     }
 
-    // Trigger a search to cause MSAL to acquire/refresh the Substrate token
-    await triggerTokenAcquisition(page, log);
+    // Wait for Teams SPA to fully load, then trigger search for token acquisition
+    const acquired = await triggerTokenAcquisition(page, log);
 
     if (showOverlay) {
       await showLoginProgress(page, 'saving');
@@ -687,21 +740,15 @@ export async function ensureAuthenticated(
 
     // Verify tokens were actually refreshed
     const afterToken = extractSubstrateToken();
-    const afterExpiry = afterToken?.expiry?.getTime() ?? 0;
-    const tokenIsValid = afterToken !== null && afterExpiry > Date.now();
-    const tokenWasRefreshed = afterExpiry > beforeExpiry;
+    const tokenIsValid = afterToken !== null && afterToken.expiry.getTime() > Date.now();
 
     if (!tokenIsValid) {
-      log('Warning: No valid token found after refresh attempt.');
-      if (headless) {
-        throw new Error('Token refresh failed: no valid token after SSO. Browser-based re-authentication required.');
+      const msg = `Token refresh failed: no valid token after refresh (Substrate API detected: ${acquired}).`;
+      log(msg);
+      if (showOverlay) {
+        await showLoginProgress(page, 'error', { pause: true });
       }
-    } else if (!tokenWasRefreshed && beforeToken && beforeExpiry <= Date.now() + 10 * 60 * 1000) {
-      // Token was close to expiry but wasn't refreshed - MSAL likely didn't initialise in time
-      log('Warning: Token was not refreshed despite being close to expiry.');
-      if (headless) {
-        throw new Error('Token refresh failed: token not refreshed despite being close to expiry. Browser-based re-authentication required.');
-      }
+      throw new Error(msg + ' Please use teams_login with forceNew to re-authenticate.');
     }
 
     if (showOverlay) {
