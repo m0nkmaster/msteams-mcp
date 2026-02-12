@@ -44,7 +44,7 @@ src/
 │   ├── transcript-api.ts # Meeting transcripts (Substrate WorkingSetFiles)
 │   └── files-api.ts      # Shared files (Substrate AllFiles)
 ├── browser/              # Playwright browser automation (login only)
-│   ├── context.ts        # Browser/context management with encrypted session
+│   ├── context.ts        # Persistent browser profile management
 │   └── auth.ts           # Authentication detection and manual login handling
 ├── utils/
 │   ├── parsers.ts        # Pure parsing functions (testable)
@@ -99,31 +99,34 @@ src/
 
 ### Authentication Flow
 
-All operations use direct API calls to Teams APIs. The browser is only used for authentication:
+All operations use direct API calls to Teams APIs. A persistent browser profile (`~/.teams-mcp-server/browser-profile/`) stores Microsoft session cookies and MSAL tokens, enabling silent re-authentication without user interaction.
 
-1. **Login**: Opens visible browser → user authenticates → session state saved → browser closed
-2. **All subsequent operations**: Use cached tokens for direct API calls (no browser)
-3. **Token expiry**: When tokens expire (~1 hour), proactive refresh is attempted; if that fails, user must re-authenticate via `teams_login`
+1. **First login**: Opens visible browser → user authenticates → session state saved → browser closed
+2. **Token expiry**: Headless browser opens with persistent profile → Microsoft session cookies enable silent SSO → tokens refreshed → no user interaction needed
+3. **Session fully expired**: Falls back to visible browser for manual re-login (with extensions like Bitwarden and saved form data available)
+4. **All API operations**: Use cached tokens for direct API calls (no browser)
 
-This approach provides faster, more reliable operations compared to DOM scraping, with structured JSON responses and proper pagination support.
+The **headless-first strategy** means `teams_login` always tries headless SSO before showing a visible browser. The persistent profile's long-lived Microsoft session cookies (lasting days/weeks) mean users rarely need to manually re-authenticate, even though MSAL tokens expire after ~1 hour.
 
-The server uses the system's installed browser rather than downloading Playwright's bundled Chromium (~180MB savings):
+The server uses the system's installed browser via Playwright's `launchPersistentContext()` (~180MB savings vs bundled Chromium):
 
 - **Windows**: Uses Microsoft Edge (always pre-installed on Windows 10+)
 - **macOS/Linux**: Uses Google Chrome
 
-This is configured via Playwright's `channel` option in `src/browser/context.ts`. If the system browser isn't available, a helpful error message suggests installing Chrome or running `npx playwright install chromium` as a fallback.
+The persistent profile is shared between headless and visible modes. Only one process can use it at a time (Chromium profile lock). The token-refresh module uses a module-level flag to prevent concurrent access.
+
+If the system browser isn't available, a helpful error message suggests installing Chrome or running `npx playwright install chromium` as a fallback.
 
 ### Token Management
 
 - Tokens are extracted from browser localStorage after login
 - The Substrate search token (`SubstrateSearch-Internal.ReadWrite` scope) is required for search
 - Tokens typically expire after ~1 hour
-- **Proactive token refresh**: When tokens have less than 10 minutes remaining, the server automatically refreshes them using a headless browser. MSAL handles the token refresh when Teams loads, then we save the updated session state.
-- This is seamless to the user - the browser is invisible
-- If refresh fails, user must re-authenticate via `teams_login`
+- **Proactive token refresh**: When tokens have less than 10 minutes remaining, the server opens a headless browser with the persistent profile. Microsoft's long-lived session cookies enable silent SSO — MSAL refreshes tokens automatically when Teams loads.
+- This is seamless to the user — no browser window shown, no interaction needed
+- If refresh fails (e.g., Microsoft session fully expired), user must re-authenticate via `teams_login`
 
-**How token refresh works:** When tokens are nearly expired, a headless browser loads Teams and triggers a search to force MSAL's `acquireTokenSilent`, then saves the refreshed session state.
+**How token refresh works:** A headless browser opens with the persistent profile at `~/.teams-mcp-server/browser-profile/`. The profile's session cookies authenticate silently, Teams loads, MSAL refreshes tokens in localStorage, and the updated session state is saved.
 
 **Testing token refresh:** Use `npm run cli -- login` which will attempt headless SSO first, only showing a browser if user interaction is actually required.
 
@@ -148,10 +151,11 @@ Different Teams APIs use different authentication mechanisms:
 
 ### Session Persistence
 
-Playwright's `storageState()` is used to save browser session state after login. This includes:
-- Session cookies (for messaging APIs)
-- MSAL tokens in localStorage (for search and people APIs)
-- Tokens are extracted and cached for direct API use
+Two layers of session persistence work together:
+
+1. **Persistent browser profile** (`~/.teams-mcp-server/browser-profile/`): A dedicated Chrome/Edge profile that retains Microsoft session cookies, extensions (e.g. Bitwarden), and form autofill data across launches. This is what enables silent headless re-authentication.
+
+2. **Encrypted session state** (`session-state.json`): Playwright's `storageState()` extracts cookies and localStorage from the browser context. Tokens are then extracted from this for direct API use without a browser.
 
 Session state and token cache files are protected by:
 1. **Encryption at rest**: AES-256-GCM encryption using a key derived from machine-specific values (hostname + username)
@@ -388,7 +392,7 @@ Session files are stored in a user-specific config directory to ensure consisten
 Contents:
 - `session-state.json` (encrypted browser session)
 - `token-cache.json` (encrypted OAuth tokens)
-- `.user-data/` (browser profile)
+- `browser-profile/` (persistent Chrome/Edge profile with extensions and session cookies)
 
 Legacy session files from the project root (`./session-state.json`) are automatically migrated to the new location on first read.
 

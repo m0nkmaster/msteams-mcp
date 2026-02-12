@@ -53,26 +53,8 @@ export const MAX_CHANNEL_LIMIT = 50;
 // Timeouts (milliseconds)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Default timeout for waiting for search results. */
-export const SEARCH_RESULT_TIMEOUT_MS = 10000;
-
 /** Default HTTP request timeout. */
 export const HTTP_REQUEST_TIMEOUT_MS = 30000;
-
-/** Short delay for UI interactions. */
-export const UI_SHORT_DELAY_MS = 300;
-
-/** Medium delay for UI state changes. */
-export const UI_MEDIUM_DELAY_MS = 1000;
-
-/** Long delay for API responses to settle. */
-export const UI_LONG_DELAY_MS = 2000;
-
-/** Authentication check interval. */
-export const AUTH_CHECK_INTERVAL_MS = 2000;
-
-/** Default login timeout (5 minutes). */
-export const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Pause after showing progress overlay step (ms). */
 export const OVERLAY_STEP_PAUSE_MS = 1500;

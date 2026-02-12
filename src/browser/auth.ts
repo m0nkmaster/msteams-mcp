@@ -27,17 +27,13 @@ const TEAMS_URL = 'https://teams.microsoft.com';
 const PROGRESS_OVERLAY_ID = 'mcp-login-progress-overlay';
 
 /** Phases for the login progress overlay. */
-type OverlayPhase = 'signed-in' | 'acquiring' | 'saving' | 'complete' | 'refreshing' | 'error';
+type OverlayPhase = 'signed-in' | 'saving' | 'complete' | 'error';
 
 /** Content for each overlay phase. */
 const OVERLAY_CONTENT: Record<OverlayPhase, { message: string; detail: string }> = {
   'signed-in': {
     message: "You're signed in!",
     detail: 'Setting up your connection to Teams...',
-  },
-  'acquiring': {
-    message: 'Acquiring permissions...',
-    detail: 'Getting access to search and messages...',
   },
   'saving': {
     message: 'Saving your session...',
@@ -47,34 +43,11 @@ const OVERLAY_CONTENT: Record<OverlayPhase, { message: string; detail: string }>
     message: 'All done!',
     detail: 'This window will close automatically.',
   },
-  'refreshing': {
-    message: 'Refreshing your session...',
-    detail: 'Updating your access tokens...',
-  },
   'error': {
     message: 'Something went wrong',
     detail: 'Please try again or check the console for details.',
   },
 };
-
-/** Detail messages that cycle during the acquiring/refreshing phases. */
-const ACQUIRING_DETAILS = [
-  'Preparing Teams connection...',
-  'Navigating to search...',
-  'Waiting for API response...',
-  'Acquiring search permissions...',
-  'Convincing Microsoft we mean well...',
-  'Negotiating with the UI...',
-  'Gathering auth tokens...',
-  'Good things come to those who wait...',
-  'Almost there...',
-];
-
-/** Interval for cycling detail messages (ms). */
-const DETAIL_CYCLE_INTERVAL_MS = 3000;
-
-/** ID for the detail text element (for cycling updates). */
-const DETAIL_ELEMENT_ID = 'mcp-login-detail';
 
 /**
  * Shows a progress overlay for a specific phase.
@@ -89,46 +62,12 @@ async function showLoginProgress(
   const content = OVERLAY_CONTENT[phase];
   const isComplete = phase === 'complete';
   const isError = phase === 'error';
-  const isAnimated = phase === 'acquiring' || phase === 'refreshing';
 
   try {
-    await page.evaluate(({ id, detailId, message, detail, complete, error, animated, cycleDetails, cycleInterval }) => {
-      // Remove existing overlay if present, clearing any running timer
+    await page.evaluate(({ id, message, detail, complete, error }) => {
+      // Remove existing overlay if present
       const existing = document.getElementById(id);
-      if (existing) {
-        const existingWithTimer = existing as HTMLElement & { _cycleTimer?: ReturnType<typeof setInterval> };
-        if (existingWithTimer._cycleTimer) {
-          clearInterval(existingWithTimer._cycleTimer);
-        }
-        existing.remove();
-      }
-
-      // Remove any existing style element
-      const existingStyle = document.getElementById(`${id}-style`);
-      if (existingStyle) {
-        existingStyle.remove();
-      }
-
-      // Add keyframe animations for spinner
-      const style = document.createElement('style');
-      style.id = `${id}-style`;
-      style.textContent = `
-        @keyframes mcp-spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-        @keyframes mcp-pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.6; }
-        }
-        @keyframes mcp-fade {
-          0% { opacity: 0; transform: translateY(4px); }
-          15% { opacity: 1; transform: translateY(0); }
-          85% { opacity: 1; transform: translateY(0); }
-          100% { opacity: 0; transform: translateY(-4px); }
-        }
-      `;
-      document.head.appendChild(style);
+      if (existing) existing.remove();
 
       // Create overlay container
       const overlay = document.createElement('div');
@@ -158,15 +97,6 @@ async function showLoginProgress(
         boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
       });
 
-      // Create icon container (for animation)
-      const iconContainer = document.createElement('div');
-      Object.assign(iconContainer.style, {
-        width: '64px',
-        height: '64px',
-        margin: '0 auto 24px',
-        position: 'relative',
-      });
-
       // Create icon
       const icon = document.createElement('div');
       const iconBg = error ? '#c42b1c' : complete ? '#107c10' : '#5b5fc7';
@@ -180,31 +110,9 @@ async function showLoginProgress(
         fontSize: '32px',
         background: iconBg,
         color: 'white',
+        margin: '0 auto 24px',
       });
-
-      if (animated) {
-        // Spinner ring for animated states
-        const spinner = document.createElement('div');
-        Object.assign(spinner.style, {
-          position: 'absolute',
-          top: '-4px',
-          left: '-4px',
-          width: '72px',
-          height: '72px',
-          borderRadius: '50%',
-          border: '3px solid transparent',
-          borderTopColor: iconBg,
-          borderRightColor: iconBg,
-          animation: 'mcp-spin 1.2s linear infinite',
-        });
-        iconContainer.appendChild(spinner);
-        icon.textContent = '⋯';
-        icon.style.animation = 'mcp-pulse 2s ease-in-out infinite';
-      } else {
-        icon.textContent = error ? '✕' : complete ? '✓' : '⋯';
-      }
-
-      iconContainer.appendChild(icon);
+      icon.textContent = error ? '✕' : complete ? '✓' : '⋯';
 
       // Create title
       const title = document.createElement('h2');
@@ -218,52 +126,26 @@ async function showLoginProgress(
 
       // Create detail text
       const detailEl = document.createElement('p');
-      detailEl.id = detailId;
       Object.assign(detailEl.style, {
         margin: '0',
         fontSize: '14px',
         color: '#616161',
         lineHeight: '1.5',
-        minHeight: '21px', // Prevent layout shift
       });
-      if (animated) {
-        detailEl.style.animation = `mcp-fade ${cycleInterval}ms ease-in-out infinite`;
-      }
       detailEl.textContent = detail;
 
       // Assemble and append
-      modal.appendChild(iconContainer);
+      modal.appendChild(icon);
       modal.appendChild(title);
       modal.appendChild(detailEl);
       overlay.appendChild(modal);
       document.body.appendChild(overlay);
-
-      // Set up detail cycling for animated states
-      if (animated && cycleDetails && cycleDetails.length > 0) {
-        let detailIndex = 0;
-        const cycleTimer = setInterval(() => {
-          const el = document.getElementById(detailId);
-          if (el) {
-            el.textContent = cycleDetails[detailIndex];
-            detailIndex = (detailIndex + 1) % cycleDetails.length;
-          } else {
-            clearInterval(cycleTimer);
-          }
-        }, cycleInterval);
-
-        // Store timer ID on overlay for potential future cleanup
-        (overlay as HTMLElement & { _cycleTimer?: ReturnType<typeof setInterval> })._cycleTimer = cycleTimer;
-      }
     }, {
       id: PROGRESS_OVERLAY_ID,
-      detailId: DETAIL_ELEMENT_ID,
       message: content.message,
       detail: content.detail,
       complete: isComplete,
       error: isError,
-      animated: isAnimated,
-      cycleDetails: isAnimated ? ACQUIRING_DETAILS : [],
-      cycleInterval: DETAIL_CYCLE_INTERVAL_MS,
     });
 
     // Pause if requested (for steps that need user to see the message)
@@ -273,7 +155,6 @@ async function showLoginProgress(
     }
   } catch {
     // Overlay is cosmetic - don't fail login if it can't be shown
-    // To debug: change to `catch (e)` and add `console.debug('[overlay]', e);`
   }
 }
 
@@ -325,168 +206,6 @@ async function hasAuthenticatedContent(page: Page): Promise<boolean> {
     }
   }
   return false;
-}
-
-/**
- * Waits for the Teams SPA to be fully loaded and interactive.
- * 
- * Teams is a heavy SPA — after navigation, the shell loads quickly but MSAL
- * (which manages tokens) needs time to bootstrap. We wait for key UI elements
- * that only render after the app has fully initialised, then wait for network
- * activity to settle (indicating MSAL token requests have completed).
- */
-async function waitForTeamsReady(
-  page: Page,
-  log: (msg: string) => void,
-  timeoutMs: number = 60000
-): Promise<boolean> {
-  log('Waiting for Teams to fully load...');
-
-  try {
-    // Wait for any SPA UI element that indicates the app has bootstrapped
-    await page.waitForSelector(
-      AUTH_SUCCESS_SELECTORS.join(', '),
-      { timeout: timeoutMs }
-    );
-    log('Teams UI elements detected.');
-
-    // Wait for network to settle — MSAL token refresh requests should complete
-    try {
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
-      log('Network settled.');
-    } catch {
-      // Network may not become fully idle (websockets, polling), that's OK
-      log('Network did not fully settle, continuing...');
-    }
-
-    return true;
-  } catch {
-    log('Teams did not fully load within timeout.');
-    return false;
-  }
-}
-
-/**
- * Triggers MSAL to acquire the Substrate token.
- * 
- * MSAL only acquires tokens for specific scopes when the app makes API calls
- * requiring those scopes. The Substrate API is only used for search, so we
- * perform a search to trigger token acquisition.
- * 
- * Returns true if a Substrate API call was detected, false otherwise.
- */
-async function triggerTokenAcquisition(
-  page: Page,
-  log: (msg: string) => void
-): Promise<boolean> {
-  log('Triggering token acquisition...');
-
-  try {
-    // Wait for Teams SPA to be fully loaded (MSAL must bootstrap first)
-    const ready = await waitForTeamsReady(page, log);
-    if (!ready) {
-      log('Teams did not load — cannot trigger token acquisition.');
-      return false;
-    }
-
-    // Set up Substrate API listener BEFORE triggering search
-    let substrateDetected = false;
-    const substratePromise = page.waitForResponse(
-      resp => resp.url().includes('substrate.office.com') && resp.status() === 200,
-      { timeout: 30000 }
-    ).then(() => {
-      substrateDetected = true;
-    }).catch(() => {
-      // Timeout — no Substrate call detected
-    });
-
-    // Try multiple methods to trigger search
-    let searchTriggered = false;
-
-    // Method 1: Navigate to search results URL (triggers Substrate API call directly)
-    log('Navigating to search results...');
-    try {
-      await page.goto('https://teams.microsoft.com/v2/#/search?query=test', {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      });
-      searchTriggered = true;
-      log('Search results page loaded.');
-    } catch (e) {
-      log(`Search navigation failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // Method 2: Fallback - focus and type
-    if (!searchTriggered) {
-      log('Trying focus+type fallback...');
-      try {
-        const focused = await page.evaluate(() => {
-          const selectors = [
-            '#ms-searchux-input',
-            '[data-tid="searchInputField"]',
-            'input[placeholder*="Search"]',
-          ];
-          for (const sel of selectors) {
-            const el = document.querySelector(sel) as HTMLInputElement | null;
-            if (el) {
-              el.focus();
-              el.click();
-              return true;
-            }
-          }
-          return false;
-        });
-
-        if (focused) {
-          await page.waitForTimeout(500);
-          await page.keyboard.type('test', { delay: 30 });
-          await page.keyboard.press('Enter');
-          searchTriggered = true;
-          log('Search submitted via typing.');
-        }
-      } catch {
-        // Continue
-      }
-    }
-
-    // Method 3: Keyboard shortcut fallback
-    if (!searchTriggered) {
-      log('Trying keyboard shortcut...');
-      const isMac = process.platform === 'darwin';
-      await page.keyboard.press(isMac ? 'Meta+e' : 'Control+e');
-      await page.waitForTimeout(1000);
-      await page.keyboard.type('is:Messages', { delay: 30 });
-      await page.keyboard.press('Enter');
-      searchTriggered = true;
-    }
-
-    // Wait for the Substrate API response
-    log('Waiting for Substrate API...');
-    await substratePromise;
-
-    if (substrateDetected) {
-      log('Substrate API call detected — tokens acquired.');
-    } else {
-      log('No Substrate API call detected within timeout.');
-    }
-
-    // Give MSAL a moment to persist tokens to localStorage
-    await page.waitForTimeout(2000);
-
-    // Close search and reset
-    try {
-      await page.keyboard.press('Escape');
-      await page.waitForTimeout(500);
-    } catch {
-      // Page may have navigated, ignore
-    }
-
-    log('Token acquisition complete.');
-    return substrateDetected;
-  } catch (error) {
-    log(`Token acquisition warning: ${error instanceof Error ? error.message : String(error)}`);
-    return false;
-  }
 }
 
 /**
@@ -645,28 +364,13 @@ export async function waitForManualLogin(
     if (status.isAuthenticated) {
       log('Authentication successful!');
 
-      // Show progress through login steps (only if overlay enabled)
       if (showOverlay) {
         await showLoginProgress(page, 'signed-in', { pause: true });
-        await showLoginProgress(page, 'acquiring');
-      }
-
-      // Trigger a search to cause MSAL to acquire the Substrate token
-      const acquired = await triggerTokenAcquisition(page, log);
-
-      if (!acquired) {
-        log('Warning: Substrate API call was not detected after login.');
-        if (showOverlay) {
-          await showLoginProgress(page, 'error', { pause: true });
-        }
-        throw new Error('Login completed but token acquisition failed. Please try again.');
-      }
-
-      if (showOverlay) {
         await showLoginProgress(page, 'saving');
       }
 
-      // Save the session state with fresh tokens
+      // The persistent browser profile already has MSAL tokens in localStorage
+      // from the login flow. Just save the session state directly.
       await saveSessionState(context);
       log('Session state saved.');
 
@@ -714,33 +418,14 @@ export async function ensureAuthenticated(
   const status = await navigateToTeams(page);
 
   if (status.isAuthenticated) {
-    log('Already authenticated.');
+    log('Already authenticated — saving session state.');
 
-    if (showOverlay) {
-      await showLoginProgress(page, 'refreshing');
-    }
-
-    // Trigger a search to cause MSAL to acquire/refresh the Substrate token
-    const acquired = await triggerTokenAcquisition(page, log);
-
-    if (!acquired) {
-      log('Token refresh failed: Substrate API call was not detected.');
-      if (showOverlay) {
-        await showLoginProgress(page, 'error', { pause: true });
-      }
-      throw new Error('Token refresh failed. Please use teams_login with forceNew to re-authenticate.');
-    }
-
-    if (showOverlay) {
-      await showLoginProgress(page, 'saving');
-    }
-
-    // Save the session state with fresh tokens
+    // The persistent browser profile already has valid MSAL tokens in localStorage.
+    // Just save the session state directly — no need to trigger a search and wait
+    // for Substrate API calls. Token acquisition is only needed after a fresh
+    // manual login where MSAL hasn't yet acquired the Substrate token.
     await saveSessionState(context);
-
-    if (showOverlay) {
-      await showLoginProgress(page, 'complete', { pause: true });
-    }
+    log('Session state saved.');
 
     return;
   }
@@ -756,9 +441,6 @@ export async function ensureAuthenticated(
   if (status.isOnLoginPage) {
     log('Login required. Please complete authentication in the browser window.');
     await waitForManualLogin(page, context, undefined, onProgress, showOverlay);
-
-    // Navigate back to Teams after login (in case we're on a callback URL)
-    await navigateToTeams(page);
   } else {
     // Unexpected state - might need manual intervention
     log('Unexpected page state. Waiting for authentication...');

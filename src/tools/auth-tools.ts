@@ -99,14 +99,11 @@ async function handleLogin(
     }
   }
 
-  // Smart headless strategy:
-  // 1. No session or session too old → visible browser (definitely need login)
-  // 2. Session exists and is recent (< 12 hours) → try headless first (SSO likely)
-  // 3. forceNew requested → visible browser (user wants fresh login)
-  const hasRecentSession = hasSessionState() && !isSessionLikelyExpired();
-  const shouldTryHeadless = hasRecentSession && !input.forceNew;
-
-  if (shouldTryHeadless) {
+  // Headless-first strategy:
+  // The persistent browser profile retains Microsoft's long-lived session cookies,
+  // so headless SSO can succeed even without a session-state file. Always try
+  // headless first unless the user explicitly wants a fresh login.
+  if (!input.forceNew) {
     // Try headless first - SSO may complete silently
     const headlessManager = await createBrowserContext({ headless: true });
     ctx.server.setBrowserManager(headlessManager);

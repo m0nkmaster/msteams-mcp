@@ -2,8 +2,13 @@
  * Token refresh via headless browser.
  * 
  * Teams uses SPA OAuth2 which restricts refresh tokens to browser-based CORS
- * requests. We open a headless browser with saved session state, let MSAL
- * silently refresh tokens, then save the updated state. Seamless to the user.
+ * requests. We open a headless browser with the persistent profile, let MSAL
+ * silently refresh tokens using the profile's long-lived session cookies,
+ * then save the updated state. Seamless to the user — no browser window shown.
+ * 
+ * The persistent profile is shared with visible login, so only one browser
+ * can use it at a time (Chromium profile lock). A module-level flag prevents
+ * concurrent refresh attempts.
  */
 
 import { TOKEN_REFRESH_THRESHOLD_MS } from '../constants.js';
@@ -13,10 +18,6 @@ import {
   extractSubstrateToken,
   clearTokenCache,
 } from './token-extractor.js';
-import {
-  hasSessionState,
-  isSessionLikelyExpired,
-} from './session-store.js';
 
 /** Result of a successful token refresh. */
 export interface TokenRefreshResult {
@@ -30,26 +31,22 @@ export interface TokenRefreshResult {
   refreshNeeded: boolean;
 }
 
+/** Module-level flag to prevent concurrent browser profile access. */
+let refreshInProgress = false;
+
 /**
- * Refreshes tokens by opening a headless browser with saved session state.
- * MSAL only refreshes tokens when an API call requires them, so we trigger
- * a search via ensureAuthenticated to force token acquisition.
+ * Refreshes tokens by opening a headless browser with the persistent profile.
+ * The profile's long-lived Microsoft session cookies enable silent re-auth
+ * without user interaction. MSAL only refreshes tokens when an API call
+ * requires them, so we trigger a search via ensureAuthenticated.
  */
 export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResult>> {
-  // Check we have a session to work with
-  if (!hasSessionState()) {
+  // Prevent concurrent access to the shared browser profile
+  if (refreshInProgress) {
     return err(createError(
-      ErrorCode.AUTH_REQUIRED,
-      'No session state available. Please run teams_login to authenticate.',
-      { suggestions: ['Call teams_login to authenticate'] }
-    ));
-  }
-
-  if (isSessionLikelyExpired()) {
-    return err(createError(
-      ErrorCode.AUTH_EXPIRED,
-      'Session is too old and likely expired. Please re-authenticate.',
-      { suggestions: ['Call teams_login to re-authenticate'] }
+      ErrorCode.UNKNOWN,
+      'Token refresh already in progress. Please wait and try again.',
+      { retryable: true, suggestions: ['Wait a moment and retry the request'] }
     ));
   }
 
@@ -69,9 +66,10 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
   const { createBrowserContext, closeBrowser } = await import('../browser/context.js');
 
   let manager: Awaited<ReturnType<typeof createBrowserContext>> | null = null;
+  refreshInProgress = true;
 
   try {
-    // Open headless browser with saved session
+    // Open headless browser with persistent profile
     manager = await createBrowserContext({ headless: true });
 
     // Import auth functions
@@ -142,5 +140,7 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
       `Token refresh via browser failed: ${message}`,
       { suggestions: ['Call teams_login to re-authenticate'] }
     ));
+  } finally {
+    refreshInProgress = false;
   }
 }
