@@ -8,12 +8,11 @@
 import { httpRequest } from '../utils/http.js';
 import { type Result, ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
-import { clearTokenCache } from '../auth/token-extractor.js';
-import { requireSubstrateTokenAsync, getTenantId } from '../utils/auth-guards.js';
+import { requireSubstrateTokenAsync, requireMessageAuth, getTenantId, handleSubstrateError } from '../utils/auth-guards.js';
 import { extractObjectId } from '../utils/parsers.js';
-import { requireMessageAuth } from '../utils/auth-guards.js';
 import { DEFAULT_FILES_PAGE_SIZE } from '../constants.js';
 import { DEFAULT_SUBSTRATE_BASE_URL } from '../utils/api-config.js';
+import type { RawAllFilesResponse, RawFileItem } from '../types/api-responses.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -116,7 +115,7 @@ export async function getSharedFiles(
 
   const url = `${DEFAULT_SUBSTRATE_BASE_URL}/AllFiles/api/users('${encodeURIComponent(userPrincipal)}')/AllShared?${params.toString()}`;
 
-  const response = await httpRequest<Record<string, unknown>>(
+  const response = await httpRequest<RawAllFilesResponse>(
     url,
     {
       method: 'GET',
@@ -129,15 +128,12 @@ export async function getSharedFiles(
   );
 
   if (!response.ok) {
-    if (response.error.code === ErrorCode.AUTH_EXPIRED) {
-      clearTokenCache();
-    }
-    return response;
+    return handleSubstrateError(response);
   }
 
   const data = response.value.data;
-  const rawItems = data.Items as Array<Record<string, unknown>> | undefined;
-  const skipToken = data.SkipToken as string | undefined;
+  const rawItems = data.Items;
+  const skipToken = data.SkipToken;
 
   if (!rawItems || rawItems.length === 0) {
     return ok({
@@ -150,34 +146,34 @@ export async function getSharedFiles(
 
   const files: SharedFile[] = [];
 
-  for (const item of rawItems) {
-    const itemType = item.ItemType as string;
+  for (const item of rawItems as RawFileItem[]) {
+    const itemType = item.ItemType;
 
     if (itemType === 'File') {
-      const fileData = item.FileData as Record<string, unknown> | undefined;
+      const fileData = item.FileData;
       // FileUrl is the SharePoint URL for uploaded files; WebUrl is often null for chat uploads
-      const fileUrl = (fileData?.FileUrl ?? fileData?.WebUrl) as string | undefined;
-      const previewUrl = fileData?.PreviewUrl as string | undefined;
+      const fileUrl = fileData?.FileUrl ?? fileData?.WebUrl;
+      const previewUrl = fileData?.PreviewUrl;
       files.push({
         itemType: 'File',
-        fileName: fileData?.FileName as string | undefined,
-        fileExtension: fileData?.FileExtension as string | undefined,
+        fileName: fileData?.FileName,
+        fileExtension: fileData?.FileExtension,
         webUrl: fileUrl || undefined,
-        fileSize: fileData?.FileSize as number | undefined,
-        sharedBy: item.SharedByDisplayName as string | undefined,
-        sharedByEmail: item.SharedBySmtp as string | undefined,
-        sharedTime: (item.SharedDateTime ?? item.SharedTime) as string | undefined,
+        fileSize: fileData?.SizeInBytes,
+        sharedBy: item.SharedByDisplayName,
+        sharedByEmail: item.SharedBySmtp,
+        sharedTime: item.SharedDateTime ?? item.SharedTime,
         previewUrl: previewUrl || undefined,
       });
     } else if (itemType === 'Link') {
-      const linkData = item.WeblinkData as Record<string, unknown> | undefined;
+      const linkData = item.WeblinkData;
       files.push({
         itemType: 'Link',
-        webUrl: linkData?.WebUrl as string | undefined,
-        title: linkData?.Title as string | undefined,
-        sharedBy: item.SharedByDisplayName as string | undefined,
-        sharedByEmail: item.SharedBySmtp as string | undefined,
-        sharedTime: (item.SharedDateTime ?? item.SharedTime) as string | undefined,
+        webUrl: linkData?.WebUrl,
+        title: linkData?.Title,
+        sharedBy: item.SharedByDisplayName,
+        sharedByEmail: item.SharedBySmtp,
+        sharedTime: item.SharedDateTime ?? item.SharedTime,
       });
     }
   }
