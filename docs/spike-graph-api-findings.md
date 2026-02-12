@@ -116,10 +116,124 @@ Response confirmed: message ID returned, `from.user` populated with display name
 - Reduce to Graph + chatsvc tokens only
 - Simplify auth-guards and token-extractor
 
+## All Tokens in the MSAL Cache
+
+The Teams Web Client (`Microsoft Teams Web Client`) has access to **10 distinct token audiences**. These were extracted by decoding the JWT `scp` claims from all access tokens in the session state.
+
+### 1. Microsoft Graph API (`https://graph.microsoft.com`)
+
+```
+AppCatalog.Read.All        Calendars.Read              Calendars.Read.Shared
+Calendars.ReadWrite        Calendars.ReadWrite.Shared   Channel.ReadBasic.All
+ChatMember.Read            ChatMessage.Send             Files.ReadWrite.All
+FileStorageContainer.Selected  Group.Read.All           InformationProtectionPolicy.Read
+Mail.Read                  Mail.ReadWrite               MailboxSettings.ReadWrite
+Notes.ReadWrite.All        Organization.Read.All        People.Read
+Place.Read                 Place.Read.All               Place.Read.Shared
+Sites.ReadWrite.All        Tasks.ReadWrite              Team.ReadBasic.All
+TeamsAppInstallation.ReadForTeam  TeamsTab.Create        User.ReadBasic.All
+```
+
+### 2. Substrate (`https://substrate.office.com`)
+
+```
+ActivityFeed-Internal.Post          ActivityFeed-Internal.Read
+ActivityFeed-Internal.ReadWrite     Files.Read.All
+Files.ReadWrite                     Files.ReadWrite.Shared
+Grammars-Internal.ReadWrite         LicenseAssignment.Read.All.Sdp
+Notes-Internal.ReadWrite            OfficeFeed-Internal.ReadWrite
+PeoplePredictions-Internal.Read     PlaceDevice.Read.All
+Signals.Read                        Signals.ReadWrite
+Signals-Internal.Read.Shared        Signals-Internal.ReadWrite
+Sites.Read.All.Sdp                  SubstrateSearch-Internal.ReadWrite
+Tasks.ReadWrite                     User.ReadWrite
+```
+
+### 3. Outlook/Exchange (`https://outlook.office.com/`)
+
+```
+Calendars.ReadWrite                 Collab-Internal.ReadWrite
+Contacts.ReadWrite                  EWS.AccessAsUser.All
+Files.Read.All                      Files.ReadWrite.Shared
+Group.Read.All.Sdp                  Group.ReadWrite.All
+Group.ReadWrite.All.Sdp             LicenseAssignment.Read.All.Sdp
+Mail.ReadWrite                      Mail.Send
+OWA.AccessAsUser.All                Place.Read.All
+Place.ReadWrite.All                 Policy.Read.All.Sdp
+Signals.ReadWrite                   TailoredExperiences-Internal.ReadWrite
+User.Invite.All.Sdp                 User.Read
+User.Read.Sdp                       User.ReadBasic.All
+User.ReadWrite
+```
+
+### 4. SharePoint (`https://{tenant}.sharepoint.com`)
+
+```
+Container.Selected    MyFiles.Write    Sites.FullControl.All
+Sites.Manage.All      User.ReadWrite.All
+```
+
+### 5. Substrate Search (`https://outlook.office.com/search`)
+
+```
+SubstrateSearch-Internal.ReadWrite
+```
+
+### 6. Teams Presence (`https://presence.teams.microsoft.com/`)
+
+```
+user_impersonation
+```
+
+### 7. IC3 Teams (`https://ic3.teams.office.com`)
+
+```
+Teams.AccessAsUser.All
+```
+
+### 8. Loki/Delve (`394866fc-eedb-4f01-8536-3ff84b16be2a`)
+
+```
+LLM.Read    User.Read.All
+```
+
+### 9. Unknown Service (`6bc3b958-689b-49f5-9006-36d165f30e00`)
+
+```
+User.Read    user_impersonation
+```
+
+### 10. chatsvcagg (cookie-based)
+
+The `skypetoken_asm` cookie — not a standard MSAL access token but used for messaging APIs.
+
+## New Tool Opportunities
+
+Beyond our current tool set, these tokens unlock entirely new capabilities:
+
+| Capability | API | Permission | Notes |
+|---|---|---|---|
+| **Read/send email** | Graph or Outlook | `Mail.Read`, `Mail.ReadWrite`, `Mail.Send` | Full Outlook email access |
+| **Manage calendar (write)** | Graph | `Calendars.ReadWrite` | Create/update/delete events |
+| **Read/write OneNote** | Graph | `Notes.ReadWrite.All` | Notebooks, sections, pages |
+| **Manage Planner/To Do tasks** | Graph | `Tasks.ReadWrite` | Create/update/complete tasks |
+| **Read/write SharePoint sites** | Graph or SharePoint | `Sites.ReadWrite.All` | Lists, documents, pages |
+| **Read/write OneDrive files** | Graph | `Files.ReadWrite.All` | Upload, download, share |
+| **Get user presence/availability** | Presence API | `user_impersonation` | Online/busy/away/offline status |
+| **Read/write contacts** | Outlook | `Contacts.ReadWrite` | Outlook contacts |
+| **Manage mailbox settings** | Graph | `MailboxSettings.ReadWrite` | Auto-replies, timezone, etc. |
+| **Read room/building info** | Graph | `Place.Read.All` | Meeting room availability |
+| **Read org structure** | Graph | `Organization.Read.All` | Org directory info |
+| **Full Exchange Web Services** | Outlook | `EWS.AccessAsUser.All` | Legacy but powerful |
+| **Full SharePoint control** | SharePoint | `Sites.FullControl.All` | Admin-level SharePoint access |
+
 ## Open Questions
 
-- What exact delegated permissions does the Teams SPA client have on Graph? (Decode the JWT at jwt.ms to check `scp` claim)
 - Does Graph Search for `chatMessage` perform as well as Substrate v2/query?
 - Does the Graph Calendar API return the same meeting detail (threadId, joinUrl) as the current mt/part API?
 - Are there rate limits on Graph API that differ from the internal Teams APIs?
 - Does Graph API work for government clouds (GCC, GCC-High, DoD) with the same endpoint?
+- Can we refresh tokens for all 10 audiences, or only the ones we explicitly request scopes for?
+- The Outlook token has `Mail.Send` — could we build an email tool alongside Teams?
+- The Presence API token — can we read other users' presence status for "is X available?" queries?
+- Are these scopes consistent across tenants, or do they depend on admin consent policies?
