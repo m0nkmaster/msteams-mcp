@@ -352,7 +352,7 @@ async function waitForTeamsReady(
 
     // Wait for network to settle — MSAL token refresh requests should complete
     try {
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
+      await page.waitForLoadState('networkidle', { timeout: 5000 });
       log('Network settled.');
     } catch {
       // Network may not become fully idle (websockets, polling), that's OK
@@ -393,7 +393,7 @@ async function triggerTokenAcquisition(
     let substrateDetected = false;
     const substratePromise = page.waitForResponse(
       resp => resp.url().includes('substrate.office.com') && resp.status() === 200,
-      { timeout: 30000 }
+      { timeout: 10000 }
     ).then(() => {
       substrateDetected = true;
     }).catch(() => {
@@ -408,7 +408,7 @@ async function triggerTokenAcquisition(
     try {
       await page.goto('https://teams.microsoft.com/v2/#/search?query=test', {
         waitUntil: 'domcontentloaded',
-        timeout: 30000,
+        timeout: 10000,
       });
       searchTriggered = true;
       log('Search results page loaded.');
@@ -471,12 +471,12 @@ async function triggerTokenAcquisition(
     }
 
     // Give MSAL a moment to persist tokens to localStorage
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(500);
 
     // Close search and reset
     try {
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(200);
     } catch {
       // Page may have navigated, ignore
     }
@@ -645,28 +645,13 @@ export async function waitForManualLogin(
     if (status.isAuthenticated) {
       log('Authentication successful!');
 
-      // Show progress through login steps (only if overlay enabled)
       if (showOverlay) {
         await showLoginProgress(page, 'signed-in', { pause: true });
-        await showLoginProgress(page, 'acquiring');
-      }
-
-      // Trigger a search to cause MSAL to acquire the Substrate token
-      const acquired = await triggerTokenAcquisition(page, log);
-
-      if (!acquired) {
-        log('Warning: Substrate API call was not detected after login.');
-        if (showOverlay) {
-          await showLoginProgress(page, 'error', { pause: true });
-        }
-        throw new Error('Login completed but token acquisition failed. Please try again.');
-      }
-
-      if (showOverlay) {
         await showLoginProgress(page, 'saving');
       }
 
-      // Save the session state with fresh tokens
+      // The persistent browser profile already has MSAL tokens in localStorage
+      // from the login flow. Just save the session state directly.
       await saveSessionState(context);
       log('Session state saved.');
 
@@ -714,33 +699,14 @@ export async function ensureAuthenticated(
   const status = await navigateToTeams(page);
 
   if (status.isAuthenticated) {
-    log('Already authenticated.');
+    log('Already authenticated — saving session state.');
 
-    if (showOverlay) {
-      await showLoginProgress(page, 'refreshing');
-    }
-
-    // Trigger a search to cause MSAL to acquire/refresh the Substrate token
-    const acquired = await triggerTokenAcquisition(page, log);
-
-    if (!acquired) {
-      log('Token refresh failed: Substrate API call was not detected.');
-      if (showOverlay) {
-        await showLoginProgress(page, 'error', { pause: true });
-      }
-      throw new Error('Token refresh failed. Please use teams_login with forceNew to re-authenticate.');
-    }
-
-    if (showOverlay) {
-      await showLoginProgress(page, 'saving');
-    }
-
-    // Save the session state with fresh tokens
+    // The persistent browser profile already has valid MSAL tokens in localStorage.
+    // Just save the session state directly — no need to trigger a search and wait
+    // for Substrate API calls. Token acquisition is only needed after a fresh
+    // manual login where MSAL hasn't yet acquired the Substrate token.
     await saveSessionState(context);
-
-    if (showOverlay) {
-      await showLoginProgress(page, 'complete', { pause: true });
-    }
+    log('Session state saved.');
 
     return;
   }
@@ -756,9 +722,6 @@ export async function ensureAuthenticated(
   if (status.isOnLoginPage) {
     log('Login required. Please complete authentication in the browser window.');
     await waitForManualLogin(page, context, undefined, onProgress, showOverlay);
-
-    // Navigate back to Teams after login (in case we're on a callback URL)
-    await navigateToTeams(page);
   } else {
     // Unexpected state - might need manual intervention
     log('Unexpected page state. Waiting for authentication...');
