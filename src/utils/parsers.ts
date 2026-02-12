@@ -774,56 +774,30 @@ export function extractObjectId(identifier: string): string | null {
   // Pattern for a GUID (with or without hyphens)
   const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+  /** Resolves an ID part to a lowercase GUID, trying direct match then base64 decode. */
+  const resolveIdPart = (idPart: string): string | null => {
+    if (guidPattern.test(idPart)) return idPart.toLowerCase();
+    if (isLikelyBase64Guid(idPart)) return decodeBase64Guid(idPart);
+    return null;
+  };
+
   // Handle MRI format: "8:orgid:GUID" or "8:orgid:base64"
   if (identifier.startsWith('8:orgid:')) {
-    const idPart = identifier.substring(8);
-    if (guidPattern.test(idPart)) {
-      return idPart.toLowerCase();
-    }
-    // Try base64 decoding
-    if (isLikelyBase64Guid(idPart)) {
-      return decodeBase64Guid(idPart);
-    }
-    return null;
+    return resolveIdPart(identifier.substring(8));
   }
 
   // Handle Skype ID format: "orgid:GUID" (from skype token's skypeid field)
   if (identifier.startsWith('orgid:')) {
-    const idPart = identifier.substring(6);
-    if (guidPattern.test(idPart)) {
-      return idPart.toLowerCase();
-    }
-    // Try base64 decoding
-    if (isLikelyBase64Guid(idPart)) {
-      return decodeBase64Guid(idPart);
-    }
-    return null;
+    return resolveIdPart(identifier.substring(6));
   }
 
   // Handle ID with tenant: "GUID@tenantId"
   if (identifier.includes('@')) {
-    const idPart = identifier.split('@')[0];
-    if (guidPattern.test(idPart)) {
-      return idPart.toLowerCase();
-    }
-    // Try base64 decoding
-    if (isLikelyBase64Guid(idPart)) {
-      return decodeBase64Guid(idPart);
-    }
-    return null;
+    return resolveIdPart(identifier.split('@')[0]);
   }
 
-  // Handle raw GUID
-  if (guidPattern.test(identifier)) {
-    return identifier.toLowerCase();
-  }
-
-  // Handle base64-encoded GUID
-  if (isLikelyBase64Guid(identifier)) {
-    return decodeBase64Guid(identifier);
-  }
-
-  return null;
+  // Handle raw GUID or base64-encoded GUID
+  return resolveIdPart(identifier);
 }
 
 /**

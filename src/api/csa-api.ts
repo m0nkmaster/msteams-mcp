@@ -9,7 +9,7 @@ import { httpRequest } from '../utils/http.js';
 import { CSA_API, getCsaHeaders } from '../utils/api-config.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
-import { requireCsaAuth, getRegion, getTeamsBaseUrl } from '../utils/auth-guards.js';
+import { requireCsaAuth, getApiConfig } from '../utils/auth-guards.js';
 import {
   getConversationProperties,
   extractParticipantNames,
@@ -18,14 +18,6 @@ import {
   parseTeamsList,
   type TeamWithChannels,
 } from '../utils/parsers.js';
-
-/** Gets region and base URL together for API calls. */
-function getApiConfig() {
-  return {
-    region: getRegion(),
-    baseUrl: getTeamsBaseUrl(),
-  };
-}
 
 /** A favourite/pinned conversation item. */
 export interface FavoriteItem {
