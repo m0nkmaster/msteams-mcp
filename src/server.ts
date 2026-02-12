@@ -199,11 +199,27 @@ export class TeamsServer implements ITeamsServer {
     return TeamsServer.AUTH_TOOL_NAMES.has(name);
   }
 
+  /** Deduplicates concurrent auto-login attempts. */
+  private autoLoginInProgress: Promise<boolean> | null = null;
+
   /**
    * Attempts automatic re-authentication via headless browser.
    * Returns true if login succeeded and tokens are now available.
+   * Concurrent calls are deduplicated — only one login runs at a time.
    */
   private async attemptAutoLogin(): Promise<boolean> {
+    if (this.autoLoginInProgress) {
+      return this.autoLoginInProgress;
+    }
+    this.autoLoginInProgress = this._attemptAutoLoginImpl();
+    try {
+      return await this.autoLoginInProgress;
+    } finally {
+      this.autoLoginInProgress = null;
+    }
+  }
+
+  private async _attemptAutoLoginImpl(): Promise<boolean> {
     try {
       // First try the lightweight token refresh (headless browser, persistent profile)
       const refreshResult = await refreshTokensViaBrowser();
@@ -231,8 +247,9 @@ export class TeamsServer implements ITeamsServer {
         this.resetBrowserState();
         this.markInitialised();
         return true;
-      } catch {
+      } catch (error) {
         // Headless login also failed — user interaction required
+        console.error(`[auto-login:headless] Headless login failed: ${error instanceof Error ? error.message : String(error)}`);
         try {
           await closeBrowser(headlessManager, false);
         } catch {
@@ -396,7 +413,8 @@ export class TeamsServer implements ITeamsServer {
             if (retryResult.success) {
               return this.formatSuccess(retryResult.data);
             }
-            // Retry also failed — fall through to return the new error
+            // Retry also failed after successful re-auth — log for diagnostics
+            console.error(`[auto-login] Retry failed after successful re-authentication: ${retryResult.error.message}`);
             return this.formatError(retryResult.error);
           }
 
