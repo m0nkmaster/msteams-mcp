@@ -15,6 +15,7 @@ import {
   extractSkypeSpacesToken,
   extractRegionConfig,
   getUserProfile,
+  clearTokenCache,
   type MessageAuthInfo,
   type RegionConfig,
 } from '../auth/token-extractor.js';
@@ -145,6 +146,34 @@ export function requireCalendarAuth(): Result<CalendarAuthInfo, McpError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Substrate Error Handling
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Handles a failed Substrate/files API response by clearing the token cache
+ * when the error indicates an expired token.
+ * 
+ * Eliminates the repeated pattern:
+ * ```
+ * if (!response.ok) {
+ *   if (response.error.code === ErrorCode.AUTH_EXPIRED) {
+ *     clearTokenCache();
+ *   }
+ *   return response;
+ * }
+ * ```
+ * 
+ * @param response - A failed Result (response.ok === false)
+ * @returns The same failed Result, unchanged
+ */
+export function handleSubstrateError<T>(response: Result<T, McpError>): Result<T, McpError> {
+  if (!response.ok && response.error.code === ErrorCode.AUTH_EXPIRED) {
+    clearTokenCache();
+  }
+  return response;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Region Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -199,6 +228,33 @@ export function getRegionConfig(): RegionConfig | null {
 export interface ApiConfig {
   region: string;
   baseUrl: string;
+}
+
+/** Combined message auth + API config for chatsvc operations. */
+export interface MessageAuthWithConfig {
+  auth: MessageAuthInfo;
+  region: string;
+  baseUrl: string;
+}
+
+/**
+ * Requires valid message auth AND returns API config in one call.
+ * 
+ * Eliminates the repeated 4-line pattern:
+ * ```
+ * const authResult = requireMessageAuth();
+ * if (!authResult.ok) return authResult;
+ * const auth = authResult.value;
+ * const { region, baseUrl } = getApiConfig();
+ * ```
+ */
+export function requireMessageAuthWithConfig(): Result<MessageAuthWithConfig, McpError> {
+  const authResult = requireMessageAuth();
+  if (!authResult.ok) {
+    return authResult;
+  }
+  const { region, baseUrl } = getApiConfig();
+  return ok({ auth: authResult.value, region, baseUrl });
 }
 
 /**

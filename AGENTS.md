@@ -38,7 +38,13 @@ src/
 ├── api/                  # API client modules (one per API surface)
 │   ├── index.ts          # Module exports
 │   ├── substrate-api.ts  # Search and people APIs (Substrate v2)
-│   ├── chatsvc-api.ts    # Messaging, threads, save/unsave (chatsvc)
+│   ├── chatsvc-api.ts    # Barrel file re-exporting all chatsvc sub-modules
+│   ├── chatsvc-common.ts # Shared utilities (date formatting)
+│   ├── chatsvc-messaging.ts # Send, edit, delete, threads, 1:1/group chat
+│   ├── chatsvc-activity.ts  # Activity feed (mentions, reactions, replies)
+│   ├── chatsvc-reactions.ts # Add/remove emoji reactions
+│   ├── chatsvc-virtual.ts   # Saved messages, followed threads, save/unsave
+│   ├── chatsvc-readstatus.ts # Consumption horizons, mark as read, unread
 │   ├── csa-api.ts        # Favorites API (CSA)
 │   ├── calendar-api.ts   # Calendar/meetings API
 │   ├── transcript-api.ts # Meeting transcripts (Substrate WorkingSetFiles)
@@ -55,7 +61,8 @@ src/
 ├── types/
 │   ├── teams.ts          # Teams data interfaces
 │   ├── errors.ts         # Error taxonomy with machine-readable codes
-│   └── result.ts         # Result<T, E> type for explicit error handling
+│   ├── result.ts         # Result<T, E> type for explicit error handling
+│   └── api-responses.ts  # Typed interfaces for raw API response shapes
 ├── __fixtures__/
 │   └── api-responses.ts  # Mock API responses for testing
 ```

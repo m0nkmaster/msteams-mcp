@@ -6,10 +6,8 @@
 
 import { httpRequest } from '../utils/http.js';
 import { SUBSTRATE_API, getBearerHeaders } from '../utils/api-config.js';
-import { ErrorCode } from '../types/errors.js';
 import { type Result, ok } from '../types/result.js';
-import { clearTokenCache } from '../auth/token-extractor.js';
-import { requireSubstrateTokenAsync, getTenantId, getTeamsBaseUrl } from '../utils/auth-guards.js';
+import { requireSubstrateTokenAsync, getTenantId, getTeamsBaseUrl, handleSubstrateError } from '../utils/auth-guards.js';
 import {
   parseSearchResults,
   parsePeopleResults,
@@ -99,11 +97,7 @@ export async function searchMessages(
   );
 
   if (!response.ok) {
-    // Clear cache on auth errors
-    if (response.error.code === ErrorCode.AUTH_EXPIRED) {
-      clearTokenCache();
-    }
-    return response;
+    return handleSubstrateError(response);
   }
 
   const data = response.value.data;
@@ -183,10 +177,7 @@ export async function searchPeople(
   );
 
   if (!response.ok) {
-    if (response.error.code === ErrorCode.AUTH_EXPIRED) {
-      clearTokenCache();
-    }
-    return response;
+    return handleSubstrateError(response);
   }
 
   const results = parsePeopleResults(response.value.data.Groups as unknown[] | undefined);
@@ -246,10 +237,7 @@ export async function getFrequentContacts(
   );
 
   if (!response.ok) {
-    if (response.error.code === ErrorCode.AUTH_EXPIRED) {
-      clearTokenCache();
-    }
-    return response;
+    return handleSubstrateError(response);
   }
 
   const contacts = parsePeopleResults(response.value.data.Groups as unknown[] | undefined);
@@ -389,10 +377,7 @@ async function searchChannelsOrgWide(
   );
 
   if (!response.ok) {
-    if (response.error.code === ErrorCode.AUTH_EXPIRED) {
-      clearTokenCache();
-    }
-    return response;
+    return handleSubstrateError(response);
   }
 
   const data = response.value.data as Record<string, unknown> | undefined;
