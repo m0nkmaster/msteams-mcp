@@ -55,8 +55,7 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
   if (!beforeToken) {
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
-      'No token found in session. Please run teams_login to authenticate.',
-      { suggestions: ['Call teams_login to authenticate'] }
+      'ACTION REQUIRED: No token found in session. You MUST call teams_login to authenticate.',
     ));
   }
 
@@ -95,8 +94,7 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
     if (!afterToken) {
       return err(createError(
         ErrorCode.AUTH_EXPIRED,
-        'Token refresh failed - no token found after refresh attempt.',
-        { suggestions: ['Call teams_login to re-authenticate'] }
+        'ACTION REQUIRED: Token refresh failed. You MUST call teams_login to re-authenticate.',
       ));
     }
 
@@ -112,8 +110,7 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
     if (wasCloseToExpiry && newExpiry.getTime() <= previousExpiry.getTime()) {
       return err(createError(
         ErrorCode.AUTH_EXPIRED,
-        'Token was not refreshed despite being close to expiry. Session may need re-authentication.',
-        { suggestions: ['Call teams_login to re-authenticate'] }
+        'ACTION REQUIRED: Token was not refreshed despite being close to expiry. You MUST call teams_login to re-authenticate.',
       ));
     }
 
@@ -137,8 +134,7 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
     const message = error instanceof Error ? error.message : 'Unknown error';
     return err(createError(
       ErrorCode.UNKNOWN,
-      `Token refresh via browser failed: ${message}`,
-      { suggestions: ['Call teams_login to re-authenticate'] }
+      `Token refresh via browser failed: ${message}. Call teams_login to re-authenticate.`,
     ));
   } finally {
     refreshInProgress = false;

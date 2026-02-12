@@ -27,8 +27,8 @@ import { refreshTokensViaBrowser } from '../auth/token-refresh.js';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AUTH_ERROR_MESSAGES = {
-  messageAuth: 'No valid authentication. Browser login required.',
-  csaToken: 'No valid authentication for favourites. Browser login required.',
+  messageAuth: 'ACTION REQUIRED: No valid Teams authentication. You MUST call teams_login to authenticate before retrying.',
+  csaToken: 'ACTION REQUIRED: No valid authentication for favourites. You MUST call teams_login to authenticate before retrying.',
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,8 +85,7 @@ export async function requireSubstrateTokenAsync(): Promise<Result<string, McpEr
     // Token expired and refresh not available/failed
     return err(createError(
       ErrorCode.AUTH_EXPIRED,
-      'Token expired and automatic refresh failed. Please run teams_login to re-authenticate.',
-      { suggestions: ['Call teams_login to re-authenticate'] }
+      'ACTION REQUIRED: Teams token expired and automatic refresh failed. You MUST call teams_login to re-authenticate before retrying.',
     ));
   }
 

@@ -72,9 +72,17 @@ export function createError(
 function getDefaultSuggestions(code: ErrorCode): string[] {
   switch (code) {
     case ErrorCode.AUTH_REQUIRED:
-      return ['Call teams_login to authenticate'];
+      return [
+        'IMMEDIATELY call teams_login to authenticate',
+        'Do NOT skip this step or tell the user Teams is unavailable',
+        'After login succeeds, retry the original request',
+      ];
     case ErrorCode.AUTH_EXPIRED:
-      return ['Call teams_login to refresh authentication'];
+      return [
+        'IMMEDIATELY call teams_login to refresh authentication',
+        'Do NOT skip this step or tell the user Teams is unavailable',
+        'After login succeeds, retry the original request',
+      ];
     case ErrorCode.RATE_LIMITED:
       return ['Wait before retrying', 'Reduce request frequency'];
     case ErrorCode.NOT_FOUND:

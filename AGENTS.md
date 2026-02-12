@@ -101,6 +101,8 @@ src/
 
 11. **Markdown to Teams HTML**: Outgoing messages support markdown formatting via `markdownToTeamsHtml()` in `utils/parsers.ts`. This converts markdown (`**bold**`, `*italic*`, `` `code` ``, ` ```code blocks``` `, `~~strikethrough~~`, lists, newlines) to the HTML that Teams expects for `RichText/Html` messages. The converter is used by `sendMessage()` and `editMessage()` in `chatsvc-api.ts`. When messages contain @mentions or links, `parseContentWithMentionsAndLinks()` applies the same conversion to text segments between inline elements.
 
+12. **Auto-Login on Auth Failure**: The `CallToolRequestSchema` handler in `server.ts` automatically retries tool calls that fail with `AUTH_REQUIRED` or `AUTH_EXPIRED` errors. Before returning the error to the LLM, it attempts headless re-authentication (token refresh → full headless login). If auto-login succeeds, the original tool call is retried transparently. If it fails, a strongly-worded error directs the LLM to call `teams_login` explicitly. Auth tools (`teams_login`, `teams_status`) are excluded from auto-retry to avoid loops.
+
 ## How It Works
 
 ### Authentication Flow

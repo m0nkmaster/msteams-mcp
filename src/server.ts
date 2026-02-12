@@ -29,7 +29,9 @@ import {
   extractMessageAuth,
   extractCsaToken,
   getUserProfile,
+  clearTokenCache,
 } from './auth/token-extractor.js';
+import { refreshTokensViaBrowser } from './auth/token-refresh.js';
 
 // API modules
 import { getFavorites } from './api/csa-api.js';
@@ -177,6 +179,75 @@ export class TeamsServer implements ITeamsServer {
   }
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Auto-Login on Auth Failure
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /** Auth tool names that should not trigger auto-login retry. */
+  private static readonly AUTH_TOOL_NAMES = new Set(['teams_login', 'teams_status']);
+
+  /**
+   * Checks if an error is an authentication error that could be resolved by logging in.
+   */
+  private isAuthError(error: McpError): boolean {
+    return error.code === ErrorCode.AUTH_REQUIRED || error.code === ErrorCode.AUTH_EXPIRED;
+  }
+
+  /**
+   * Checks if a tool is an auth-related tool (login/status) that shouldn't trigger auto-login.
+   */
+  private isAuthTool(name: string): boolean {
+    return TeamsServer.AUTH_TOOL_NAMES.has(name);
+  }
+
+  /**
+   * Attempts automatic re-authentication via headless browser.
+   * Returns true if login succeeded and tokens are now available.
+   */
+  private async attemptAutoLogin(): Promise<boolean> {
+    try {
+      // First try the lightweight token refresh (headless browser, persistent profile)
+      const refreshResult = await refreshTokensViaBrowser();
+      if (refreshResult.ok) {
+        this.markInitialised();
+        return true;
+      }
+
+      // Token refresh failed — try a full headless login
+      // (covers cases where session cookies are still valid but token cache is stale)
+      console.error('[auto-login] Token refresh failed, trying full headless login...');
+      clearTokenCache();
+
+      const headlessManager = await createBrowserContext({ headless: true });
+      try {
+        await ensureAuthenticated(
+          headlessManager.page,
+          headlessManager.context,
+          (msg) => console.error(`[auto-login:headless] ${msg}`),
+          false, // No overlay in headless
+          true   // Headless mode — throw if user interaction required
+        );
+
+        await closeBrowser(headlessManager, true);
+        this.resetBrowserState();
+        this.markInitialised();
+        return true;
+      } catch {
+        // Headless login also failed — user interaction required
+        try {
+          await closeBrowser(headlessManager, false);
+        } catch {
+          // Ignore cleanup errors
+        }
+        this.resetBrowserState();
+        return false;
+      }
+    } catch (error) {
+      console.error(`[auto-login] Auto-login failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Server Creation
   // ───────────────────────────────────────────────────────────────────────────
 
@@ -302,7 +373,7 @@ export class TeamsServer implements ITeamsServer {
       return { tools: getToolDefinitions() };
     });
 
-    // Handle tool calls
+    // Handle tool calls (with auto-login retry for auth errors)
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
 
@@ -312,9 +383,37 @@ export class TeamsServer implements ITeamsServer {
 
         if (result.success) {
           return this.formatSuccess(result.data);
-        } else {
-          return this.formatError(result.error);
         }
+
+        // Auto-login retry for auth errors (skip for login/status tools themselves)
+        if (this.isAuthError(result.error) && !this.isAuthTool(name)) {
+          console.error(`[auto-login] Tool '${name}' returned ${result.error.code}, attempting automatic re-authentication...`);
+          const loginSuccess = await this.attemptAutoLogin();
+
+          if (loginSuccess) {
+            console.error('[auto-login] Re-authentication succeeded, retrying tool...');
+            const retryResult = await invokeTool(name, args, ctx);
+            if (retryResult.success) {
+              return this.formatSuccess(retryResult.data);
+            }
+            // Retry also failed — fall through to return the new error
+            return this.formatError(retryResult.error);
+          }
+
+          // Auto-login failed — return a strongly-worded error
+          console.error('[auto-login] Automatic re-authentication failed.');
+          return this.formatError(createError(
+            ErrorCode.AUTH_REQUIRED,
+            'ACTION REQUIRED: Teams session has expired and automatic re-authentication failed. You MUST call the teams_login tool now to re-authenticate before using any other Teams tools. Do NOT skip this step or tell the user Teams is unavailable.',
+            { suggestions: [
+              'IMMEDIATELY call teams_login to re-authenticate',
+              'After login succeeds, retry the original request',
+              'Do NOT tell the user that Teams is unavailable — authentication just needs refreshing',
+            ] }
+          ));
+        }
+
+        return this.formatError(result.error);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
 
