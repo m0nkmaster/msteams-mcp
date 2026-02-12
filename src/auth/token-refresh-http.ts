@@ -213,10 +213,10 @@ async function refreshAccessToken(
     scope: scopes,
   });
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
 
+  try {
     // The Origin header is required because the Teams client ID is registered as
     // a Single-Page Application (SPA). Azure AD validates that refresh token grants
     // from SPA clients include a cross-origin Origin header matching a registered
@@ -230,8 +230,6 @@ async function refreshAccessToken(
       body: body.toString(),
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
@@ -276,6 +274,8 @@ async function refreshAccessToken(
       `Token refresh network error: ${error instanceof Error ? error.message : String(error)}`,
       { retryable: true }
     ));
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -292,10 +292,10 @@ async function refreshAccessToken(
 async function exchangeSkypeToken(
   skypeSpacesToken: string,
 ): Promise<Result<{ skypeToken: string; expiresIn: number }>> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
 
+  try {
     const response = await fetch(AUTHSVC_ENDPOINT, {
       method: 'POST',
       headers: {
@@ -305,8 +305,6 @@ async function exchangeSkypeToken(
       body: '{}',
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
@@ -345,6 +343,8 @@ async function exchangeSkypeToken(
       `Skype token exchange error: ${error instanceof Error ? error.message : String(error)}`,
       { retryable: true }
     ));
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -420,7 +420,7 @@ function updateAccessTokenInCache(
     };
 
     // Build key in MSAL format
-    const scopeKey = tokenResponse.scope.replace(/ /g, ' ').toLowerCase();
+    const scopeKey = tokenResponse.scope.toLowerCase();
     const key = `${cacheInfo.homeAccountId}-${cacheInfo.environment}-accesstoken-${cacheInfo.clientId}-${cacheInfo.tenantId}-${scopeKey}`;
     updateLocalStorageEntry(localStorage, key, JSON.stringify(newEntry));
     return true;
@@ -596,6 +596,7 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
   let refreshTokenRotated = false;
   let skypeSpacesToken: string | null = null;
   let skypeSpacesExpiresIn: number | null = null;
+  const scopeErrors: string[] = [];
 
   // Use the current refresh token; it may be rotated by Azure AD
   let currentRefreshToken = cacheInfo.refreshToken;
@@ -620,6 +621,7 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
       }
       // For other errors (network, timeout), log and continue with remaining scopes
       console.error(`[token-refresh-http] Failed to refresh ${scope.resource}: ${result.error.message}`);
+      scopeErrors.push(`${scope.resource}: ${result.error.message}`);
       continue;
     }
 
@@ -650,7 +652,7 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
   if (tokensRefreshed === 0) {
     return err(createError(
       ErrorCode.UNKNOWN,
-      'HTTP token refresh failed: no tokens were successfully refreshed.',
+      `HTTP token refresh failed: ${scopeErrors.length} of ${REFRESH_SCOPES.length} scopes failed. ${scopeErrors.join('; ')}`,
       { retryable: true }
     ));
   }
