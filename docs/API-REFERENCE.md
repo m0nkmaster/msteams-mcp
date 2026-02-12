@@ -42,15 +42,117 @@ Referer: https://teams.microsoft.com/
 Content-Type: application/json
 ```
 
-### Token Storage
+### Token Storage (MSAL Cache)
 
-Tokens are stored in browser localStorage under MSAL keys. Look for keys containing `SubstrateSearch` scope. Tokens typically expire after ~1 hour. MSAL only refreshes tokens when an API call requires them, not on page load.
+Tokens are stored in browser localStorage under MSAL cache keys. Tokens typically expire after ~1 hour.
+
+**MSAL Cache Key Formats:**
+
+| Entry Type | Key Format | Example |
+|------------|-----------|---------|
+| **Refresh Token** | `{homeAccountId}-{environment}-refreshtoken-{clientId}----` | `ab76f827-...56b731a8-...-login.windows.net-refreshtoken-5e3ce6c0-...----` |
+| **Access Token** | `{homeAccountId}-{environment}-accesstoken-{clientId}-{tenantId}-{scopes}` | `ab76f827-...-login.windows.net-accesstoken-5e3ce6c0-...-56b731a8-...-https://substrate.office.com/.default` |
+| **Account** | `{homeAccountId}-{environment}-{tenantId}` | `ab76f827-...-login.windows.net-56b731a8-...` |
+
+**Key Values:**
+- **Client ID**: `5e3ce6c0-2b1f-4285-8d4b-75ee78787346` (Microsoft Teams Web Client, registered as a SPA)
+- **Environment**: `login.windows.net`
+- **homeAccountId**: `{userObjectId}.{tenantId}`
+
+**Access Token Entry Structure:**
+```json
+{
+  "credentialType": "AccessToken",
+  "homeAccountId": "{userOid}.{tenantId}",
+  "environment": "login.windows.net",
+  "clientId": "5e3ce6c0-2b1f-4285-8d4b-75ee78787346",
+  "realm": "{tenantId}",
+  "target": "https://substrate.office.com/SubstrateSearch-Internal.ReadWrite https://substrate.office.com/.default ...",
+  "tokenType": "Bearer",
+  "secret": "eyJ0eXAi...",
+  "expiresOn": "1770938426",
+  "extendedExpiresOn": "1770942075",
+  "cachedAt": "1770934778"
+}
+```
+
+**Refresh Token Entry Structure:**
+```json
+{
+  "credentialType": "RefreshToken",
+  "homeAccountId": "{userOid}.{tenantId}",
+  "environment": "login.windows.net",
+  "clientId": "5e3ce6c0-2b1f-4285-8d4b-75ee78787346",
+  "secret": "{opaque_refresh_token}",
+  "expiresOn": "1770943425"
+}
+```
+
+The refresh token is opaque (not a JWT), ~1800 chars, and long-lived (days/weeks).
+
+### Token Refresh (Browserless)
+
+Tokens can be refreshed without a browser by POSTing directly to Azure AD's OAuth2 token endpoint:
+
+```
+POST https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token
+Content-Type: application/x-www-form-urlencoded
+Origin: https://teams.microsoft.com
+
+grant_type=refresh_token
+&client_id=5e3ce6c0-2b1f-4285-8d4b-75ee78787346
+&refresh_token={refresh_token}
+&scope=https://substrate.office.com/.default offline_access
+```
+
+**Critical:** The `Origin: https://teams.microsoft.com` header is **required**. The Teams client ID is registered as a Single-Page Application (SPA), and Azure AD validates that refresh token grants from SPA clients include a cross-origin `Origin` header. Without it, Azure AD returns error `AADSTS9002327`.
+
+**Scopes to refresh:**
+
+| Scope | Used For |
+|-------|----------|
+| `https://substrate.office.com/.default offline_access` | Search, People, Transcripts, Files |
+| `https://api.spaces.skype.com/.default offline_access` | Calendar, Meetings + skypetoken_asm derivation |
+| `https://chatsvcagg.teams.microsoft.com/.default offline_access` | Favorites, Teams list (CSA) |
+
+Azure AD may rotate the refresh token on each use — always store the new `refresh_token` from the response.
+
+### Skype Token Exchange
+
+The `skypetoken_asm` cookie (used for messaging/chatsvc APIs) is obtained by exchanging a Skype Spaces access token:
+
+```
+POST https://authsvc.teams.microsoft.com/v1.0/authz
+Authorization: Bearer {api.spaces.skype.com_access_token}
+Content-Type: application/json
+
+{}
+```
+
+**Response:**
+```json
+{
+  "tokens": {
+    "skypeToken": "eyJ0eXAi...",
+    "expiresIn": 86400
+  },
+  "regionGtms": {
+    "middleTier": "https://teams.microsoft.com/api/mt/part/amer-02",
+    "chatServiceAfd": "https://teams.microsoft.com/api/chatsvc/amer",
+    ...
+  }
+}
+```
+
+The `skypeToken` is set as the `skypetoken_asm` cookie on `.asyncgw.teams.microsoft.com` and `.asm.skype.com`. The `regionGtms` response also provides regional API URLs.
+
+The `authtoken` cookie (on `teams.microsoft.com`) is the Skype Spaces access token itself, URL-encoded with a `Bearer=` prefix.
 
 ### Session Persistence
 
 Session state includes:
-- Cookies (for messaging APIs)
-- localStorage (contains MSAL tokens)
+- Cookies (`skypetoken_asm`, `authtoken` — for messaging APIs)
+- localStorage (contains MSAL token cache)
 - sessionStorage
 
 ---
