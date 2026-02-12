@@ -6,11 +6,11 @@
  */
 
 import { httpRequest } from '../utils/http.js';
-import { CHATSVC_API, getMessagingHeaders, getSkypeAuthHeaders, getTeamsHeaders } from '../utils/api-config.js';
+import { CHATSVC_API, getMessagingHeaders, getSkypeAuthHeaders } from '../utils/api-config.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import { getUserDisplayName } from '../auth/token-extractor.js';
-import { requireMessageAuth, getRegion, getTeamsBaseUrl, getTenantId } from '../utils/auth-guards.js';
+import { requireMessageAuth, getApiConfig, getTeamsBaseUrl, getTenantId } from '../utils/auth-guards.js';
 import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, extractActivityTimestamp, parseVirtualConversationMessage, markdownToTeamsHtml, type ExtractedLink } from '../utils/parsers.js';
 import { DEFAULT_ACTIVITY_LIMIT, SAVED_MESSAGES_ID, FOLLOWED_THREADS_ID, VIRTUAL_CONVERSATION_PREFIX, SELF_CHAT_ID, MRI_ORGID_PREFIX } from '../constants.js';
 
@@ -40,14 +40,6 @@ function formatHumanReadableDate(isoTimestamp: string): string {
   } catch {
     return '';
   }
-}
-
-/** Gets region and base URL together for API calls. */
-function getApiConfig() {
-  return {
-    region: getRegion(),
-    baseUrl: getTeamsBaseUrl(),
-  };
 }
 
 /** Result of sending a message. */
@@ -382,13 +374,29 @@ const SAVED_MESSAGE_PATTERN = /_M_(\d+)$/;
 // Regex pattern for extracting post ID from followed threads: T_{conversationId}_P_{postId}_Threads
 const FOLLOWED_THREAD_PATTERN = /_P_(\d+)_Threads$/;
 
+/** Parsed item from a virtual conversation (saved messages or followed threads). */
+interface VirtualConversationItem {
+  id: string;
+  content: string;
+  contentType: string;
+  sender: { mri: string; displayName?: string };
+  timestamp: string;
+  sourceConversationId: string;
+  sourceReferenceId?: string;
+  messageLink?: string;
+}
+
 /**
- * Gets saved (bookmarked) messages from the virtual 48:saved conversation.
- * Returns messages the user has bookmarked across all conversations.
+ * Fetches and parses messages from a virtual conversation (48:saved or 48:threads).
+ * 
+ * Both saved messages and followed threads use the same API pattern:
+ * fetch from a virtual conversation ID, parse with a regex pattern, and sort by timestamp.
  */
-export async function getSavedMessages(
+async function fetchVirtualConversation(
+  virtualConversationId: string,
+  referencePattern: RegExp,
   options: { limit?: number } = {}
-): Promise<Result<GetSavedMessagesResult>> {
+): Promise<Result<VirtualConversationItem[]>> {
   const authResult = requireMessageAuth();
   if (!authResult.ok) {
     return authResult;
@@ -398,7 +406,7 @@ export async function getSavedMessages(
   const { region, baseUrl } = getApiConfig();
   const limit = options.limit ?? 50;
 
-  let url = CHATSVC_API.messages(region, SAVED_MESSAGES_ID, undefined, baseUrl);
+  let url = CHATSVC_API.messages(region, virtualConversationId, undefined, baseUrl);
   url += `?view=msnp24Equivalent|supportsMessageProperties&pageSize=${limit}&startTime=1`;
 
   const response = await httpRequest<{ messages?: unknown[] }>(
@@ -415,35 +423,54 @@ export async function getSavedMessages(
 
   const rawMessages = response.value.data.messages;
   if (!Array.isArray(rawMessages)) {
-    return ok({ messages: [] });
+    return ok([]);
   }
 
-  const messages: SavedMessage[] = [];
+  const linkContext = { tenantId: getTenantId() ?? undefined, teamsBaseUrl: getTeamsBaseUrl() };
+  const items: VirtualConversationItem[] = [];
 
   for (const raw of rawMessages) {
     const parsed = parseVirtualConversationMessage(
       raw as Record<string, unknown>,
-      SAVED_MESSAGE_PATTERN,
-      { tenantId: getTenantId() ?? undefined, teamsBaseUrl: getTeamsBaseUrl() }
+      referencePattern,
+      linkContext
     );
     if (!parsed) continue;
 
-    messages.push({
+    items.push({
       id: parsed.id,
       content: parsed.content,
       contentType: parsed.contentType,
       sender: parsed.sender,
       timestamp: parsed.timestamp,
       sourceConversationId: parsed.sourceConversationId,
-      sourceMessageId: parsed.sourceReferenceId,
+      sourceReferenceId: parsed.sourceReferenceId,
       messageLink: parsed.messageLink,
     });
   }
 
-  // Sort by timestamp (newest first for saved messages)
-  messages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  // Sort by timestamp (newest first)
+  items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-  return ok({ messages });
+  return ok(items);
+}
+
+/**
+ * Gets saved (bookmarked) messages from the virtual 48:saved conversation.
+ * Returns messages the user has bookmarked across all conversations.
+ */
+export async function getSavedMessages(
+  options: { limit?: number } = {}
+): Promise<Result<GetSavedMessagesResult>> {
+  const result = await fetchVirtualConversation(SAVED_MESSAGES_ID, SAVED_MESSAGE_PATTERN, options);
+  if (!result.ok) return result;
+
+  return ok({
+    messages: result.value.map(item => ({
+      ...item,
+      sourceMessageId: item.sourceReferenceId,
+    })),
+  });
 }
 
 /**
@@ -453,61 +480,15 @@ export async function getSavedMessages(
 export async function getFollowedThreads(
   options: { limit?: number } = {}
 ): Promise<Result<GetFollowedThreadsResult>> {
-  const authResult = requireMessageAuth();
-  if (!authResult.ok) {
-    return authResult;
-  }
-  const auth = authResult.value;
+  const result = await fetchVirtualConversation(FOLLOWED_THREADS_ID, FOLLOWED_THREAD_PATTERN, options);
+  if (!result.ok) return result;
 
-  const { region, baseUrl } = getApiConfig();
-  const limit = options.limit ?? 50;
-
-  let url = CHATSVC_API.messages(region, FOLLOWED_THREADS_ID, undefined, baseUrl);
-  url += `?view=msnp24Equivalent|supportsMessageProperties&pageSize=${limit}&startTime=1`;
-
-  const response = await httpRequest<{ messages?: unknown[] }>(
-    url,
-    {
-      method: 'GET',
-      headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
-    }
-  );
-
-  if (!response.ok) {
-    return response;
-  }
-
-  const rawMessages = response.value.data.messages;
-  if (!Array.isArray(rawMessages)) {
-    return ok({ threads: [] });
-  }
-
-  const threads: FollowedThread[] = [];
-
-  for (const raw of rawMessages) {
-    const parsed = parseVirtualConversationMessage(
-      raw as Record<string, unknown>,
-      FOLLOWED_THREAD_PATTERN,
-      { tenantId: getTenantId() ?? undefined, teamsBaseUrl: getTeamsBaseUrl() }
-    );
-    if (!parsed) continue;
-
-    threads.push({
-      id: parsed.id,
-      content: parsed.content,
-      contentType: parsed.contentType,
-      sender: parsed.sender,
-      timestamp: parsed.timestamp,
-      sourceConversationId: parsed.sourceConversationId,
-      sourcePostId: parsed.sourceReferenceId,
-      messageLink: parsed.messageLink,
-    });
-  }
-
-  // Sort by timestamp (newest first for followed threads)
-  threads.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-  return ok({ threads });
+  return ok({
+    threads: result.value.map(item => ({
+      ...item,
+      sourcePostId: item.sourceReferenceId,
+    })),
+  });
 }
 
 /**
@@ -1055,7 +1036,6 @@ export interface CreateGroupChatResult {
  * 
  * @param memberIdentifiers - Array of user identifiers (MRI, object ID, or GUID)
  * @param topic - Optional chat topic/name
- * @param region - API region (default: 'amer')
  * 
  * @example
  * ```typescript
@@ -1579,17 +1559,12 @@ export interface ReactionResult {
   emoji: string;
 }
 
-/**
- * Adds a reaction (emoji) to a message.
- * 
- * @param conversationId - The conversation containing the message
- * @param messageId - The message ID to react to
- * @param emojiKey - The emoji key (e.g., 'like', 'heart', 'laugh')
- */
-export async function addReaction(
+/** Shared implementation for adding/removing reactions. */
+async function setReaction(
   conversationId: string,
   messageId: string,
-  emojiKey: string
+  emojiKey: string,
+  method: 'PUT' | 'DELETE'
 ): Promise<Result<ReactionResult>> {
   const authResult = requireMessageAuth();
   if (!authResult.ok) {
@@ -1600,21 +1575,17 @@ export async function addReaction(
   const { region, baseUrl } = getApiConfig();
   const url = CHATSVC_API.messageEmotions(region, conversationId, messageId, baseUrl);
 
+  const emotions: Record<string, unknown> = { key: emojiKey };
+  if (method === 'PUT') {
+    emotions.value = Date.now();
+  }
+
   const response = await httpRequest<unknown>(
     url,
     {
-      method: 'PUT',
-      headers: {
-        ...getTeamsHeaders(),
-        'Authentication': `skypetoken=${auth.skypeToken}`,
-        'Authorization': `Bearer ${auth.authToken}`,
-      },
-      body: JSON.stringify({
-        emotions: {
-          key: emojiKey,
-          value: Date.now(),
-        },
-      }),
+      method,
+      headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
+      body: JSON.stringify({ emotions }),
     }
   );
 
@@ -1630,6 +1601,21 @@ export async function addReaction(
 }
 
 /**
+ * Adds a reaction (emoji) to a message.
+ * 
+ * @param conversationId - The conversation containing the message
+ * @param messageId - The message ID to react to
+ * @param emojiKey - The emoji key (e.g., 'like', 'heart', 'laugh')
+ */
+export async function addReaction(
+  conversationId: string,
+  messageId: string,
+  emojiKey: string
+): Promise<Result<ReactionResult>> {
+  return setReaction(conversationId, messageId, emojiKey, 'PUT');
+}
+
+/**
  * Removes a reaction (emoji) from a message.
  * 
  * @param conversationId - The conversation containing the message
@@ -1641,39 +1627,5 @@ export async function removeReaction(
   messageId: string,
   emojiKey: string
 ): Promise<Result<ReactionResult>> {
-  const authResult = requireMessageAuth();
-  if (!authResult.ok) {
-    return authResult;
-  }
-  const auth = authResult.value;
-
-  const { region, baseUrl } = getApiConfig();
-  const url = CHATSVC_API.messageEmotions(region, conversationId, messageId, baseUrl);
-
-  const response = await httpRequest<unknown>(
-    url,
-    {
-      method: 'DELETE',
-      headers: {
-        ...getTeamsHeaders(),
-        'Authentication': `skypetoken=${auth.skypeToken}`,
-        'Authorization': `Bearer ${auth.authToken}`,
-      },
-      body: JSON.stringify({
-        emotions: {
-          key: emojiKey,
-        },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    return response;
-  }
-
-  return ok({
-    conversationId,
-    messageId,
-    emoji: emojiKey,
-  });
+  return setReaction(conversationId, messageId, emojiKey, 'DELETE');
 }

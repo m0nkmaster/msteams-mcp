@@ -195,6 +195,25 @@ export function getRegionConfig(): RegionConfig | null {
   return cachedRegionConfig;
 }
 
+/** API config with region and base URL for constructing API endpoints. */
+export interface ApiConfig {
+  region: string;
+  baseUrl: string;
+}
+
+/**
+ * Gets region and base URL together for API calls.
+ * 
+ * Shared helper used by all API modules to avoid duplicating
+ * the getRegion() + getTeamsBaseUrl() pattern.
+ */
+export function getApiConfig(): ApiConfig {
+  return {
+    region: getRegion(),
+    baseUrl: getTeamsBaseUrl(),
+  };
+}
+
 /**
  * Clears the cached region config and tenant ID.
  * Call this after login/logout to pick up new session.

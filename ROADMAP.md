@@ -7,6 +7,11 @@
 | P3 | Get person details | Detailed profile info (working hours, OOO status) | Easy | Delve API |
 | P3 | Get message by URL | Fetch a specific message from a Teams link with surrounding context | Medium | Parse URL to extract conversation/message IDs, return target message plus N messages before/after |
 | P4 | Meeting attendees | Filter meetings by attendee (not just organiser) | Medium | Need to research attendee list in calendar API response |
+| P3 | **Reduce chatsvc-api boilerplate** | **Extract `requireMessageAuthWithConfig()` helper returning `{ auth, region, baseUrl }`** | **Easy** | **Eliminates 4-line auth+config pattern repeated 16× in `chatsvc-api.ts`. See `2026-02-12-full-code-review.md` D3** |
+| P3 | **Substrate error response wrapper** | **Extract helper that clears token cache on `AUTH_EXPIRED` after Substrate/files API calls** | **Easy** | **Same `if (!response.ok) { if (AUTH_EXPIRED) clearTokenCache(); return response; }` pattern repeated 5× across `substrate-api.ts` and `files-api.ts`. See review D4** |
+| P4 | Split chatsvc-api.ts | Break 1,600+ line file into sub-modules (messaging, activity, reactions, virtual-conversations) | Medium | Largest file in codebase. See review R2. Would also split `message-tools.ts` (1,079 lines, R3) along same boundaries |
+| P4 | Typed API response interfaces | Define lightweight interfaces for common raw API response shapes | Easy | Reduces `as Record<string, unknown>` casts. Most impactful in `getSharedFiles` (20+ casts) and `getActivityFeed`. See review R4 |
+| P4 | Additional test coverage | Add tests for `httpRequest` retry/timeout logic (T8), tool registry `invokeTool` with Zod validation (T7) | Medium | Requires mocking `fetch`. Current coverage is strong for pure functions but weak for integration |
 
 ## Browserless Token Refresh
 

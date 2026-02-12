@@ -24,6 +24,12 @@ import {
   extractActivityTimestamp,
   markdownToTeamsHtml,
   formatTranscriptText,
+  parseChannelSuggestion,
+  parseChannelResults,
+  filterChannelsByName,
+  parseTeamsList,
+  parseVirtualConversationMessage,
+  hasMarkdownFormatting,
 } from './parsers.js';
 import {
   searchResultItem,
@@ -837,5 +843,355 @@ describe('formatTranscriptText', () => {
 
   it('returns empty string for empty entries', () => {
     expect(formatTranscriptText([])).toBe('');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Channel Parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseChannelSuggestion', () => {
+  it('parses a complete channel suggestion', () => {
+    const result = parseChannelSuggestion({
+      Name: 'General',
+      ThreadId: '19:abc@thread.tacv2',
+      TeamName: 'Engineering',
+      GroupId: 'group-guid-123',
+      ChannelType: 'Standard',
+      Description: 'Main channel',
+    });
+    expect(result).toEqual({
+      channelId: '19:abc@thread.tacv2',
+      channelName: 'General',
+      teamName: 'Engineering',
+      teamId: 'group-guid-123',
+      channelType: 'Standard',
+      description: 'Main channel',
+    });
+  });
+
+  it('returns null when required fields are missing', () => {
+    expect(parseChannelSuggestion({ Name: 'General' })).toBeNull();
+    expect(parseChannelSuggestion({ Name: 'General', ThreadId: '19:abc@thread.tacv2' })).toBeNull();
+    expect(parseChannelSuggestion({})).toBeNull();
+  });
+
+  it('defaults channelType to Standard when missing', () => {
+    const result = parseChannelSuggestion({
+      Name: 'General',
+      ThreadId: '19:abc@thread.tacv2',
+      TeamName: 'Engineering',
+      GroupId: 'group-guid-123',
+    });
+    expect(result?.channelType).toBe('Standard');
+  });
+});
+
+describe('parseChannelResults', () => {
+  it('parses channel suggestions from groups structure', () => {
+    const groups = [
+      {
+        Suggestions: [
+          {
+            EntityType: 'ChannelSuggestion',
+            Name: 'General',
+            ThreadId: '19:abc@thread.tacv2',
+            TeamName: 'Engineering',
+            GroupId: 'group-guid-123',
+          },
+          {
+            EntityType: 'PersonSuggestion',
+            DisplayName: 'John',
+          },
+        ],
+      },
+    ];
+    const results = parseChannelResults(groups);
+    expect(results).toHaveLength(1);
+    expect(results[0].channelName).toBe('General');
+  });
+
+  it('returns empty array for undefined/non-array input', () => {
+    expect(parseChannelResults(undefined)).toEqual([]);
+    expect(parseChannelResults([])).toEqual([]);
+  });
+
+  it('skips non-ChannelSuggestion entities', () => {
+    const groups = [
+      {
+        Suggestions: [
+          { EntityType: 'PersonSuggestion', DisplayName: 'John' },
+        ],
+      },
+    ];
+    expect(parseChannelResults(groups)).toEqual([]);
+  });
+});
+
+describe('parseTeamsList', () => {
+  it('parses teams with channels', () => {
+    const data = {
+      teams: [
+        {
+          id: '19:team1@thread.tacv2',
+          displayName: 'Engineering',
+          description: 'Eng team',
+          channels: [
+            {
+              id: '19:channel1@thread.tacv2',
+              displayName: 'General',
+              groupId: 'group-1',
+              channelType: 0,
+            },
+            {
+              id: '19:channel2@thread.tacv2',
+              displayName: 'Private Channel',
+              groupId: 'group-1',
+              channelType: 1,
+            },
+          ],
+        },
+      ],
+    };
+    const results = parseTeamsList(data);
+    expect(results).toHaveLength(1);
+    expect(results[0].teamName).toBe('Engineering');
+    expect(results[0].channels).toHaveLength(2);
+    expect(results[0].channels[0].channelType).toBe('Standard');
+    expect(results[0].channels[1].channelType).toBe('Private');
+    expect(results[0].channels[0].isMember).toBe(true);
+  });
+
+  it('maps channelType 2 to Shared', () => {
+    const data = {
+      teams: [
+        {
+          id: '19:team1@thread.tacv2',
+          displayName: 'Eng',
+          channels: [
+            { id: '19:ch@thread.tacv2', displayName: 'Shared', groupId: 'g', channelType: 2 },
+          ],
+        },
+      ],
+    };
+    expect(parseTeamsList(data)[0].channels[0].channelType).toBe('Shared');
+  });
+
+  it('returns empty array for undefined/missing data', () => {
+    expect(parseTeamsList(undefined)).toEqual([]);
+    expect(parseTeamsList({})).toEqual([]);
+    expect(parseTeamsList({ teams: 'not-array' } as unknown as Record<string, unknown>)).toEqual([]);
+  });
+
+  it('skips teams without required fields', () => {
+    const data = {
+      teams: [
+        { id: '19:team@thread.tacv2' }, // missing displayName
+        { displayName: 'No ID' },       // missing id
+      ],
+    };
+    expect(parseTeamsList(data)).toEqual([]);
+  });
+});
+
+describe('filterChannelsByName', () => {
+  const teams = [
+    {
+      teamId: '19:team1@thread.tacv2',
+      teamName: 'Engineering',
+      threadId: '19:team1@thread.tacv2',
+      channels: [
+        { channelId: '19:ch1@thread.tacv2', channelName: 'General', teamName: 'Engineering', teamId: 'g1', channelType: 'Standard' },
+        { channelId: '19:ch2@thread.tacv2', channelName: 'Design Review', teamName: 'Engineering', teamId: 'g1', channelType: 'Standard' },
+      ],
+    },
+    {
+      teamId: '19:team2@thread.tacv2',
+      teamName: 'Marketing',
+      threadId: '19:team2@thread.tacv2',
+      channels: [
+        { channelId: '19:ch3@thread.tacv2', channelName: 'General', teamName: 'Marketing', teamId: 'g2', channelType: 'Standard' },
+      ],
+    },
+  ];
+
+  it('filters channels by partial name match (case-insensitive)', () => {
+    const results = filterChannelsByName(teams, 'general');
+    expect(results).toHaveLength(2);
+  });
+
+  it('returns matching channels across teams', () => {
+    const results = filterChannelsByName(teams, 'design');
+    expect(results).toHaveLength(1);
+    expect(results[0].channelName).toBe('Design Review');
+  });
+
+  it('returns empty array when no match', () => {
+    expect(filterChannelsByName(teams, 'nonexistent')).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Virtual Conversation Parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseVirtualConversationMessage', () => {
+  const savedPattern = /_M_(\d+)$/;
+  const followedPattern = /_P_(\d+)_Threads$/;
+
+  it('parses a saved message with all fields', () => {
+    const msg = {
+      id: '1705760000000',
+      messagetype: 'RichText/Html',
+      content: '<p>Hello world</p>',
+      from: '8:orgid:user-guid',
+      imdisplayname: 'John Smith',
+      originalarrivaltime: '2026-01-20T12:00:00.000Z',
+      clumpId: '19:abc@thread.tacv2',
+      secondaryReferenceId: 'T_19:abc@thread.tacv2_M_1705760000000',
+    };
+    const result = parseVirtualConversationMessage(msg, savedPattern);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('1705760000000');
+    expect(result!.content).toBe('Hello world');
+    expect(result!.sourceConversationId).toBe('19:abc@thread.tacv2');
+    expect(result!.sourceReferenceId).toBe('1705760000000');
+    expect(result!.sender.displayName).toBe('John Smith');
+  });
+
+  it('parses a followed thread reference', () => {
+    const msg = {
+      id: '1705770000000',
+      messagetype: 'Text',
+      content: 'Thread content',
+      from: '8:orgid:user-guid',
+      originalarrivaltime: '2026-01-20T13:00:00.000Z',
+      clumpId: '19:xyz@thread.tacv2',
+      secondaryReferenceId: 'T_19:xyz@thread.tacv2_P_1705770000000_Threads',
+    };
+    const result = parseVirtualConversationMessage(msg, followedPattern);
+    expect(result).not.toBeNull();
+    expect(result!.sourceReferenceId).toBe('1705770000000');
+  });
+
+  it('returns null for Control messages', () => {
+    const msg = {
+      id: '123',
+      messagetype: 'Control/Typing',
+      originalarrivaltime: '2026-01-20T12:00:00.000Z',
+    };
+    expect(parseVirtualConversationMessage(msg, savedPattern)).toBeNull();
+  });
+
+  it('returns null for messages without id', () => {
+    const msg = {
+      messagetype: 'Text',
+      originalarrivaltime: '2026-01-20T12:00:00.000Z',
+    };
+    expect(parseVirtualConversationMessage(msg, savedPattern)).toBeNull();
+  });
+
+  it('returns null for messages without timestamp and non-numeric id', () => {
+    const msg = {
+      id: 'not-a-number',
+      messagetype: 'Text',
+    };
+    expect(parseVirtualConversationMessage(msg, savedPattern)).toBeNull();
+  });
+
+  it('handles missing secondaryReferenceId gracefully', () => {
+    const msg = {
+      id: '123',
+      messagetype: 'Text',
+      content: 'Hello',
+      from: '8:orgid:user',
+      originalarrivaltime: '2026-01-20T12:00:00.000Z',
+      clumpId: '19:abc@thread.tacv2',
+    };
+    const result = parseVirtualConversationMessage(msg, savedPattern);
+    expect(result).not.toBeNull();
+    expect(result!.sourceReferenceId).toBeUndefined();
+    expect(result!.messageLink).toBeUndefined();
+  });
+
+  it('builds message link when linkContext is provided', () => {
+    const msg = {
+      id: '123',
+      messagetype: 'Text',
+      content: 'Hello',
+      from: '8:orgid:user',
+      originalarrivaltime: '2026-01-20T12:00:00.000Z',
+      clumpId: '19:abc@thread.tacv2',
+      secondaryReferenceId: 'T_19:abc@thread.tacv2_M_1705760000000',
+    };
+    const result = parseVirtualConversationMessage(msg, savedPattern, {
+      tenantId: 'tenant-123',
+      teamsBaseUrl: 'https://teams.microsoft.com',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.messageLink).toBeDefined();
+    expect(result!.messageLink).toContain('teams.microsoft.com');
+  });
+
+  it('extracts links from HTML content', () => {
+    const msg = {
+      id: '123',
+      messagetype: 'RichText/Html',
+      content: '<a href="https://example.com">Link</a>',
+      from: '8:orgid:user',
+      originalarrivaltime: '2026-01-20T12:00:00.000Z',
+      clumpId: '19:abc@thread.tacv2',
+    };
+    const result = parseVirtualConversationMessage(msg, savedPattern);
+    expect(result).not.toBeNull();
+    expect(result!.links).toHaveLength(1);
+    expect(result!.links![0].url).toBe('https://example.com');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// hasMarkdownFormatting
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('hasMarkdownFormatting', () => {
+  it('detects bold formatting', () => {
+    expect(hasMarkdownFormatting('**bold**')).toBe(true);
+    expect(hasMarkdownFormatting('__bold__')).toBe(true);
+  });
+
+  it('detects italic formatting', () => {
+    expect(hasMarkdownFormatting('*italic*')).toBe(true);
+  });
+
+  it('detects strikethrough', () => {
+    expect(hasMarkdownFormatting('~~strike~~')).toBe(true);
+  });
+
+  it('detects inline code', () => {
+    expect(hasMarkdownFormatting('use `code` here')).toBe(true);
+  });
+
+  it('detects code blocks', () => {
+    expect(hasMarkdownFormatting('```\ncode\n```')).toBe(true);
+  });
+
+  it('detects unordered lists', () => {
+    expect(hasMarkdownFormatting('- item one')).toBe(true);
+    expect(hasMarkdownFormatting('* item one')).toBe(true);
+  });
+
+  it('detects ordered lists', () => {
+    expect(hasMarkdownFormatting('1. first item')).toBe(true);
+    expect(hasMarkdownFormatting('2) second item')).toBe(true);
+  });
+
+  it('detects newlines as needing conversion', () => {
+    expect(hasMarkdownFormatting('line one\nline two')).toBe(true);
+  });
+
+  it('returns false for plain text', () => {
+    expect(hasMarkdownFormatting('just plain text')).toBe(false);
+    expect(hasMarkdownFormatting('hello world')).toBe(false);
+    expect(hasMarkdownFormatting('')).toBe(false);
   });
 });

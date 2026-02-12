@@ -1,6 +1,6 @@
 /**
- * MCP Server implementation for Teams search.
- * Exposes tools and resources for interacting with Microsoft Teams.
+ * MCP Server implementation for Microsoft Teams.
+ * Exposes tools and resources for searching, messaging, calendar, files, and more.
  */
 
 import { createRequire } from 'module';

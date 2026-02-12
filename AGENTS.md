@@ -58,7 +58,6 @@ src/
 │   └── result.ts         # Result<T, E> type for explicit error handling
 ├── __fixtures__/
 │   └── api-responses.ts  # Mock API responses for testing
-└── test/                 # Integration test tools (CLI, MCP harness)
 ```
 
 ### Implementation Patterns
@@ -84,16 +83,16 @@ src/
 
 7. **MCP Resources**: Passive resources (`teams://me/profile`, `teams://me/favorites`, `teams://status`) provide context discovery without tool calls.
 
-7. **Tool Registry Pattern**: Tools are organised into logical groups (`search-tools.ts`, `message-tools.ts`, etc.) with a central registry (`tools/registry.ts`). This enables:
+8. **Tool Registry Pattern**: Tools are organised into logical groups (`search-tools.ts`, `message-tools.ts`, etc.) with a central registry (`tools/registry.ts`). This enables:
    - Better separation of concerns
    - Easier testing of individual tools
    - Simpler addition of new tools
 
-8. **Auth Guards**: Reusable authentication check utilities in `utils/auth-guards.ts` return `Result` types for consistent error handling across API modules. Also provides `getTenantId()` (cached) for deep link construction.
+9. **Auth Guards**: Reusable authentication check utilities in `utils/auth-guards.ts` return `Result` types for consistent error handling across API modules. Also provides `getTenantId()` (cached) for deep link construction.
 
-9. **Shared Constants**: Magic numbers are centralised in `constants.ts` for maintainability (page sizes, timeouts, thresholds).
+10. **Shared Constants**: Magic numbers are centralised in `constants.ts` for maintainability (page sizes, timeouts, thresholds).
 
-10. **Markdown to Teams HTML**: Outgoing messages support markdown formatting via `markdownToTeamsHtml()` in `utils/parsers.ts`. This converts markdown (`**bold**`, `*italic*`, `` `code` ``, ` ```code blocks``` `, `~~strikethrough~~`, lists, newlines) to the HTML that Teams expects for `RichText/Html` messages. The converter is used by `sendMessage()` and `editMessage()` in `chatsvc-api.ts`. When messages contain @mentions or links, `parseContentWithMentionsAndLinks()` applies the same conversion to text segments between inline elements.
+11. **Markdown to Teams HTML**: Outgoing messages support markdown formatting via `markdownToTeamsHtml()` in `utils/parsers.ts`. This converts markdown (`**bold**`, `*italic*`, `` `code` ``, ` ```code blocks``` `, `~~strikethrough~~`, lists, newlines) to the HTML that Teams expects for `RichText/Html` messages. The converter is used by `sendMessage()` and `editMessage()` in `chatsvc-api.ts`. When messages contain @mentions or links, `parseContentWithMentionsAndLinks()` applies the same conversion to text segments between inline elements.
 
 ## How It Works
 

@@ -72,16 +72,13 @@ export async function getSharedFiles(
   options: { pageSize?: number; skipToken?: string } = {}
 ): Promise<Result<GetSharedFilesResult>> {
   // Need both Substrate token (for the API) and message auth (for user MRI)
-  const [tokenResult, authResult] = await Promise.all([
-    requireSubstrateTokenAsync(),
-    Promise.resolve(requireMessageAuth()),
-  ]);
-
-  if (!tokenResult.ok) return tokenResult;
+  const authResult = requireMessageAuth();
   if (!authResult.ok) return authResult;
-
-  const token = tokenResult.value;
   const auth = authResult.value;
+
+  const tokenResult = await requireSubstrateTokenAsync();
+  if (!tokenResult.ok) return tokenResult;
+  const token = tokenResult.value;
 
   // Extract user's object ID from their MRI
   const userId = extractObjectId(auth.userMri);

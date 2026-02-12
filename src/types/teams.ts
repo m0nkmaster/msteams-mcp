@@ -24,59 +24,6 @@ export interface TeamsSearchResult {
   links?: ExtractedLink[];
 }
 
-export interface TeamsMessage {
-  id: string;
-  content: string;
-  sender: string;
-  timestamp: string;
-  channelName?: string;
-  teamName?: string;
-  replyCount?: number;
-  reactions?: TeamsReaction[];
-}
-
-export interface TeamsReaction {
-  type: string;
-  count: number;
-}
-
-export interface InterceptedRequest {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-  postData?: string;
-  timestamp: Date;
-}
-
-export interface InterceptedResponse {
-  url: string;
-  status: number;
-  headers: Record<string, string>;
-  body?: string;
-  timestamp: Date;
-}
-
-// Note: SessionState is defined in auth/session-store.ts (the authoritative source)
-// Import from there if needed: import { type SessionState } from '../auth/session-store.js';
-
-export interface SearchApiEndpoint {
-  url: string;
-  method: string;
-  description: string;
-  requestFormat?: unknown;
-  responseFormat?: unknown;
-}
-
-/** Pagination options for search requests. */
-export interface SearchPaginationOptions {
-  /** Starting offset (0-based). Default: 0 */
-  from?: number;
-  /** Page size. Default: 25 */
-  size?: number;
-  /** Maximum total results to fetch across all pages. */
-  maxResults?: number;
-}
-
 /** Pagination metadata returned with search results. */
 export interface SearchPaginationResult {
   /** Number of results returned in this response. */
@@ -91,8 +38,4 @@ export interface SearchPaginationResult {
   hasMore: boolean;
 }
 
-/** Search results with pagination metadata. */
-export interface TeamsSearchResultsWithPagination {
-  results: TeamsSearchResult[];
-  pagination: SearchPaginationResult;
-}
+
