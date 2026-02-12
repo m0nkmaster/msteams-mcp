@@ -16,6 +16,7 @@ import {
   extractRegionConfig,
   getUserProfile,
   clearTokenCache,
+  getValidGraphToken,
   type MessageAuthInfo,
   type RegionConfig,
 } from '../auth/token-extractor.js';
@@ -276,6 +277,30 @@ export function getApiConfig(): ApiConfig {
 export function clearRegionCache(): void {
   cachedRegionConfig = undefined;
   cachedTenantId = undefined;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Graph API Authentication
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Authentication info for Microsoft Graph API. */
+export interface GraphAuthInfo {
+  graphToken: string;
+}
+
+/**
+ * Requires a valid Microsoft Graph API token.
+ * Use for Graph API calls (e.g., sending messages via Graph).
+ */
+export function requireGraphAuth(): Result<GraphAuthInfo, McpError> {
+  const graphToken = getValidGraphToken();
+  if (!graphToken) {
+    return err(createError(
+      ErrorCode.AUTH_REQUIRED,
+      'ACTION REQUIRED: No valid Microsoft Graph token. You MUST call teams_login to authenticate before retrying. The Graph token is acquired during token refresh.',
+    ));
+  }
+  return ok({ graphToken });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

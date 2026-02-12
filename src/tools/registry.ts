@@ -13,6 +13,7 @@ import { peopleTools } from './people-tools.js';
 import { authTools } from './auth-tools.js';
 import { meetingTools } from './meeting-tools.js';
 import { fileTools } from './file-tools.js';
+import { graphTools } from './graph-tools.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Registry
@@ -27,6 +28,7 @@ const allTools: RegisteredTool<any>[] = [
   ...authTools,
   ...meetingTools,
   ...fileTools,
+  ...graphTools,
 ];
 
 /** Lookup map for tools by name. */

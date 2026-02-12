@@ -706,6 +706,95 @@ export function areTokensExpired(state?: SessionState): boolean {
 export { clearTokenCache };
 
 // ============================================================================
+// Graph API Token
+// ============================================================================
+
+/** Microsoft Graph API token info. */
+export interface GraphTokenInfo {
+  token: string;
+  expiry: Date;
+}
+
+/**
+ * Extracts the Microsoft Graph API token from session state.
+ * This token is used for Graph API calls (e.g., sending messages via Graph).
+ * 
+ * Looks for MSAL access token entries with target scope containing
+ * 'graph.microsoft.com'.
+ */
+export function extractGraphToken(state?: SessionState): GraphTokenInfo | null {
+  const localStorage = getTeamsLocalStorage(state);
+  if (!localStorage) return null;
+
+  let bestToken: GraphTokenInfo | null = null;
+
+  for (const item of localStorage) {
+    try {
+      const entry = JSON.parse(item.value);
+
+      // Look for Graph API tokens by target scope
+      const target = entry.target as string | undefined;
+      if (!target?.includes('graph.microsoft.com')) continue;
+
+      if (!isJwtToken(entry.secret)) continue;
+
+      const expiry = getJwtExpiry(entry.secret);
+      if (!expiry) continue;
+
+      // Skip expired tokens
+      if (expiry.getTime() <= Date.now()) continue;
+
+      // Keep the token with longest remaining validity
+      if (!bestToken || expiry.getTime() > bestToken.expiry.getTime()) {
+        bestToken = { token: entry.secret, expiry };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return bestToken;
+}
+
+/**
+ * Gets a valid Graph token, either from cache or by extracting from session.
+ */
+export function getValidGraphToken(): string | null {
+  const extracted = extractGraphToken();
+  if (!extracted) return null;
+
+  // Check if not expired
+  if (extracted.expiry.getTime() <= Date.now()) {
+    return null;
+  }
+
+  return extracted.token;
+}
+
+/**
+ * Gets Graph token status for diagnostics.
+ */
+export function getGraphTokenStatus(): {
+  hasToken: boolean;
+  expiresAt?: string;
+  minutesRemaining?: number;
+} {
+  const extracted = extractGraphToken();
+  if (!extracted) {
+    return { hasToken: false };
+  }
+
+  const now = Date.now();
+  const expiryMs = extracted.expiry.getTime();
+
+  return {
+    hasToken: expiryMs > now,
+    expiresAt: extracted.expiry.toISOString(),
+    minutesRemaining: Math.max(0, Math.round((expiryMs - now) / 1000 / 60)),
+  };
+}
+
+// ============================================================================
 // Config Discovery (for debugging/research)
 // ============================================================================
 
