@@ -177,21 +177,18 @@ async function handleGetThread(
   if (horizonResult.ok) {
     lastReadMessageId = horizonResult.value.lastReadMessageId;
     
-    // Count messages after last read
+    // Count messages newer than the last-read message
     if (lastReadMessageId) {
-      let foundLastRead = false;
-      unreadCount = 0;
-      for (const msg of result.value.messages) {
-        if (msg.id === lastReadMessageId) {
-          foundLastRead = true;
-          continue;
-        }
-        if (foundLastRead && !msg.isFromMe) {
-          unreadCount++;
-        }
-      }
-      // If last read message wasn't found, it's older than our window - all messages are unread
-      if (!foundLastRead) {
+      // Find the last-read message to get its timestamp
+      const lastReadMsg = result.value.messages.find(m => m.id === lastReadMessageId);
+      
+      if (lastReadMsg) {
+        const lastReadTime = new Date(lastReadMsg.timestamp).getTime();
+        unreadCount = result.value.messages.filter(
+          m => !m.isFromMe && new Date(m.timestamp).getTime() > lastReadTime
+        ).length;
+      } else {
+        // Last-read message not in our window - it's older, so all messages are unread
         unreadCount = result.value.messages.filter(m => !m.isFromMe).length;
       }
     } else {
