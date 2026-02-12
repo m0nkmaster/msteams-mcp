@@ -105,7 +105,7 @@ grant_type=refresh_token
 &scope=https://substrate.office.com/.default offline_access
 ```
 
-**Critical:** The `Origin: https://teams.microsoft.com` header is **required**. The Teams client ID is registered as a Single-Page Application (SPA), and Azure AD validates that refresh token grants from SPA clients include a cross-origin `Origin` header. Without it, Azure AD returns error `AADSTS9002327`.
+**Critical:** The `Origin: https://teams.microsoft.com` header is **required**. The Teams client ID is registered as a Single-Page Application (SPA), and Azure AD validates that refresh token grants from SPA clients include a cross-origin `Origin` header. Without it, Azure AD returns error `AADSTS9002327` ("Tokens issued for the 'Single-Page Application' client-type may only be redeemed via cross-origin requests").
 
 **Scopes to refresh:**
 
