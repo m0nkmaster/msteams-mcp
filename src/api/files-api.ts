@@ -12,7 +12,7 @@ import { requireSubstrateTokenAsync, requireMessageAuth, getTenantId, handleSubs
 import { extractObjectId } from '../utils/parsers.js';
 import { DEFAULT_FILES_PAGE_SIZE } from '../constants.js';
 import { DEFAULT_SUBSTRATE_BASE_URL } from '../utils/api-config.js';
-import type { RawAllFilesResponse, RawFileItem } from '../types/api-responses.js';
+import type { RawAllFilesResponse } from '../types/api-responses.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
