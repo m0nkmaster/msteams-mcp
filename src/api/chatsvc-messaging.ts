@@ -140,9 +140,9 @@ export async function sendMessage(
   // Generate unique message ID
   const clientMessageId = Date.now().toString();
 
-  // Process content: handle mentions, links, and markdown formatting
-  // Always convert through markdown→HTML pipeline (never pass raw HTML through,
-  // as Teams requires proper block-level wrapping like <p> tags)
+  // Process content: handle mentions, links, and markdown formatting.
+  // Always convert through markdown→HTML pipeline (never pass user content through
+  // without sanitization, as Teams requires proper block-level wrapping like <p> tags)
   const parsed = parseContentWithMentionsAndLinks(content);
   const htmlContent = parsed.html;
   const mentionsToSend = parsed.mentions;
@@ -268,7 +268,10 @@ export async function getThreadMessages(
 
     const timestamp = msg.originalarrivaltime ||
       msg.composetime ||
-      new Date(parseInt(id, 10)).toISOString();
+      (() => {
+        const parsed = parseInt(id, 10);
+        return !isNaN(parsed) && parsed > 0 ? new Date(parsed).toISOString() : new Date().toISOString();
+      })();
 
     // Extract thread root ID for channel messages
     // When rootMessageId differs from id, this message is a reply within a thread
@@ -681,6 +684,23 @@ export async function createGroupChat(
     ));
   }
 
+  // Check for duplicate members
+  const uniqueIdentifiers = new Set(memberIdentifiers);
+  if (uniqueIdentifiers.size !== memberIdentifiers.length) {
+    return err(createError(
+      ErrorCode.INVALID_INPUT,
+      'Duplicate members detected in group chat request.'
+    ));
+  }
+
+  // Teams group chats have a 250-member limit
+  if (memberIdentifiers.length > 250) {
+    return err(createError(
+      ErrorCode.INVALID_INPUT,
+      'Group chat cannot have more than 250 members.'
+    ));
+  }
+
   // Build MRI list for all members, including current user
   const memberMris: string[] = [auth.userMri];
 
@@ -860,7 +880,9 @@ function parseContentWithMentionsAndLinks(content: string): { html: string; ment
   const placeholders: Map<string, string> = new Map();
   let mentionId = 0;
   
-  // Build content with placeholders (process in reverse to preserve indices)
+  // Build content with placeholders (process in reverse to preserve indices).
+  // Uses Unicode Private Use Area characters (U+E000, U+E001) as delimiters —
+  // these never appear in normal text, so they're safe as unique markers.
   let placeholderContent = content;
   for (let i = matches.length - 1; i >= 0; i--) {
     const m = matches[i];

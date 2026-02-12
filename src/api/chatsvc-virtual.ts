@@ -7,7 +7,8 @@
 
 import { httpRequest } from '../utils/http.js';
 import { CHATSVC_API, getSkypeAuthHeaders } from '../utils/api-config.js';
-import { type Result, ok } from '../types/result.js';
+import { type Result, ok, err } from '../types/result.js';
+import { ErrorCode, createError } from '../types/errors.js';
 import { requireMessageAuthWithConfig, getTeamsBaseUrl, getTenantId } from '../utils/auth-guards.js';
 import { parseVirtualConversationMessage, type ExtractedLink } from '../utils/parsers.js';
 import { SAVED_MESSAGES_ID, FOLLOWED_THREADS_ID } from '../constants.js';
@@ -248,6 +249,16 @@ async function setMessageSavedState(
     return authResult;
   }
   const { auth, region, baseUrl } = authResult.value;
+
+  // Validate messageId is numeric before sending to API
+  const parsedId = parseInt(messageId, 10);
+  if (isNaN(parsedId)) {
+    return err(createError(
+      ErrorCode.INVALID_INPUT,
+      `Invalid message ID: ${messageId}. Expected a numeric message ID.`
+    ));
+  }
+
   // For channel threaded replies, rootMessageId is the thread root post ID
   // For top-level posts and non-channel messages, use the messageId itself
   const urlMessageId = rootMessageId ?? messageId;
@@ -260,7 +271,7 @@ async function setMessageSavedState(
       headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
       body: JSON.stringify({
         s: saved ? 1 : 0,
-        mid: parseInt(messageId, 10),
+        mid: parsedId,
       }),
     }
   );

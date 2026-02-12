@@ -44,7 +44,7 @@ describe('handleSubstrateError', () => {
     }
   });
 
-  it('handles ok results gracefully (no-op)', () => {
+  it('does not break if accidentally called on an ok result (defensive)', () => {
     const result: Result<string> = ok('success');
     const handled = handleSubstrateError(result);
 

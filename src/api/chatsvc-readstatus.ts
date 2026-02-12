@@ -168,10 +168,9 @@ export async function getUnreadStatus(
   let unreadCount = 0;
   let latestMessageId: string | undefined;
 
-  // Messages are sorted oldest-first, so reverse to process newest-first
-  const reversedMessages = [...messages].reverse();
-
-  for (const msg of reversedMessages) {
+  // Messages from getThreadMessages are newest-first by default (desc order).
+  // Iterate from newest to oldest to count unread messages after lastReadId.
+  for (const msg of messages) {
     if (!latestMessageId && !msg.isFromMe) {
       latestMessageId = msg.id;
     }

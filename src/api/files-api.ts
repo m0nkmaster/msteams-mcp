@@ -146,7 +146,7 @@ export async function getSharedFiles(
 
   const files: SharedFile[] = [];
 
-  for (const item of rawItems as RawFileItem[]) {
+  for (const item of rawItems) {
     const itemType = item.ItemType;
 
     if (itemType === 'File') {
