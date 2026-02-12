@@ -34,7 +34,8 @@ src/
 │   ├── crypto.ts         # AES-256-GCM encryption for credentials at rest
 │   ├── session-store.ts  # Secure session state storage with encryption
 │   ├── token-extractor.ts # Extract tokens from Playwright session state
-│   └── token-refresh.ts  # Proactive token refresh via OAuth2 endpoint
+│   ├── token-refresh.ts  # Token refresh orchestrator (HTTP-first, browser fallback)
+│   └── token-refresh-http.ts # Browserless token refresh via direct OAuth2 calls
 ├── api/                  # API client modules (one per API surface)
 │   ├── index.ts          # Module exports
 │   ├── substrate-api.ts  # Search and people APIs (Substrate v2)
@@ -103,6 +104,8 @@ src/
 
 12. **Auto-Login on Auth Failure**: The `CallToolRequestSchema` handler in `server.ts` automatically retries tool calls that fail with `AUTH_REQUIRED` or `AUTH_EXPIRED` errors. Before returning the error to the LLM, it attempts headless re-authentication (token refresh → full headless login). If auto-login succeeds, the original tool call is retried transparently. If it fails, a strongly-worded error directs the LLM to call `teams_login` explicitly. Auth tools (`teams_login`, `teams_status`) are excluded from auto-retry to avoid loops. Concurrent auth failures are deduplicated via a Promise-based mutex — only one auto-login runs at a time, and parallel callers await the same result.
 
+13. **Browserless Token Refresh**: Token refresh uses an HTTP-first strategy (`token-refresh-http.ts`). The MSAL refresh token is extracted from session state localStorage and exchanged for new access tokens via Azure AD's OAuth2 token endpoint — no browser needed (~1s vs ~8s). The `skypetoken_asm` cookie is obtained by exchanging the Skype Spaces access token via `authsvc.teams.microsoft.com/v1.0/authz`. Updated tokens are written back to session state in MSAL cache format so `token-extractor.ts` can find them. The `Origin: https://teams.microsoft.com` header is required because the Teams client ID is registered as a SPA (Azure AD error AADSTS9002327 without it). Falls back to headless browser refresh if HTTP fails (e.g., refresh token expired, Conditional Access). First login always requires a browser — no refresh token exists yet. Works identically for standard MS login and corporate SSO (ADFS/Okta federation).
+
 ## How It Works
 
 ### Authentication Flow
@@ -130,11 +133,11 @@ If the system browser isn't available, a helpful error message suggests installi
 - Tokens are extracted from browser localStorage after login
 - The Substrate search token (`SubstrateSearch-Internal.ReadWrite` scope) is required for search
 - Tokens typically expire after ~1 hour
-- **Proactive token refresh**: When tokens have less than 10 minutes remaining, the server opens a headless browser with the persistent profile. Microsoft's long-lived session cookies enable silent SSO — MSAL refreshes tokens automatically when Teams loads.
+- **Proactive token refresh** uses an HTTP-first strategy:
+  1. **HTTP refresh (~1s)**: Extracts the MSAL refresh token from session state and POSTs to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, chatsvcagg). Then exchanges the Skype Spaces token for `skypetoken_asm` via `authsvc.teams.microsoft.com`. Updated tokens are written back to session state.
+  2. **Browser fallback (~8s)**: If HTTP refresh fails (e.g., refresh token expired), opens a headless browser with the persistent profile. Microsoft's session cookies enable silent SSO.
 - This is seamless to the user — no browser window shown, no interaction needed
-- If refresh fails (e.g., Microsoft session fully expired), user must re-authenticate via `teams_login`
-
-**How token refresh works:** A headless browser opens with the persistent profile at `~/.teams-mcp-server/browser-profile/`. The profile's session cookies authenticate silently, Teams loads, MSAL refreshes tokens in localStorage, and the updated session state is saved.
+- If both methods fail (e.g., Microsoft session fully expired), user must re-authenticate via `teams_login`
 
 **Testing token refresh:** Use `npm run cli -- login` which will attempt headless SSO first, only showing a browser if user interaction is actually required.
 
