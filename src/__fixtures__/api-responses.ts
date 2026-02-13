@@ -219,6 +219,116 @@ export const sourceWithConvIdMessageId = {
 };
 
 /**
+ * Email search result from Substrate v2 query API.
+ * From: POST https://substrate.office.com/searchservice/api/v2/query
+ * with entityType: 'Message', contentSources: ['Exchange']
+ */
+export const emailSearchResult = {
+  Id: 'AAMkAGE1OWFlZjc0LWYxMjQtNGM1Mi05NzJlLTU0MTU2ZGU1OGM1YQBGAAAAAAEmail',
+  Subject: 'Q3 Budget Review',
+  HitHighlightedSummary: 'Please review the attached <c0>budget</c0> spreadsheet for Q3',
+  Source: {
+    Subject: 'Q3 Budget Review',
+    From: {
+      EmailAddress: {
+        Name: 'Smith, John',
+        Address: 'john.smith@company.com',
+      },
+    },
+    DateTimeReceived: '2026-01-20T14:30:00.000Z',
+    HasAttachments: true,
+    Importance: 'Normal',
+    IsRead: true,
+    DisplayTo: 'Jane Doe; Rob MacDonald',
+    DisplayCc: 'Finance Team',
+    WebLink: 'https://outlook.office.com/mail/id/AAMkAGE1OWFlZjc0',
+    ConversationId: { Id: 'AAQkAGE1OWFlZjc0LWYxMjQtNGM1Mi05NzJl' },
+    Preview: 'Please review the attached budget spreadsheet for Q3',
+  },
+};
+
+/**
+ * Email search result with minimal fields.
+ */
+export const emailSearchResultMinimal = {
+  Id: 'AAMkMinimalEmail',
+  HitHighlightedSummary: 'Quick update on the project status',
+  Source: {
+    Subject: 'Project Update',
+    FromName: 'Jane Doe',
+    FromAddress: 'jane.doe@company.com',
+    DateTimeSent: '2026-01-21T09:00:00.000Z',
+  },
+};
+
+/**
+ * Email search result with structured ToRecipients array.
+ */
+export const emailSearchResultWithRecipients = {
+  Id: 'AAMkRecipientsEmail',
+  Subject: 'Team Meeting Notes',
+  HitHighlightedSummary: 'Here are the notes from today\'s meeting',
+  Source: {
+    Subject: 'Team Meeting Notes',
+    From: 'Alice Johnson',
+    DateTimeReceived: '2026-01-22T16:00:00.000Z',
+    ToRecipients: [
+      { EmailAddress: { Name: 'Bob Wilson', Address: 'bob@company.com' } },
+      { EmailAddress: { Name: 'Carol Davis', Address: 'carol@company.com' } },
+    ],
+    CcRecipients: [
+      { EmailAddress: { Name: 'Dave Brown', Address: 'dave@company.com' } },
+    ],
+    HasAttachments: false,
+    IsRead: false,
+    Importance: 'High',
+  },
+};
+
+/**
+ * Email search result that is a calendar response (should be filtered by default).
+ */
+export const emailSearchResultCalendarResponse = {
+  Id: 'AAMkCalendarResponse',
+  Subject: 'Accepted: Weekly Standup',
+  HitHighlightedSummary: '',
+  Source: {
+    Subject: 'Accepted: Weekly Standup',
+    From: {
+      EmailAddress: {
+        Name: 'Macdonald, Rob',
+        Address: 'rob.macdonald@company.com',
+      },
+    },
+    DateTimeReceived: '2026-02-06T12:50:45.000Z',
+    HasAttachments: false,
+    Importance: 'Normal',
+    IsRead: true,
+  },
+};
+
+/**
+ * Email EntitySets response structure from v2 query.
+ */
+export const emailEntitySetsResponse = {
+  EntitySets: [
+    {
+      ResultSets: [
+        {
+          Total: 142,
+          Results: [
+            emailSearchResult,
+            emailSearchResultMinimal,
+            emailSearchResultWithRecipients,
+            emailSearchResultCalendarResponse,
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/**
  * Thread message from chatsvc API.
  * From: GET /api/chatsvc/{region}/v1/users/ME/conversations/{id}/messages
  */

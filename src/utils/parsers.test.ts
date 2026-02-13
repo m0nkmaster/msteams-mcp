@@ -18,6 +18,9 @@ import {
   calculateTokenStatus,
   parseSearchResults,
   parsePeopleResults,
+  parseEmailResult,
+  parseEmailSearchResults,
+  classifyEmailType,
   extractObjectId,
   buildOneOnOneConversationId,
   decodeBase64Guid,
@@ -48,6 +51,11 @@ import {
   jwtPayloadSpaceName,
   sourceWithMessageId,
   sourceWithConvIdMessageId,
+  emailSearchResult,
+  emailSearchResultMinimal,
+  emailSearchResultWithRecipients,
+  emailSearchResultCalendarResponse,
+  emailEntitySetsResponse,
 } from '../__fixtures__/api-responses.js';
 
 describe('stripHtml', () => {
@@ -1193,5 +1201,162 @@ describe('hasMarkdownFormatting', () => {
     expect(hasMarkdownFormatting('just plain text')).toBe(false);
     expect(hasMarkdownFormatting('hello world')).toBe(false);
     expect(hasMarkdownFormatting('')).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseEmailResult
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseEmailResult', () => {
+  it('parses a full email result with structured From', () => {
+    const result = parseEmailResult(emailSearchResult);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('AAMkAGE1OWFlZjc0LWYxMjQtNGM1Mi05NzJlLTU0MTU2ZGU1OGM1YQBGAAAAAAEmail');
+    expect(result!.emailType).toBe('email');
+    expect(result!.subject).toBe('Q3 Budget Review');
+    expect(result!.sender).toBe('Smith, John');
+    expect(result!.senderEmail).toBe('john.smith@company.com');
+    expect(result!.preview).toContain('budget');
+    expect(result!.receivedAt).toBe('2026-01-20T14:30:00.000Z');
+    expect(result!.hasAttachments).toBe(true);
+    expect(result!.importance).toBe('Normal');
+    expect(result!.isRead).toBe(true);
+    expect(result!.toRecipients).toEqual(['Jane Doe', 'Rob MacDonald']);
+    expect(result!.ccRecipients).toEqual(['Finance Team']);
+    expect(result!.webLink).toBe('https://outlook.office.com/mail/id/AAMkAGE1OWFlZjc0');
+    expect(result!.conversationId).toBe('AAQkAGE1OWFlZjc0LWYxMjQtNGM1Mi05NzJl');
+  });
+
+  it('parses email with flat From fields (fallback)', () => {
+    const result = parseEmailResult(emailSearchResultMinimal);
+    expect(result).not.toBeNull();
+    expect(result!.subject).toBe('Project Update');
+    expect(result!.sender).toBe('Jane Doe');
+    expect(result!.senderEmail).toBe('jane.doe@company.com');
+    expect(result!.receivedAt).toBe('2026-01-21T09:00:00.000Z');
+  });
+
+  it('parses email with string From and structured recipients', () => {
+    const result = parseEmailResult(emailSearchResultWithRecipients);
+    expect(result).not.toBeNull();
+    expect(result!.sender).toBe('Alice Johnson');
+    expect(result!.toRecipients).toEqual(['Bob Wilson', 'Carol Davis']);
+    expect(result!.ccRecipients).toEqual(['Dave Brown']);
+    expect(result!.hasAttachments).toBe(false);
+    expect(result!.isRead).toBe(false);
+    expect(result!.importance).toBe('High');
+  });
+
+  it('strips HTML from preview', () => {
+    const result = parseEmailResult({
+      Id: 'html-email',
+      HitHighlightedSummary: '<p>Important <strong>update</strong> about the &amp; project</p>',
+      Source: { Subject: 'Update' },
+    });
+    expect(result).not.toBeNull();
+    expect(result!.preview).toBe('Important update about the & project');
+  });
+
+  it('returns null for empty result with no subject and short preview', () => {
+    const result = parseEmailResult({
+      Id: 'empty-email',
+      HitHighlightedSummary: 'Hi',
+      Source: {},
+    });
+    expect(result).toBeNull();
+  });
+
+  it('returns result when subject exists even with empty preview', () => {
+    const result = parseEmailResult({
+      Id: 'subject-only',
+      Source: { Subject: 'Important Notice' },
+    });
+    expect(result).not.toBeNull();
+    expect(result!.subject).toBe('Important Notice');
+    expect(result!.preview).toBe('');
+  });
+
+  it('tags calendar responses with emailType calendar-response', () => {
+    const result = parseEmailResult(emailSearchResultCalendarResponse);
+    expect(result).not.toBeNull();
+    expect(result!.emailType).toBe('calendar-response');
+    expect(result!.subject).toBe('Accepted: Weekly Standup');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// classifyEmailType
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('classifyEmailType', () => {
+  it('classifies normal emails', () => {
+    expect(classifyEmailType('Q3 Budget Review')).toBe('email');
+    expect(classifyEmailType('Re: Project Update')).toBe('email');
+    expect(classifyEmailType('Fwd: Meeting Notes')).toBe('email');
+  });
+
+  it('classifies calendar responses', () => {
+    expect(classifyEmailType('Accepted: Weekly Standup')).toBe('calendar-response');
+    expect(classifyEmailType('Declined: 1:1 with Rob')).toBe('calendar-response');
+    expect(classifyEmailType('Tentative: Team Sync')).toBe('calendar-response');
+    expect(classifyEmailType('Canceled: Sprint Review')).toBe('calendar-response');
+    expect(classifyEmailType('Cancelled: All Hands')).toBe('calendar-response');
+  });
+
+  it('classifies notifications', () => {
+    expect(classifyEmailType('Automatic Reply: Out of office')).toBe('notification');
+    expect(classifyEmailType('Auto-Reply: On vacation')).toBe('notification');
+    expect(classifyEmailType('Out of Office: Back Monday')).toBe('notification');
+  });
+
+  it('is case-insensitive', () => {
+    expect(classifyEmailType('ACCEPTED: Meeting')).toBe('calendar-response');
+    expect(classifyEmailType('declined: Call')).toBe('calendar-response');
+    expect(classifyEmailType('AUTOMATIC REPLY: OOO')).toBe('notification');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseEmailSearchResults
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseEmailSearchResults', () => {
+  it('parses full EntitySets response and filters calendar responses by default', () => {
+    const { results, total, filteredCount } = parseEmailSearchResults(emailEntitySetsResponse.EntitySets);
+    expect(total).toBe(142);
+    expect(results).toHaveLength(3);
+    expect(results[0].subject).toBe('Q3 Budget Review');
+    expect(results[1].subject).toBe('Project Update');
+    expect(results[2].subject).toBe('Team Meeting Notes');
+    expect(filteredCount).toBe(1);
+  });
+
+  it('includes calendar responses when excludeCalendarResponses is false', () => {
+    const { results, filteredCount } = parseEmailSearchResults(
+      emailEntitySetsResponse.EntitySets,
+      { excludeCalendarResponses: false },
+    );
+    expect(results).toHaveLength(4);
+    expect(results[3].subject).toBe('Accepted: Weekly Standup');
+    expect(results[3].emailType).toBe('calendar-response');
+    expect(filteredCount).toBeUndefined();
+  });
+
+  it('returns empty for undefined input', () => {
+    const { results, total } = parseEmailSearchResults(undefined);
+    expect(results).toHaveLength(0);
+    expect(total).toBeUndefined();
+  });
+
+  it('returns empty for empty array', () => {
+    const { results, total } = parseEmailSearchResults([]);
+    expect(results).toHaveLength(0);
+    expect(total).toBeUndefined();
+  });
+
+  it('handles malformed EntitySets gracefully', () => {
+    const { results } = parseEmailSearchResults([{ ResultSets: [{ Results: [{}] }] }]);
+    expect(results).toHaveLength(0);
   });
 });

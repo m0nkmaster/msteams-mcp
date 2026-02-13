@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
-import { searchMessages, searchChannels } from '../api/substrate-api.js';
+import { searchMessages, searchEmails, searchChannels } from '../api/substrate-api.js';
 import { getThreadMessages, getConsumptionHorizon, markAsRead } from '../api/chatsvc-api.js';
 import {
   DEFAULT_PAGE_SIZE,
@@ -38,6 +38,13 @@ export const GetThreadInputSchema = z.object({
 export const FindChannelInputSchema = z.object({
   query: z.string().min(1, 'Query cannot be empty'),
   limit: z.number().min(1).max(MAX_CHANNEL_LIMIT).optional().default(DEFAULT_CHANNEL_LIMIT),
+});
+
+export const SearchEmailInputSchema = z.object({
+  query: z.string().min(1, 'Query cannot be empty'),
+  maxResults: z.number().optional().default(DEFAULT_PAGE_SIZE),
+  from: z.number().min(0).optional().default(0),
+  size: z.number().min(1).max(MAX_PAGE_SIZE).optional().default(DEFAULT_PAGE_SIZE),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,6 +119,33 @@ const findChannelToolDefinition: Tool = {
       limit: {
         type: 'number',
         description: 'Maximum number of results (default: 10, max: 50)',
+      },
+    },
+    required: ['query'],
+  },
+};
+
+const searchEmailToolDefinition: Tool = {
+  name: 'teams_search_email',
+  description: 'Search emails in the user\'s mailbox. Returns matching emails with subject, sender, recipients, timestamp, preview, read status, and pagination info. Supports the same search operators as Outlook: from:email, to:name, subject:"text", hasattachment:true, sent:YYYY-MM-DD, sent:>=YYYY-MM-DD, sent:today, is:read, is:unread. Results sorted by recency. Uses the same authentication as Teams — no additional login required.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'Search query with optional operators. Supports: from:email, to:name, subject:"text", hasattachment:true, sent:YYYY-MM-DD, sent:>=YYYY-MM-DD, sent:today, is:read, is:unread. Plain text searches across subject and body.',
+      },
+      maxResults: {
+        type: 'number',
+        description: 'Maximum number of results to return (default: 25)',
+      },
+      from: {
+        type: 'number',
+        description: 'Starting offset for pagination (0-based, default: 0). Use this to get subsequent pages of results.',
+      },
+      size: {
+        type: 'number',
+        description: 'Page size (default: 25). Number of results per page.',
       },
     },
     required: ['query'],
@@ -224,6 +258,44 @@ async function handleGetThread(
   };
 }
 
+async function handleSearchEmail(
+  input: z.infer<typeof SearchEmailInputSchema>,
+  _ctx: ToolContext
+): Promise<ToolResult> {
+  const result = await searchEmails(input.query, {
+    maxResults: input.maxResults,
+    from: input.from,
+    size: input.size,
+  });
+
+  if (!result.ok) {
+    return { success: false, error: result.error };
+  }
+
+  return {
+    success: true,
+    data: {
+      query: input.query,
+      resultCount: result.value.results.length,
+      pagination: {
+        from: result.value.pagination.from,
+        size: result.value.pagination.size,
+        returned: result.value.pagination.returned,
+        total: result.value.pagination.total,
+        hasMore: result.value.pagination.hasMore,
+        nextFrom: result.value.pagination.hasMore
+          ? result.value.pagination.from + result.value.pagination.returned
+          : undefined,
+      },
+      ...(result.value.filteredCount ? {
+        calendarResponsesFiltered: result.value.filteredCount,
+        note: 'Calendar responses (Accepted/Declined/Tentative) were excluded. Each result includes an emailType field.',
+      } : {}),
+      results: result.value.results,
+    },
+  };
+}
+
 async function handleFindChannel(
   input: z.infer<typeof FindChannelInputSchema>,
   _ctx: ToolContext
@@ -259,5 +331,11 @@ export const findChannelTool: RegisteredTool<typeof FindChannelInputSchema> = {
   handler: handleFindChannel,
 };
 
+export const searchEmailTool: RegisteredTool<typeof SearchEmailInputSchema> = {
+  definition: searchEmailToolDefinition,
+  schema: SearchEmailInputSchema,
+  handler: handleSearchEmail,
+};
+
 /** All search-related tools. */
-export const searchTools = [searchTool, getThreadTool, findChannelTool];
+export const searchTools = [searchTool, getThreadTool, findChannelTool, searchEmailTool];

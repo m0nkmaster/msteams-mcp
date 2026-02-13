@@ -148,6 +148,7 @@ Different Teams APIs use different authentication mechanisms:
 | API | Auth Method | Module | Helper Function |
 |-----|-------------|--------|-----------------|
 | **Search** (Substrate v2/query) | JWT Bearer token from MSAL | `auth/token-extractor` | `getValidSubstrateToken()` |
+| **Email Search** (Substrate v2/query) | Same JWT as Search (contentSources: Exchange) | `auth/token-extractor` | `getValidSubstrateToken()` |
 | **People/Suggestions** (Substrate v1/suggestions) | Same JWT + `cvid`/`logicalId` fields | `auth/token-extractor` | `getValidSubstrateToken()` |
 | **Messaging** (chatsvc) | `skypetoken_asm` cookie | `auth/token-extractor` | `extractMessageAuth()` |
 | **Favorites** (csa/conversationFolders) | CSA token from MSAL + `skypetoken_asm` | `auth/token-extractor` | `extractCsaToken()` + `extractMessageAuth()` |
@@ -179,7 +180,8 @@ Session state and token cache files are protected by:
 
 | Tool | Purpose |
 |------|---------|
-| `teams_search` | Search messages with query operators, supports pagination |
+| `teams_search` | Search Teams messages with query operators, supports pagination |
+| `teams_search_email` | Search emails in user's mailbox (same Substrate token as Teams search) |
 | `teams_send_message` | Send a message to a Teams conversation (use `replyToMessageId` for thread replies) |
 | `teams_get_me` | Get current user profile (email, name, ID) |
 | `teams_get_frequent_contacts` | Get frequently contacted people (for name resolution) |
@@ -298,6 +300,7 @@ npm run typecheck     # TypeScript type checking only
 - JWT profile extraction (`parseJwtProfile`)
 - Token expiry calculations (`calculateTokenStatus`)
 - People results parsing (`parsePeopleResults`)
+- Email result parsing (`parseEmailResult`, `parseEmailSearchResults`)
 - Base64 GUID decoding (`decodeBase64Guid`)
 - User ID extraction from various formats (`extractObjectId`)
 

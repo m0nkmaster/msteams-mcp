@@ -18,7 +18,8 @@ This is a test script for verifying all MCP tools work correctly before release.
 ### Search & Discovery
 | Tool | Purpose |
 |------|---------|
-| `teams_search` | Search messages with query operators |
+| `teams_search` | Search Teams messages with query operators |
+| `teams_search_email` | Search emails in your mailbox (same auth as Teams) |
 | `teams_find_channel` | Find channels by name (your teams + org-wide) |
 | `teams_search_people` | Search for people by name or email |
 | `teams_get_frequent_contacts` | Get frequently contacted people (for name resolution) |
@@ -178,6 +179,15 @@ When reading channel messages with `teams_get_thread`:
 3. Use skipToken from response to paginate if there are more files
 ```
 
+### Search emails
+```
+1. teams_search_email query="from:sarah@company.com" → search emails from a person
+2. teams_search_email query="subject:budget sent:>=2026-01-15" → search by subject and date
+3. teams_search_email query="hasattachment:true is:unread" → unread emails with attachments
+```
+Returns: subject, sender, recipients, preview, read status, importance, attachments, and pagination.
+Uses the same Substrate token as Teams search — no additional login required.
+
 ### Get a meeting transcript
 ```
 1. teams_get_meetings startDate="past date" → find the meeting, get threadId
@@ -236,6 +246,9 @@ Quick reactions: `like` (👍), `heart` (❤️), `laugh` (😂), `surprised` (�
 
 ### Meeting transcript
 > "Get the transcript from my last standup meeting and summarise the key decisions."
+
+### Search emails
+> "Search my emails for anything from [person] about [topic] in the last week."
 
 ### People lookup
 > "Find [person name]'s contact details and check if I have any recent conversations with them."

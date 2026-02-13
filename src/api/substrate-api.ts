@@ -10,6 +10,7 @@ import { type Result, ok } from '../types/result.js';
 import { requireSubstrateTokenAsync, getTenantId, getTeamsBaseUrl, handleSubstrateError } from '../utils/auth-guards.js';
 import {
   parseSearchResults,
+  parseEmailSearchResults,
   parsePeopleResults,
   parseChannelResults,
   filterChannelsByName,
@@ -18,12 +19,20 @@ import {
   type LinkContext,
 } from '../utils/parsers.js';
 import { getMyTeamsAndChannels } from './csa-api.js';
-import type { TeamsSearchResult, SearchPaginationResult } from '../types/teams.js';
+import type { TeamsSearchResult, SearchPaginationResult, EmailSearchResult } from '../types/teams.js';
 
 /** Search result with pagination. */
 export interface SearchResult {
   results: TeamsSearchResult[];
   pagination: SearchPaginationResult;
+}
+
+/** Email search result with pagination. */
+export interface EmailSearchResultSet {
+  results: EmailSearchResult[];
+  pagination: SearchPaginationResult;
+  /** Number of calendar responses filtered out (if any). */
+  filteredCount?: number;
 }
 
 /** People search result. */
@@ -122,6 +131,112 @@ export async function searchMessages(
       total,
       hasMore: total !== undefined
         ? from + results.length < total
+        : results.length >= size,
+    },
+  });
+}
+
+/**
+ * Searches emails using the Substrate v2 query API.
+ * 
+ * Uses the same Substrate token as Teams message search — the
+ * SubstrateSearch-Internal.ReadWrite scope covers both Teams and Exchange.
+ * The key difference is entityType 'Message' with contentSources ['Exchange'].
+ */
+export async function searchEmails(
+  query: string,
+  options: { from?: number; size?: number; maxResults?: number } = {}
+): Promise<Result<EmailSearchResultSet>> {
+  const tokenResult = await requireSubstrateTokenAsync();
+  if (!tokenResult.ok) {
+    return tokenResult;
+  }
+  const token = tokenResult.value;
+
+  const from = options.from ?? 0;
+  const size = options.size ?? 25;
+
+  const cvid = crypto.randomUUID();
+  const logicalId = crypto.randomUUID();
+
+  const body = {
+    entityRequests: [{
+      entityType: 'Message',
+      contentSources: ['Exchange'],
+      propertySet: 'Optimized',
+      fields: [
+        'Subject',
+        'From',
+        'ToRecipients',
+        'CcRecipients',
+        'DisplayTo',
+        'DisplayCc',
+        'DateTimeReceived',
+        'DateTimeSent',
+        'HasAttachments',
+        'Importance',
+        'IsRead',
+        'Preview',
+        'WebLink',
+        'ConversationId',
+        'FromAddress',
+        'SenderSmtpAddress',
+      ],
+      query: {
+        queryString: query,
+        displayQueryString: query,
+      },
+      from,
+      size,
+      topResultsCount: 5,
+    }],
+    QueryAlterationOptions: {
+      EnableAlteration: true,
+      EnableSuggestion: true,
+      SupportedRecourseDisplayTypes: ['Suggestion'],
+    },
+    cvid,
+    logicalId,
+    scenario: {
+      Dimensions: [
+        { DimensionName: 'QueryType', DimensionValue: 'Mail' },
+        { DimensionName: 'FormFactor', DimensionValue: 'general.web.reactSearch' },
+      ],
+      Name: 'powerbar',
+    },
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+
+  const response = await httpRequest<Record<string, unknown>>(
+    SUBSTRATE_API.search,
+    {
+      method: 'POST',
+      headers: getBearerHeaders(token),
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    return handleSubstrateError(response);
+  }
+
+  const data = response.value.data;
+  const entitySets = Array.isArray(data.EntitySets) ? data.EntitySets : undefined;
+  const { results, total, filteredCount } = parseEmailSearchResults(entitySets);
+
+  const maxResults = options.maxResults ?? size;
+  const limitedResults = results.slice(0, maxResults);
+
+  return ok({
+    results: limitedResults,
+    filteredCount,
+    pagination: {
+      from,
+      size,
+      returned: limitedResults.length,
+      total,
+      hasMore: total !== undefined
+        ? from + size < total
         : results.length >= size,
     },
   });
