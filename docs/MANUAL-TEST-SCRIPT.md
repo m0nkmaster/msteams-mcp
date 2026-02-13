@@ -57,6 +57,11 @@ This is a test script for verifying all MCP tools work correctly before release.
 | `teams_remove_reaction` | Remove an emoji reaction from a message |
 | `teams_search_emoji` | Search for emojis by name (standard + custom org emojis) |
 
+### Files
+| Tool | Purpose |
+|------|---------|
+| `teams_get_shared_files` | Get files/links shared in a conversation (channels, chats, meetings) |
+
 ### Calendar & Meetings
 | Tool | Purpose |
 |------|---------|
@@ -164,6 +169,13 @@ When reading channel messages with `teams_get_thread`:
 ```
 1. teams_get_followed_threads → get list of threads you're following
 2. teams_get_thread conversationId="sourceConversationId" → read thread content
+```
+
+### Get shared files from a conversation
+```
+1. teams_get_favorites or teams_find_channel → get a conversationId
+2. teams_get_shared_files conversationId="..." → list files with names, URLs, sizes, who shared them
+3. Use skipToken from response to paginate if there are more files
 ```
 
 ### Get a meeting transcript
