@@ -26,7 +26,7 @@ Teams uses multiple authentication mechanisms depending on the API surface:
 
 | Auth Type | Header | Source | Used By |
 |-----------|--------|--------|---------|
-| **Bearer (Substrate)** | `Authorization: Bearer {token}` | MSAL localStorage, `SubstrateSearch-Internal.ReadWrite` scope | Search, People |
+| **Bearer (Substrate)** | `Authorization: Bearer {token}` | MSAL localStorage, `SubstrateSearch-Internal.ReadWrite` scope | Search, Email Search, People |
 | **Bearer (CSA)** | `Authorization: Bearer {csaToken}` | MSAL, `chatsvcagg.teams.microsoft.com` audience | Teams list, Favorites |
 | **Bearer (Spaces)** | `Authorization: Bearer {spacesToken}` | MSAL, `api.spaces.skype.com` audience | Calendar/Meetings |
 | **Skype Token** | `Authentication: skypetoken={token}` | Cookie `skypetoken_asm` | Messaging, Threads, Calendar |
@@ -275,6 +275,138 @@ API URLs include regional identifiers based on the user's tenant location:
 "Macdonald, Rob"              # Find mentions of you
 "Macdonald, Rob" from:diego   # Mentions from a specific person
 ```
+
+---
+
+### Email Search
+
+**Endpoint:** `POST https://substrate.office.com/searchservice/api/v2/query`
+
+**Auth:** Bearer (Substrate) — same token as Teams message search
+
+Uses the same Substrate v2 query endpoint as Teams message search, but with `contentSources: ["Exchange"]` instead of `["Teams"]` and `QueryType: "Mail"` in the scenario dimensions.
+
+**Request:**
+```json
+{
+  "entityRequests": [
+    {
+      "entityType": "Message",
+      "contentSources": ["Exchange"],
+      "fields": [
+        "Subject",
+        "From",
+        "ToRecipients",
+        "CcRecipients",
+        "DisplayTo",
+        "DisplayCc",
+        "DateTimeReceived",
+        "DateTimeSent",
+        "HasAttachments",
+        "Importance",
+        "IsRead",
+        "Preview",
+        "WebLink",
+        "ConversationId",
+        "FromAddress",
+        "SenderSmtpAddress"
+      ],
+      "propertySet": "Optimized",
+      "query": {
+        "queryString": "search term",
+        "displayQueryString": "search term"
+      },
+      "from": 0,
+      "size": 25,
+      "topResultsCount": 5
+    }
+  ],
+  "QueryAlterationOptions": {
+    "EnableAlteration": true,
+    "EnableSuggestion": true,
+    "SupportedRecourseDisplayTypes": ["Suggestion"]
+  },
+  "cvid": "uuid",
+  "logicalId": "uuid",
+  "scenario": {
+    "Dimensions": [
+      {"DimensionName": "QueryType", "DimensionValue": "Mail"},
+      {"DimensionName": "FormFactor", "DimensionValue": "general.web.reactSearch"}
+    ],
+    "Name": "powerbar"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "EntitySets": [
+    {
+      "ResultSets": [
+        {
+          "Total": 2973,
+          "Results": [
+            {
+              "Id": "AAMkAGU5NDVj...",
+              "Subject": "Q3 Budget Review",
+              "HitHighlightedSummary": "Please review the attached <c0>budget</c0> spreadsheet",
+              "Source": {
+                "Subject": "Q3 Budget Review",
+                "From": {
+                  "EmailAddress": {
+                    "Name": "Smith, John",
+                    "Address": "john.smith@company.com"
+                  }
+                },
+                "DateTimeReceived": "2026-01-20T14:30:00.000Z",
+                "HasAttachments": true,
+                "Importance": "Normal",
+                "IsRead": true,
+                "DisplayTo": "Jane Doe; Rob MacDonald",
+                "DisplayCc": "Finance Team",
+                "WebLink": "https://outlook.office.com/mail/id/AAMkAGU5NDVj...",
+                "ConversationId": {
+                  "Id": "AAQkAGU5NDVjNjAz..."
+                },
+                "Preview": "Please review the attached budget spreadsheet for Q3"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Key Differences from Teams Message Search:**
+
+| Aspect | Teams Messages | Email |
+|--------|---------------|-------|
+| `contentSources` | `["Teams"]` | `["Exchange"]` |
+| `QueryType` dimension | `"Messages"` | `"Mail"` |
+| `Subject` field | Not present (in content) | Top-level and in `Source` |
+| `From` field | String or `{EmailAddress: {Name, Address}}` | Same formats |
+| `ConversationId` | String (Teams thread ID) | Object `{Id: "..."}` (email thread) |
+| `IsRead` | Not present | Boolean |
+| `Importance` | Not present | `"Normal"`, `"High"`, `"Low"` |
+| `DisplayTo`/`DisplayCc` | Not present | Semicolon-separated recipient names |
+| `ToRecipients`/`CcRecipients` | Not present | Array of `{EmailAddress: {Name, Address}}` |
+
+**Search Operators:**
+
+| Operator | Example | Description |
+|----------|---------|-------------|
+| `from:` | `from:john@company.com` | Emails from a person |
+| `to:` | `to:jane` | Emails sent to a person |
+| `subject:` | `subject:"budget review"` | By subject line |
+| `sent:` | `sent:2026-01-20`, `sent:>=2026-01-15` | By date |
+| `hasattachment:true` | - | Emails with attachments |
+| `is:read` / `is:unread` | - | By read status |
+| `NOT` | `NOT from:user@co.com` | Exclude results |
+
+**Pagination:** Same as Teams message search — `from`, `size`, and `Total` in response.
 
 ---
 

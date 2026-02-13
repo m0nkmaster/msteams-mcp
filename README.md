@@ -74,7 +74,8 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 
 | Tool | Description |
 |------|-------------|
-| `teams_search` | Search messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.) |
+| `teams_search` | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.) |
+| `teams_search_email` | Search emails in your mailbox (same auth as Teams — no extra login) |
 | `teams_get_thread` | Get messages from a conversation/thread |
 | `teams_find_channel` | Find channels by name (your teams + org-wide discovery) |
 | `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications) |
@@ -147,15 +148,17 @@ Returns both files (name, extension, URL, size) and links (URL, title), along wi
 
 ### Search Operators
 
-The search supports Teams' native operators:
+Both `teams_search` (Teams messages) and `teams_search_email` (emails) support native operators:
 
 ```
-from:sarah@company.com     # Messages from person
-sent:2026-01-20            # Messages from specific date
-sent:>=2026-01-15          # Messages since date
-in:project-alpha           # Messages in channel
+from:sarah@company.com     # Messages/emails from person
+sent:2026-01-20            # From specific date
+sent:>=2026-01-15          # Since date
+in:project-alpha           # Messages in channel (Teams only)
+subject:"budget"           # By subject (email)
 "Rob Smith"                # Find @mentions (name in quotes)
-hasattachment:true         # Messages with files
+hasattachment:true         # With files
+is:unread                  # Unread emails (email only)
 NOT from:email@co.com      # Exclude results
 ```
 
@@ -184,6 +187,9 @@ npm run cli -- status
 # Search messages
 npm run cli -- search "meeting notes"
 npm run cli -- search "project" --from 0 --size 50
+
+# Search emails
+npm run cli -- teams_search_email --query "from:sarah@company.com"
 
 # Send messages (default: your own notes/self-chat)
 npm run cli -- send "Hello from Teams MCP!"

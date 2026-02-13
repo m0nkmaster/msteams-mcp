@@ -38,4 +38,39 @@ export interface SearchPaginationResult {
   hasMore: boolean;
 }
 
+/** Classification of an email result. */
+export type EmailType = 'email' | 'calendar-response' | 'notification';
 
+/** An email search result from Substrate. */
+export interface EmailSearchResult {
+  /** Unique ID for this result. */
+  id: string;
+  /** Classification: 'email', 'calendar-response', or 'notification'. */
+  emailType: EmailType;
+  /** Email subject line. */
+  subject: string;
+  /** Sender display name. */
+  sender: string;
+  /** Sender email address. */
+  senderEmail?: string;
+  /** Preview/snippet of the email body (HTML stripped). */
+  preview: string;
+  /** When the email was received (ISO timestamp). */
+  receivedAt?: string;
+  /** Whether the email has attachments. */
+  hasAttachments?: boolean;
+  /** Importance level (Normal, High, Low). */
+  importance?: string;
+  /** Whether the email has been read. */
+  isRead?: boolean;
+  /** To recipients (display names or emails). */
+  toRecipients?: string[];
+  /** CC recipients (display names or emails). */
+  ccRecipients?: string[];
+  /** Web link to open the email in Outlook. */
+  webLink?: string;
+  /** The conversation/thread ID for this email chain. */
+  conversationId?: string;
+  /** Links extracted from email body. */
+  links?: ExtractedLink[];
+}
