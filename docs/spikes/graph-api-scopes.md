@@ -1,4 +1,6 @@
-# Drop Internal APIs — Move to Graph + Outlook REST
+# [SPIKE] Drop Internal APIs — Move to Graph + Outlook REST
+
+> **Status: Investigation only.** This documents findings from testing Microsoft Graph API scopes. The current architecture still uses Substrate/chatsvc/Skype internal APIs.
 
 Migrate from Substrate/chatsvc/Skype internal APIs to Microsoft Graph + Outlook REST, using `outlook.office.com` SSO (client ID `9199bf20-a13f-4107-85dc-02114787ef48`) which gives `Chat.Read` + `Chat.ReadWrite` on Graph.
 

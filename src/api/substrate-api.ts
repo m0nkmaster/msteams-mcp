@@ -221,9 +221,8 @@ export async function searchEmails(
   }
 
   const data = response.value.data;
-  const { results, total, filteredCount } = parseEmailSearchResults(
-    data.EntitySets as unknown[] | undefined,
-  );
+  const entitySets = Array.isArray(data.EntitySets) ? data.EntitySets : undefined;
+  const { results, total, filteredCount } = parseEmailSearchResults(entitySets);
 
   const maxResults = options.maxResults ?? size;
   const limitedResults = results.slice(0, maxResults);
@@ -237,7 +236,7 @@ export async function searchEmails(
       returned: limitedResults.length,
       total,
       hasMore: total !== undefined
-        ? from + results.length < total
+        ? from + size < total
         : results.length >= size,
     },
   });

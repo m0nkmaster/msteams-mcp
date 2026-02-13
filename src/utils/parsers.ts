@@ -590,11 +590,12 @@ export function parseEmailResult(item: Record<string, unknown>): EmailSearchResu
     || undefined;
 
   // Attachments
-  const hasAttachments = typeof source?.HasAttachments === 'boolean'
-    ? source.HasAttachments
-    : typeof source?.HasAttachment === 'boolean'
-      ? source.HasAttachment
-      : undefined;
+  let hasAttachments: boolean | undefined;
+  if (typeof source?.HasAttachments === 'boolean') {
+    hasAttachments = source.HasAttachments;
+  } else if (typeof source?.HasAttachment === 'boolean') {
+    hasAttachments = source.HasAttachment;
+  }
 
   // Importance
   const importance = source?.Importance as string || undefined;
@@ -667,15 +668,16 @@ function parseRecipients(recipients: unknown): string[] | undefined {
       if (emailAddress) {
         const name = emailAddress.Name as string;
         const address = emailAddress.Address as string;
-        parsed.push(name || address || '');
+        const display = name || address;
+        if (display) parsed.push(display);
       } else {
         const name = recipient.Name as string || recipient.DisplayName as string;
         const address = recipient.Address as string || recipient.EmailAddress as string;
-        parsed.push(name || address || '');
+        const display = name || address;
+        if (display) parsed.push(display);
       }
     }
-    const filtered = parsed.filter(Boolean);
-    return filtered.length > 0 ? filtered : undefined;
+    return parsed.length > 0 ? parsed : undefined;
   }
 
   return undefined;
