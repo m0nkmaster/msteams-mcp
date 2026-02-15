@@ -26,6 +26,7 @@ import {
   clearTokenCache,
 } from './token-extractor.js';
 import { refreshTokensViaHttp } from './token-refresh-http.js';
+import * as log from '../utils/logger.js';
 
 /** Result of a successful token refresh. */
 export interface TokenRefreshResult {
@@ -78,7 +79,7 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
     const httpResult = await refreshTokensViaHttp();
 
     if (httpResult.ok) {
-      console.error(`[token-refresh] HTTP refresh succeeded: ${httpResult.value.tokensRefreshed} tokens refreshed` +
+      log.info('token-refresh', `HTTP refresh succeeded: ${httpResult.value.tokensRefreshed} tokens refreshed` +
         (httpResult.value.skypeTokenRefreshed ? ', skype token refreshed' : '') +
         (httpResult.value.refreshTokenRotated ? ', refresh token rotated' : ''));
 
@@ -100,15 +101,15 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
       }
 
       // HTTP refresh reported success but we can't extract a valid token — fall through
-      console.error('[token-refresh] HTTP refresh reported success but no valid Substrate token found, falling back to browser');
+      log.warn('token-refresh', 'HTTP refresh reported success but no valid Substrate token found, falling back to browser');
     } else {
-      console.error(`[token-refresh] HTTP refresh failed: ${httpResult.error.message}, falling back to browser`);
+      log.warn('token-refresh', `HTTP refresh failed: ${httpResult.error.message}, falling back to browser`);
 
       // If the error is definitively an auth error (expired refresh token),
       // don't bother with browser fallback — it won't help either
       if (httpResult.error.code === ErrorCode.AUTH_EXPIRED) {
         // Still try browser — the persistent profile's session cookies may work
-        console.error('[token-refresh] Auth expired, but trying browser fallback (session cookies may still be valid)');
+        log.info('token-refresh', 'Auth expired, but trying browser fallback (session cookies may still be valid)');
       }
     }
 
@@ -145,7 +146,7 @@ async function refreshTokensViaBrowserImpl(
     // headless: true to fail fast if user interaction is required
     await ensureAuthenticated(manager.page, manager.context, (msg) => {
       // Silent logging for headless refresh
-      console.log(`[token-refresh] ${msg}`);
+      log.debug('token-refresh', msg);
     }, false, true);
 
     // Close browser (ensureAuthenticated already saved the session)

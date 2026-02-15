@@ -16,6 +16,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { encrypt, decrypt, isEncrypted } from './crypto.js';
 import { SESSION_EXPIRY_HOURS } from '../constants.js';
+import * as log from '../utils/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -90,10 +91,7 @@ function migrateIfNeeded(legacyPath: string, newPath: string): void {
       fs.unlinkSync(legacyPath);
     } catch (error) {
       // Log migration errors for debugging, but continue - will just create new session
-      console.error(
-        `Failed to migrate ${path.basename(legacyPath)}:`,
-        error instanceof Error ? error.message : error
-      );
+      log.warn('session-store', `Failed to migrate ${path.basename(legacyPath)}: ${error instanceof Error ? error.message : error}`);
     }
   }
 }
@@ -170,7 +168,7 @@ function readSecure<T>(filePath: string): T | null {
 
   } catch (error) {
     // If decryption fails (different machine, corrupted), return null
-    console.error(`Failed to read ${filePath}:`, error instanceof Error ? error.message : error);
+    log.error('session-store', `Failed to read ${filePath}: ${error instanceof Error ? error.message : error}`);
     return null;
   }
 }

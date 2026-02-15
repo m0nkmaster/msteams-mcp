@@ -208,16 +208,16 @@ Test the server through the actual MCP protocol:
 
 ```bash
 # List available tools
-npm run test:mcp
+npm run cli
 
 # Call any tool
-npm run test:mcp -- search "your query"
-npm run test:mcp -- status
-npm run test:mcp -- people "john smith"
-npm run test:mcp -- favorites
-npm run test:mcp -- activity              # Get activity feed
-npm run test:mcp -- unread                # Check unread counts
-npm run test:mcp -- teams_search_emoji --query "heart"  # Search emojis
+npm run cli -- search "your query"
+npm run cli -- status
+npm run cli -- people "john smith"
+npm run cli -- favorites
+npm run cli -- activity              # Get activity feed
+npm run cli -- unread                # Check unread counts
+npm run cli -- teams_search_emoji --query "heart"  # Search emojis
 ```
 
 ## Limitations
@@ -235,7 +235,7 @@ Session files are stored in a user config directory (encrypted):
 - **macOS/Linux**: `~/.teams-mcp-server/`
 - **Windows**: `%APPDATA%\teams-mcp-server\`
 
-Contents: `session-state.json`, `token-cache.json`, `.user-data/`
+Contents: `session-state.json`, `token-cache.json`, `browser-profile/`
 
 If your session expires, call `teams_login` or delete the config directory.
 

@@ -30,6 +30,7 @@ import {
 import { clearTokenCache } from './token-extractor.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
+import * as log from '../utils/logger.js';
 
 // ============================================================================
 // Types
@@ -620,7 +621,7 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
         ));
       }
       // For other errors (network, timeout), log and continue with remaining scopes
-      console.error(`[token-refresh-http] Failed to refresh ${scope.resource}: ${result.error.message}`);
+      log.warn('token-refresh-http', `Failed to refresh ${scope.resource}: ${result.error.message}`);
       scopeErrors.push(`${scope.resource}: ${result.error.message}`);
       continue;
     }
@@ -676,7 +677,7 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
       updateAuthTokenCookie(state, skypeSpacesToken, skypeSpacesExpiresIn ?? 3600);
       skypeTokenRefreshed = true;
     } else {
-      console.error(`[token-refresh-http] Skype token exchange failed: ${skypeResult.error.message}`);
+      log.warn('token-refresh-http', `Skype token exchange failed: ${skypeResult.error.message}`);
     }
   }
 

@@ -690,24 +690,29 @@ async function handleGetUnread(
   }> = [];
 
   let totalUnread = 0;
-  let checkedCount = 0;
   let errorCount = 0;
 
-  // Check unread status for each favourite (limit to prevent timeout)
+  // Check unread status for each favourite in parallel (limit to prevent timeout)
   const maxToCheck = MAX_UNREAD_AGGREGATE_CHECK;
-  for (const fav of favorites.slice(0, maxToCheck)) {
-    const unreadResult = await getUnreadStatus(fav.conversationId);
-    checkedCount++;
+  const favsToCheck = favorites.slice(0, maxToCheck);
+  const results = await Promise.allSettled(
+    favsToCheck.map(fav => getUnreadStatus(fav.conversationId))
+  );
 
-    if (unreadResult.ok) {
-      if (unreadResult.value.unreadCount > 0) {
+  const checkedCount = results.length;
+  for (let i = 0; i < results.length; i++) {
+    const settled = results[i];
+    const fav = favsToCheck[i];
+
+    if (settled.status === 'fulfilled' && settled.value.ok) {
+      if (settled.value.value.unreadCount > 0) {
         conversations.push({
           conversationId: fav.conversationId,
           displayName: fav.displayName,
           conversationType: fav.conversationType,
-          unreadCount: unreadResult.value.unreadCount,
+          unreadCount: settled.value.value.unreadCount,
         });
-        totalUnread += unreadResult.value.unreadCount;
+        totalUnread += settled.value.value.unreadCount;
       }
     } else {
       errorCount++;

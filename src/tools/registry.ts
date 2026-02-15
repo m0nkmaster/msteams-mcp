@@ -5,7 +5,15 @@
  */
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { z } from 'zod';
+import type { ToolContext, ToolResult } from './index.js';
+
+/** Type-erased tool entry for the registry — avoids generic variance issues. */
+interface RegistryEntry {
+  definition: Tool;
+  schema: z.ZodTypeAny;
+  handler: (input: z.output<z.ZodTypeAny>, ctx: ToolContext) => Promise<ToolResult>;
+}
 
 import { searchTools } from './search-tools.js';
 import { messageTools } from './message-tools.js';
@@ -19,8 +27,7 @@ import { fileTools } from './file-tools.js';
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** All registered tools (cast to base type for registry). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const allTools: RegisteredTool<any>[] = [
+const allTools: RegistryEntry[] = [
   ...searchTools,
   ...messageTools,
   ...peopleTools,
@@ -30,8 +37,7 @@ const allTools: RegisteredTool<any>[] = [
 ];
 
 /** Lookup map for tools by name. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const toolsByName = new Map<string, RegisteredTool<any>>(
+const toolsByName = new Map<string, RegistryEntry>(
   allTools.map(tool => [tool.definition.name, tool])
 );
 
@@ -49,8 +55,7 @@ export function getToolDefinitions(): Tool[] {
 /**
  * Gets a tool by name.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function getTool(name: string): RegisteredTool<any> | undefined {
+export function getTool(name: string): RegistryEntry | undefined {
   return toolsByName.get(name);
 }
 

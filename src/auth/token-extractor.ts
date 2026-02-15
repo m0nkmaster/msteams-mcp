@@ -55,16 +55,32 @@ function isJwtToken(value: unknown): value is string {
 // Session Helpers
 // ============================================================================
 
+/** localStorage entry from Teams origin. */
+type LocalStorageEntry = { name: string; value: string };
+
 /**
  * Resolves session state and Teams origin in one call.
  * Many functions need both, so this reduces boilerplate.
  */
-function getTeamsLocalStorage(state?: SessionState): Array<{ name: string; value: string }> | null {
+function getTeamsLocalStorage(state?: SessionState): LocalStorageEntry[] | null {
   const sessionState = state ?? readSessionState();
   if (!sessionState) return null;
 
   const teamsOrigin = getTeamsOrigin(sessionState);
   return teamsOrigin?.localStorage ?? null;
+}
+
+/**
+ * Runs a function with the Teams localStorage entries, returning null if unavailable.
+ * Eliminates the repeated `getTeamsLocalStorage(state); if (!localStorage) return null;` pattern.
+ */
+function withLocalStorage<T>(
+  state: SessionState | undefined,
+  fn: (localStorage: LocalStorageEntry[]) => T | null
+): T | null {
+  const localStorage = getTeamsLocalStorage(state);
+  if (!localStorage) return null;
+  return fn(localStorage);
 }
 
 // ============================================================================
@@ -100,41 +116,40 @@ export interface MessageAuthInfo {
  * This token is used for search and people APIs.
  */
 export function extractSubstrateToken(state?: SessionState): SubstrateTokenInfo | null {
-  const localStorage = getTeamsLocalStorage(state);
-  if (!localStorage) return null;
+  return withLocalStorage(state, (localStorage) => {
+    // Collect all valid Substrate tokens and pick the one with longest expiry
+    let bestToken: SubstrateTokenInfo | null = null;
 
-  // Collect all valid Substrate tokens and pick the one with longest expiry
-  let bestToken: SubstrateTokenInfo | null = null;
+    for (const item of localStorage) {
+      try {
+        const entry = JSON.parse(item.value);
+        
+        // Look for Substrate search tokens by target scope
+        // Match both old format (substrate.office.com/search/SubstrateSearch)
+        // and new format (substrate.office.com/SubstrateSearch-Internal.ReadWrite)
+        const target = entry.target as string | undefined;
+        if (!target?.includes('substrate.office.com')) continue;
+        if (!target.includes('SubstrateSearch')) continue;
 
-  for (const item of localStorage) {
-    try {
-      const entry = JSON.parse(item.value);
-      
-      // Look for Substrate search tokens by target scope
-      // Match both old format (substrate.office.com/search/SubstrateSearch)
-      // and new format (substrate.office.com/SubstrateSearch-Internal.ReadWrite)
-      const target = entry.target as string | undefined;
-      if (!target?.includes('substrate.office.com')) continue;
-      if (!target.includes('SubstrateSearch')) continue;
+        if (!isJwtToken(entry.secret)) continue;
 
-      if (!isJwtToken(entry.secret)) continue;
+        const expiry = getJwtExpiry(entry.secret);
+        if (!expiry) continue;
 
-      const expiry = getJwtExpiry(entry.secret);
-      if (!expiry) continue;
+        // Skip expired tokens
+        if (expiry.getTime() <= Date.now()) continue;
 
-      // Skip expired tokens
-      if (expiry.getTime() <= Date.now()) continue;
-
-      // Keep the token with longest remaining validity
-      if (!bestToken || expiry.getTime() > bestToken.expiry.getTime()) {
-        bestToken = { token: entry.secret, expiry };
+        // Keep the token with longest remaining validity
+        if (!bestToken || expiry.getTime() > bestToken.expiry.getTime()) {
+          bestToken = { token: entry.secret, expiry };
+        }
+      } catch {
+        continue;
       }
-    } catch {
-      continue;
     }
-  }
 
-  return bestToken;
+    return bestToken;
+  });
 }
 
 // ============================================================================
@@ -216,55 +231,54 @@ interface TokenCandidate {
  * 2. api.spaces.skype.com (fallback)
  */
 export function extractTeamsToken(state?: SessionState): TeamsTokenInfo | null {
-  const localStorage = getTeamsLocalStorage(state);
-  if (!localStorage) return null;
+  return withLocalStorage(state, (localStorage) => {
+    let chatsvcCandidate: TokenCandidate | null = null;
+    let skypeCandidate: TokenCandidate | null = null;
+    let userMri: string | null = null;
 
-  let chatsvcCandidate: TokenCandidate | null = null;
-  let skypeCandidate: TokenCandidate | null = null;
-  let userMri: string | null = null;
+    for (const item of localStorage) {
+      try {
+        const entry = JSON.parse(item.value);
+        if (!entry.target || !isJwtToken(entry.secret)) continue;
 
-  for (const item of localStorage) {
-    try {
-      const entry = JSON.parse(item.value);
-      if (!entry.target || !isJwtToken(entry.secret)) continue;
+        const payload = decodeJwtPayload(entry.secret);
+        if (!payload?.exp || typeof payload.exp !== 'number') continue;
 
-      const payload = decodeJwtPayload(entry.secret);
-      if (!payload?.exp || typeof payload.exp !== 'number') continue;
+        const expiry = new Date(payload.exp * 1000);
 
-      const expiry = new Date(payload.exp * 1000);
-
-      // Capture user MRI from any token's oid claim
-      if (typeof payload.oid === 'string' && !userMri) {
-        userMri = `${MRI_ORGID_PREFIX}${payload.oid}`;
-      }
-
-      // Track best candidate for each service
-      if (entry.target.includes('chatsvcagg.teams.microsoft.com')) {
-        if (!chatsvcCandidate || expiry > chatsvcCandidate.expiry) {
-          chatsvcCandidate = { token: entry.secret, expiry };
+        // Capture user MRI from any token's oid claim
+        if (typeof payload.oid === 'string' && !userMri) {
+          userMri = `${MRI_ORGID_PREFIX}${payload.oid}`;
         }
-      } else if (entry.target.includes('api.spaces.skype.com')) {
-        if (!skypeCandidate || expiry > skypeCandidate.expiry) {
-          skypeCandidate = { token: entry.secret, expiry };
+
+        // Track best candidate for each service
+        if (entry.target.includes('chatsvcagg.teams.microsoft.com')) {
+          if (!chatsvcCandidate || expiry > chatsvcCandidate.expiry) {
+            chatsvcCandidate = { token: entry.secret, expiry };
+          }
+        } else if (entry.target.includes('api.spaces.skype.com')) {
+          if (!skypeCandidate || expiry > skypeCandidate.expiry) {
+            skypeCandidate = { token: entry.secret, expiry };
+          }
         }
+      } catch {
+        continue;
       }
-    } catch {
-      continue;
     }
-  }
 
-  // Fallback: extract userMri from Substrate token if not found
-  if (!userMri) {
-    userMri = extractUserMriFromSubstrate(state);
-  }
+    // Fallback: extract userMri from Substrate token if not found
+    if (!userMri) {
+      userMri = extractUserMriFromSubstrate(state);
+    }
 
-  // Prefer chatsvc, fall back to skype
-  const best = chatsvcCandidate ?? skypeCandidate;
-  if (!best || !userMri || best.expiry.getTime() <= Date.now()) {
-    return null;
-  }
+    // Prefer chatsvc, fall back to skype
+    const best = chatsvcCandidate ?? skypeCandidate;
+    if (!best || !userMri || best.expiry.getTime() <= Date.now()) {
+      return null;
+    }
 
-  return { token: best.token, expiry: best.expiry, userMri };
+    return { token: best.token, expiry: best.expiry, userMri };
+  });
 }
 
 /**
@@ -274,37 +288,36 @@ export function extractTeamsToken(state?: SessionState): TeamsTokenInfo | null {
  * It has scope: https://api.spaces.skype.com/Authorization.ReadWrite
  */
 export function extractSkypeSpacesToken(state?: SessionState): string | null {
-  const localStorage = getTeamsLocalStorage(state);
-  if (!localStorage) return null;
+  return withLocalStorage(state, (localStorage) => {
+    let bestCandidate: { token: string; expiry: Date } | null = null;
 
-  let bestCandidate: { token: string; expiry: Date } | null = null;
+    for (const item of localStorage) {
+      try {
+        const entry = JSON.parse(item.value);
+        if (!entry.target || !isJwtToken(entry.secret)) continue;
 
-  for (const item of localStorage) {
-    try {
-      const entry = JSON.parse(item.value);
-      if (!entry.target || !isJwtToken(entry.secret)) continue;
+        // Look for api.spaces.skype.com token
+        if (!entry.target.includes('api.spaces.skype.com')) continue;
 
-      // Look for api.spaces.skype.com token
-      if (!entry.target.includes('api.spaces.skype.com')) continue;
+        const payload = decodeJwtPayload(entry.secret);
+        if (!payload?.exp || typeof payload.exp !== 'number') continue;
 
-      const payload = decodeJwtPayload(entry.secret);
-      if (!payload?.exp || typeof payload.exp !== 'number') continue;
+        const expiry = new Date(payload.exp * 1000);
+        
+        // Skip expired tokens
+        if (expiry.getTime() <= Date.now()) continue;
 
-      const expiry = new Date(payload.exp * 1000);
-      
-      // Skip expired tokens
-      if (expiry.getTime() <= Date.now()) continue;
-
-      // Keep the one with the latest expiry
-      if (!bestCandidate || expiry > bestCandidate.expiry) {
-        bestCandidate = { token: entry.secret, expiry };
+        // Keep the one with the latest expiry
+        if (!bestCandidate || expiry > bestCandidate.expiry) {
+          bestCandidate = { token: entry.secret, expiry };
+        }
+      } catch {
+        continue;
       }
-    } catch {
-      continue;
     }
-  }
 
-  return bestCandidate?.token ?? null;
+    return bestCandidate?.token ?? null;
+  });
 }
 
 /** Region configuration from Teams discovery. */
@@ -350,73 +363,72 @@ export interface RegionConfig {
  * base URLs (e.g., teams.microsoft.us).
  */
 export function extractRegionConfig(state?: SessionState): RegionConfig | null {
-  const localStorage = getTeamsLocalStorage(state);
-  if (!localStorage) return null;
+  return withLocalStorage(state, (localStorage) => {
+    // Find the DISCOVER-REGION-GTM key
+    for (const item of localStorage) {
+      if (!item.name.includes('DISCOVER-REGION-GTM')) continue;
 
-  // Find the DISCOVER-REGION-GTM key
-  for (const item of localStorage) {
-    if (!item.name.includes('DISCOVER-REGION-GTM')) continue;
-
-    try {
-      const data = JSON.parse(item.value) as { item?: Record<string, string> };
-      const middleTierUrl = data.item?.middleTier;
-      const chatServiceUrl = data.item?.chatServiceAfd;
-      const csaServiceUrl = data.item?.chatSvcAggAfd;
-      
-      if (!chatServiceUrl) continue;
-
-      // Extract Teams base URL from any of the URLs (chatServiceAfd is reliable)
-      let teamsBaseUrl = 'https://teams.microsoft.com'; // fallback
       try {
-        const url = new URL(chatServiceUrl);
-        teamsBaseUrl = `${url.protocol}//${url.host}`;
-      } catch {
-        // Use fallback
-      }
+        const data = JSON.parse(item.value) as { item?: Record<string, string> };
+        const middleTierUrl = data.item?.middleTier;
+        const chatServiceUrl = data.item?.chatServiceAfd;
+        const csaServiceUrl = data.item?.chatSvcAggAfd;
+        
+        if (!chatServiceUrl) continue;
 
-      // Extract region from chatServiceAfd (e.g., /api/chatsvc/amer or /api/chatsvc/uk)
-      const chatMatch = chatServiceUrl.match(/\/api\/chatsvc\/([a-z]+)$/);
-      if (!chatMatch) continue;
-      const region = chatMatch[1];
+        // Extract Teams base URL from any of the URLs (chatServiceAfd is reliable)
+        let teamsBaseUrl = 'https://teams.microsoft.com'; // fallback
+        try {
+          const url = new URL(chatServiceUrl);
+          teamsBaseUrl = `${url.protocol}//${url.host}`;
+        } catch {
+          // Use fallback
+        }
 
-      // Try to extract partition from middleTier if it's partitioned
-      // Format: /api/mt/part/amer-02 (partitioned) or /api/mt/emea (non-partitioned)
-      let partition: string | undefined;
-      let regionPartition: string | undefined;
-      let hasPartition = false;
-      
-      if (middleTierUrl) {
-        const partitionMatch = middleTierUrl.match(/\/api\/mt\/part\/([a-z]+)-(\d+)$/);
-        if (partitionMatch) {
-          hasPartition = true;
-          partition = partitionMatch[2];
-          regionPartition = `${partitionMatch[1]}-${partition}`;
-        } else {
-          // Non-partitioned format: /api/mt/emea
-          const simpleMatch = middleTierUrl.match(/\/api\/mt\/([a-z]+)$/);
-          if (simpleMatch) {
-            // No partition - calendar API uses non-partitioned URL
-            regionPartition = simpleMatch[1];
+        // Extract region from chatServiceAfd (e.g., /api/chatsvc/amer or /api/chatsvc/uk)
+        const chatMatch = chatServiceUrl.match(/\/api\/chatsvc\/([a-z]+)$/);
+        if (!chatMatch) continue;
+        const region = chatMatch[1];
+
+        // Try to extract partition from middleTier if it's partitioned
+        // Format: /api/mt/part/amer-02 (partitioned) or /api/mt/emea (non-partitioned)
+        let partition: string | undefined;
+        let regionPartition: string | undefined;
+        let hasPartition = false;
+        
+        if (middleTierUrl) {
+          const partitionMatch = middleTierUrl.match(/\/api\/mt\/part\/([a-z]+)-(\d+)$/);
+          if (partitionMatch) {
+            hasPartition = true;
+            partition = partitionMatch[2];
+            regionPartition = `${partitionMatch[1]}-${partition}`;
+          } else {
+            // Non-partitioned format: /api/mt/emea
+            const simpleMatch = middleTierUrl.match(/\/api\/mt\/([a-z]+)$/);
+            if (simpleMatch) {
+              // No partition - calendar API uses non-partitioned URL
+              regionPartition = simpleMatch[1];
+            }
           }
         }
+
+        return {
+          region,
+          partition: partition ?? '',
+          regionPartition: regionPartition ?? region,
+          hasPartition,
+          middleTierUrl: middleTierUrl ?? '',
+          chatServiceUrl,
+          csaServiceUrl: csaServiceUrl ?? `${teamsBaseUrl}/api/csa/${region}`,
+          teamsBaseUrl,
+        };
+      } catch {
+        continue;
       }
-
-      return {
-        region,
-        partition: partition ?? '',
-        regionPartition: regionPartition ?? region,
-        hasPartition,
-        middleTierUrl: middleTierUrl ?? '',
-        chatServiceUrl,
-        csaServiceUrl: csaServiceUrl ?? `${teamsBaseUrl}/api/csa/${region}`,
-        teamsBaseUrl,
-      };
-    } catch {
-      continue;
     }
-  }
 
-  return null;
+    return null;
+  });
 }
 
 /** User details from DISCOVER-USER-DETAILS. */
@@ -449,48 +461,47 @@ export interface UserDetails {
  * - License details (Copilot, transcription, etc.)
  */
 export function extractUserDetails(state?: SessionState): UserDetails | null {
-  const localStorage = getTeamsLocalStorage(state);
-  if (!localStorage) return null;
+  return withLocalStorage(state, (localStorage) => {
+    for (const item of localStorage) {
+      if (!item.name.includes('DISCOVER-USER-DETAILS')) continue;
 
-  for (const item of localStorage) {
-    if (!item.name.includes('DISCOVER-USER-DETAILS')) continue;
-
-    try {
-      const data = JSON.parse(item.value) as { 
-        item?: {
-          id?: string;
-          region?: string;
-          userPartition?: string;
-          partition?: string;
-          licenseDetails?: Record<string, unknown>;
+      try {
+        const data = JSON.parse(item.value) as { 
+          item?: {
+            id?: string;
+            region?: string;
+            userPartition?: string;
+            partition?: string;
+            licenseDetails?: Record<string, unknown>;
+          };
         };
-      };
-      
-      const details = data.item;
-      if (!details?.id || !details?.region) continue;
+        
+        const details = data.item;
+        if (!details?.id || !details?.region) continue;
 
-      const licenses = details.licenseDetails ?? {};
+        const licenses = details.licenseDetails ?? {};
 
-      return {
-        mri: details.id,
-        region: details.region,
-        userPartition: details.userPartition ?? '',
-        tenantPartition: details.partition ?? '',
-        licenses: {
-          isFreemium: licenses.isFreemium === true,
-          isTrial: licenses.isTrial === true,
-          isTeamsEnabled: licenses.isTeamsEnabled === true,
-          isCopilot: licenses.isCopilot === true,
-          isTranscriptEnabled: licenses.isTranscriptEnabled === true,
-          isFrontline: licenses.isFrontline === true,
-        },
-      };
-    } catch {
-      continue;
+        return {
+          mri: details.id,
+          region: details.region,
+          userPartition: details.userPartition ?? '',
+          tenantPartition: details.partition ?? '',
+          licenses: {
+            isFreemium: licenses.isFreemium === true,
+            isTrial: licenses.isTrial === true,
+            isTeamsEnabled: licenses.isTeamsEnabled === true,
+            isCopilot: licenses.isCopilot === true,
+            isTranscriptEnabled: licenses.isTranscriptEnabled === true,
+            isFrontline: licenses.isFrontline === true,
+          },
+        };
+      } catch {
+        continue;
+      }
     }
-  }
 
-  return null;
+    return null;
+  });
 }
 
 /**
@@ -632,25 +643,24 @@ export function extractCsaToken(state?: SessionState): string | null {
  * Gets the current user's profile from cached JWT tokens.
  */
 export function getUserProfile(state?: SessionState): UserProfile | null {
-  const localStorage = getTeamsLocalStorage(state);
-  if (!localStorage) return null;
+  return withLocalStorage(state, (localStorage) => {
+    for (const item of localStorage) {
+      try {
+        const entry = JSON.parse(item.value);
+        if (!isJwtToken(entry.secret)) continue;
 
-  for (const item of localStorage) {
-    try {
-      const entry = JSON.parse(item.value);
-      if (!isJwtToken(entry.secret)) continue;
-
-      const payload = decodeJwtPayload(entry.secret);
-      if (payload) {
-        const profile = parseJwtProfile(payload);
-        if (profile) return profile;
+        const payload = decodeJwtPayload(entry.secret);
+        if (payload) {
+          const profile = parseJwtProfile(payload);
+          if (profile) return profile;
+        }
+      } catch {
+        continue;
       }
-    } catch {
-      continue;
     }
-  }
 
-  return null;
+    return null;
+  });
 }
 
 /**
@@ -658,33 +668,32 @@ export function getUserProfile(state?: SessionState): UserProfile | null {
  * Searches localStorage entries first, then falls back to JWT claims.
  */
 export function getUserDisplayName(state?: SessionState): string | null {
-  const localStorage = getTeamsLocalStorage(state);
-  if (!localStorage) return null;
+  return withLocalStorage(state, (localStorage) => {
+    // First pass: look for explicit displayName in localStorage
+    for (const item of localStorage) {
+      // Quick filter before parsing
+      if (!item.value?.includes('displayName') && !item.value?.includes('givenName')) {
+        continue;
+      }
 
-  // First pass: look for explicit displayName in localStorage
-  for (const item of localStorage) {
-    // Quick filter before parsing
-    if (!item.value?.includes('displayName') && !item.value?.includes('givenName')) {
-      continue;
+      try {
+        const entry = JSON.parse(item.value);
+        if (entry.displayName) return entry.displayName;
+        if (entry.name?.displayName) return entry.name.displayName;
+      } catch {
+        continue;
+      }
     }
 
-    try {
-      const entry = JSON.parse(item.value);
-      if (entry.displayName) return entry.displayName;
-      if (entry.name?.displayName) return entry.name.displayName;
-    } catch {
-      continue;
+    // Fallback: extract from Teams token's name claim
+    const teamsToken = extractTeamsToken(state);
+    if (teamsToken) {
+      const payload = decodeJwtPayload(teamsToken.token);
+      if (typeof payload?.name === 'string') return payload.name;
     }
-  }
 
-  // Fallback: extract from Teams token's name claim
-  const teamsToken = extractTeamsToken(state);
-  if (teamsToken) {
-    const payload = decodeJwtPayload(teamsToken.token);
-    if (typeof payload?.name === 'string') return payload.name;
-  }
-
-  return null;
+    return null;
+  });
 }
 
 // ============================================================================
@@ -733,118 +742,117 @@ export interface DiscoveredConfig {
  * This helps discover what config is available from different tenants.
  */
 export function discoverConfig(state?: SessionState): DiscoveredConfig | null {
-  const localStorage = getTeamsLocalStorage(state);
-  if (!localStorage) return null;
+  return withLocalStorage(state, (localStorage) => {
+    const discoveryConfigs: Record<string, unknown> = {};
+    const configKeys: string[] = [];
+    const configContents: Record<string, unknown> = {};
+    const allUrls: string[] = [];
 
-  const discoveryConfigs: Record<string, unknown> = {};
-  const configKeys: string[] = [];
-  const configContents: Record<string, unknown> = {};
-  const allUrls: string[] = [];
+    for (const item of localStorage) {
+      // Collect all DISCOVER-* keys
+      if (item.name.includes('DISCOVER')) {
+        try {
+          discoveryConfigs[item.name] = JSON.parse(item.value);
+        } catch {
+          discoveryConfigs[item.name] = item.value;
+        }
+      }
 
-  for (const item of localStorage) {
-    // Collect all DISCOVER-* keys
-    if (item.name.includes('DISCOVER')) {
+      // Collect keys that look like config (not tokens/cache)
+      const isConfigKey = 
+        item.name.includes('config') ||
+        item.name.includes('CONFIG') ||
+        item.name.includes('settings') ||
+        item.name.includes('SETTINGS') ||
+        item.name.includes('environment') ||
+        item.name.includes('ENVIRONMENT') ||
+        item.name.includes('endpoint') ||
+        item.name.includes('ENDPOINT') ||
+        item.name.includes('DISCOVER') ||
+        item.name.includes('flags') ||
+        item.name.includes('FLAGS');
+
+      if (isConfigKey) {
+        configKeys.push(item.name);
+        // Also capture content for settings/flags keys (but not large token keys)
+        if (!item.name.includes('accesstoken') && !item.name.includes('DISCOVER')) {
+          try {
+            configContents[item.name] = JSON.parse(item.value);
+          } catch {
+            // Only capture if it's short enough to be useful
+            if (item.value.length < MAX_DEBUG_CONFIG_VALUE_LENGTH) {
+              configContents[item.name] = item.value;
+            }
+          }
+        }
+      }
+
+      // Extract URLs from any JSON values
       try {
-        discoveryConfigs[item.name] = JSON.parse(item.value);
+        const extractUrls = (obj: unknown, depth = 0): void => {
+          if (depth > 5) return; // Prevent infinite recursion
+          if (typeof obj === 'string') {
+            // Match URLs
+            const urlMatch = obj.match(/https?:\/\/[^\s"'<>]+/g);
+            if (urlMatch) allUrls.push(...urlMatch);
+          } else if (typeof obj === 'object' && obj !== null) {
+            for (const value of Object.values(obj)) {
+              extractUrls(value, depth + 1);
+            }
+          }
+        };
+        extractUrls(JSON.parse(item.value));
       } catch {
-        discoveryConfigs[item.name] = item.value;
+        // Not JSON, skip
       }
     }
 
-    // Collect keys that look like config (not tokens/cache)
-    const isConfigKey = 
-      item.name.includes('config') ||
-      item.name.includes('CONFIG') ||
-      item.name.includes('settings') ||
-      item.name.includes('SETTINGS') ||
-      item.name.includes('environment') ||
-      item.name.includes('ENVIRONMENT') ||
-      item.name.includes('endpoint') ||
-      item.name.includes('ENDPOINT') ||
-      item.name.includes('DISCOVER') ||
-      item.name.includes('flags') ||
-      item.name.includes('FLAGS');
+    // Extract unique hosts from URLs
+    const uniqueHosts = [...new Set(
+      allUrls
+        .map(url => {
+          try {
+            return new URL(url).host;
+          } catch {
+            return null;
+          }
+        })
+        .filter((h): h is string => h !== null)
+    )].sort();
 
-    if (isConfigKey) {
-      configKeys.push(item.name);
-      // Also capture content for settings/flags keys (but not large token keys)
-      if (!item.name.includes('accesstoken') && !item.name.includes('DISCOVER')) {
-        try {
-          configContents[item.name] = JSON.parse(item.value);
-        } catch {
-          // Only capture if it's short enough to be useful
-          if (item.value.length < MAX_DEBUG_CONFIG_VALUE_LENGTH) {
-            configContents[item.name] = item.value;
+    // Try to find Teams base URL from discovery config
+    let teamsBaseUrl: string | null = null;
+    let substrateUrl: string | null = null;
+
+    for (const [key, value] of Object.entries(discoveryConfigs)) {
+      if (key.includes('DISCOVER-REGION-GTM') && typeof value === 'object' && value !== null) {
+        const item = (value as Record<string, unknown>).item as Record<string, string> | undefined;
+        if (item?.chatServiceAfd) {
+          try {
+            const url = new URL(item.chatServiceAfd);
+            teamsBaseUrl = `${url.protocol}//${url.host}`;
+          } catch {
+            // Invalid URL
           }
         }
       }
     }
 
-    // Extract URLs from any JSON values
-    try {
-      const extractUrls = (obj: unknown, depth = 0): void => {
-        if (depth > 5) return; // Prevent infinite recursion
-        if (typeof obj === 'string') {
-          // Match URLs
-          const urlMatch = obj.match(/https?:\/\/[^\s"'<>]+/g);
-          if (urlMatch) allUrls.push(...urlMatch);
-        } else if (typeof obj === 'object' && obj !== null) {
-          for (const value of Object.values(obj)) {
-            extractUrls(value, depth + 1);
-          }
-        }
-      };
-      extractUrls(JSON.parse(item.value));
-    } catch {
-      // Not JSON, skip
-    }
-  }
-
-  // Extract unique hosts from URLs
-  const uniqueHosts = [...new Set(
-    allUrls
-      .map(url => {
-        try {
-          return new URL(url).host;
-        } catch {
-          return null;
-        }
-      })
-      .filter((h): h is string => h !== null)
-  )].sort();
-
-  // Try to find Teams base URL from discovery config
-  let teamsBaseUrl: string | null = null;
-  let substrateUrl: string | null = null;
-
-  for (const [key, value] of Object.entries(discoveryConfigs)) {
-    if (key.includes('DISCOVER-REGION-GTM') && typeof value === 'object' && value !== null) {
-      const item = (value as Record<string, unknown>).item as Record<string, string> | undefined;
-      if (item?.chatServiceAfd) {
-        try {
-          const url = new URL(item.chatServiceAfd);
-          teamsBaseUrl = `${url.protocol}//${url.host}`;
-        } catch {
-          // Invalid URL
-        }
+    // Look for Substrate URLs
+    for (const host of uniqueHosts) {
+      if (host.includes('substrate')) {
+        substrateUrl = `https://${host}`;
+        break;
       }
     }
-  }
 
-  // Look for Substrate URLs
-  for (const host of uniqueHosts) {
-    if (host.includes('substrate')) {
-      substrateUrl = `https://${host}`;
-      break;
-    }
-  }
-
-  return {
-    discoveryConfigs,
-    configKeys,
-    configContents,
-    teamsBaseUrl,
-    substrateUrl,
-    uniqueHosts,
-  };
+    return {
+      discoveryConfigs,
+      configKeys,
+      configContents,
+      teamsBaseUrl,
+      substrateUrl,
+      uniqueHosts,
+    };
+  });
 }

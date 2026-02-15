@@ -160,42 +160,42 @@ describe('getConversationType', () => {
 describe('buildMessageLink', () => {
   it('builds channel link with parentMessageId and createdTime', () => {
     // Channel links always include parentMessageId (defaults to messageId for top-level posts)
-    const link = buildMessageLink('19:abc@thread.tacv2', '1705760000000');
+    const link = buildMessageLink({ conversationId: '19:abc@thread.tacv2', messageId: '1705760000000' });
     expect(link).toContain('parentMessageId=1705760000000');
     expect(link).toContain('createdTime=1705760000000');
     expect(link).not.toContain('context');
   });
 
   it('builds chat link with context parameter', () => {
-    const link = buildMessageLink('19:guid1_guid2@unq.gbl.spaces', '1705760000000');
+    const link = buildMessageLink({ conversationId: '19:guid1_guid2@unq.gbl.spaces', messageId: '1705760000000' });
     expect(link).toContain('context=%7B%22contextType%22%3A%22chat%22%7D');
   });
 
   it('builds meeting link with context parameter', () => {
-    const link = buildMessageLink('19:meeting_abc@thread.v2', 1705760000000);
+    const link = buildMessageLink({ conversationId: '19:meeting_abc@thread.v2', messageId: 1705760000000 });
     expect(link).toContain('context=%7B%22contextType%22%3A%22chat%22%7D');
   });
 
   it('builds group chat link with context parameter', () => {
-    const link = buildMessageLink('19:abc@thread.v2', 1705760000000);
+    const link = buildMessageLink({ conversationId: '19:abc@thread.v2', messageId: 1705760000000 });
     expect(link).toContain('context=%7B%22contextType%22%3A%22chat%22%7D');
   });
 
   it('builds channel thread reply link with parentMessageId', () => {
     // Thread reply: message timestamp differs from parent
-    const link = buildMessageLink('19:abc@thread.tacv2', '1705770000000', '1705760000000');
+    const link = buildMessageLink({ conversationId: '19:abc@thread.tacv2', messageId: '1705770000000', parentMessageId: '1705760000000' });
     expect(link).toContain('parentMessageId=1705760000000');
     expect(link).toContain('createdTime=1705770000000');
   });
 
   it('includes parentMessageId for top-level channel posts (defaults to messageId)', () => {
     // Per MS docs, parentMessageId is always required for channel links
-    const link = buildMessageLink('19:abc@thread.tacv2', '1705760000000');
+    const link = buildMessageLink({ conversationId: '19:abc@thread.tacv2', messageId: '1705760000000' });
     expect(link).toContain('parentMessageId=1705760000000');
   });
 
   it('encodes special characters in conversation ID', () => {
-    const link = buildMessageLink('19:special@thread.tacv2', '123');
+    const link = buildMessageLink({ conversationId: '19:special@thread.tacv2', messageId: '123' });
     expect(link).toContain('19%3Aspecial%40thread.tacv2');
   });
 

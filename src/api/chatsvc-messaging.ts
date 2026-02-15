@@ -11,7 +11,7 @@ import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import { getUserDisplayName } from '../auth/token-extractor.js';
 import { requireMessageAuth, requireMessageAuthWithConfig, getTeamsBaseUrl, getTenantId } from '../utils/auth-guards.js';
-import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, markdownToTeamsHtml, type ExtractedLink } from '../utils/parsers.js';
+import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, markdownToTeamsHtml, escapeHtmlChars, type ExtractedLink } from '../utils/parsers.js';
 import { SELF_CHAT_ID, MRI_ORGID_PREFIX } from '../constants.js';
 import { formatHumanReadableDate } from './chatsvc-common.js';
 import type { RawChatsvcMessage, RawConversationResponse, RawCreateThreadResponse } from '../types/api-responses.js';
@@ -268,10 +268,7 @@ export async function getThreadMessages(
 
     const timestamp = msg.originalarrivaltime ||
       msg.composetime ||
-      (() => {
-        const parsed = parseInt(id, 10);
-        return !isNaN(parsed) && parsed > 0 ? new Date(parsed).toISOString() : new Date().toISOString();
-      })();
+      timestampFromIdOrNow(id);
 
     // Extract thread root ID for channel messages
     // When rootMessageId differs from id, this message is a reply within a thread
@@ -796,21 +793,18 @@ export async function createGroupChat(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Escapes HTML special characters.
+ * Derives an ISO timestamp from a numeric message ID, or returns the current time.
  */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function timestampFromIdOrNow(id: string): string {
+  const parsed = parseInt(id, 10);
+  return !isNaN(parsed) && parsed > 0 ? new Date(parsed).toISOString() : new Date().toISOString();
 }
 
 /**
  * Builds the HTML for a single mention.
  */
 function buildMentionHtml(displayName: string, itemId: number): string {
-  return `<readonly class="skipProofing" itemtype="http://schema.skype.com/Mention" contenteditable="false" spellcheck="false"><span itemtype="http://schema.skype.com/Mention" itemscope itemid="${itemId}">${escapeHtml(displayName)}</span></readonly>`;
+  return `<readonly class="skipProofing" itemtype="http://schema.skype.com/Mention" contenteditable="false" spellcheck="false"><span itemtype="http://schema.skype.com/Mention" itemscope itemid="${itemId}">${escapeHtmlChars(displayName)}</span></readonly>`;
 }
 
 /**
@@ -894,7 +888,7 @@ function parseContentWithMentionsAndLinks(content: string): { html: string; ment
       html = buildMentionHtml(m.text, mentionId);
       mentionId++;
     } else {
-      const safeText = escapeHtml(m.text);
+      const safeText = escapeHtmlChars(m.text);
       const safeUrl = m.target.replace(/"/g, '&quot;');
       html = `<a href="${safeUrl}">${safeText}</a>`;
     }

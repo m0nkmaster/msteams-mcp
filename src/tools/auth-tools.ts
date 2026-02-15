@@ -18,6 +18,7 @@ import {
   clearTokenCache,
 } from '../auth/token-extractor.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
+import * as log from '../utils/logger.js';
 import { ensureAuthenticated, forceNewLogin, getAuthStatus } from '../browser/auth.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ async function handleLogin(
       await ensureAuthenticated(
         headlessManager.page,
         headlessManager.context,
-        (msg) => console.error(`[login:headless] ${msg}`),
+        (msg) => log.info('login:headless', msg),
         false, // No overlay in headless
         true   // Headless mode - throw immediately if user interaction required
       );
@@ -131,7 +132,7 @@ async function handleLogin(
       };
     } catch (error) {
       // Headless attempt failed - fall through to visible browser
-      console.error(`[login:headless] Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
+      log.warn('login:headless', `Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
       try {
         await closeBrowser(headlessManager, false);
       } catch {
@@ -150,13 +151,13 @@ async function handleLogin(
       await forceNewLogin(
         browserManager.page,
         browserManager.context,
-        (msg) => console.error(`[login] ${msg}`)
+        (msg) => log.info('login', msg)
       );
     } else {
       await ensureAuthenticated(
         browserManager.page,
         browserManager.context,
-        (msg) => console.error(`[login] ${msg}`)
+        (msg) => log.info('login', msg)
       );
     }
   } finally {
