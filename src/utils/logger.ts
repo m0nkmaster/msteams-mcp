@@ -46,20 +46,20 @@ export function error(context: string, message: string): void {
 /** Log a warning message. */
 export function warn(context: string, message: string): void {
   if (shouldLog('warn')) {
-    console.error(`[${context}] ${message}`);
+    console.warn(`[${context}] ${message}`);
   }
 }
 
 /** Log an informational message. */
 export function info(context: string, message: string): void {
   if (shouldLog('info')) {
-    console.error(`[${context}] ${message}`);
+    console.log(`[${context}] ${message}`);
   }
 }
 
 /** Log a debug message. Only shown when LOG_LEVEL=debug. */
 export function debug(context: string, message: string): void {
   if (shouldLog('debug')) {
-    console.error(`[${context}] ${message}`);
+    console.debug(`[${context}] ${message}`);
   }
 }
