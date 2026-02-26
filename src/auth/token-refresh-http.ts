@@ -147,12 +147,37 @@ const REFRESH_TIMEOUT_MS = 10000;
 // MSAL Cache Extraction
 // ============================================================================
 
+/** Diagnostic info about why MSAL cache extraction failed. */
+interface MsalCacheExtractionResult {
+  success: boolean;
+  cacheInfo?: MsalCacheInfo;
+  diagnostics: {
+    hasTeamsOrigin: boolean;
+    localStorageItemCount: number;
+    hasRefreshToken: boolean;
+    hasTenantId: boolean;
+    refreshTokenClientId?: string;
+  };
+}
+
 /**
  * Extracts MSAL cache info (refresh token, client ID, tenant ID) from session state.
+ * Returns detailed diagnostics to help debug extraction failures.
  */
-function extractMsalCacheInfo(state: SessionState): MsalCacheInfo | null {
+function extractMsalCacheInfoWithDiagnostics(state: SessionState): MsalCacheExtractionResult {
   const teamsOrigin = getTeamsOrigin(state);
-  if (!teamsOrigin?.localStorage) return null;
+  
+  const diagnostics = {
+    hasTeamsOrigin: teamsOrigin !== null,
+    localStorageItemCount: teamsOrigin?.localStorage?.length ?? 0,
+    hasRefreshToken: false,
+    hasTenantId: false,
+    refreshTokenClientId: undefined as string | undefined,
+  };
+
+  if (!teamsOrigin?.localStorage) {
+    return { success: false, diagnostics };
+  }
 
   let refreshToken: MsalRefreshToken | null = null;
   let refreshTokenKey: string | null = null;
@@ -166,27 +191,44 @@ function extractMsalCacheInfo(state: SessionState): MsalCacheInfo | null {
       if (entry.credentialType === 'RefreshToken' && entry.secret && entry.clientId) {
         refreshToken = entry as MsalRefreshToken;
         refreshTokenKey = item.name;
+        diagnostics.hasRefreshToken = true;
+        diagnostics.refreshTokenClientId = entry.clientId;
       }
 
       // Extract tenant ID from any access token's realm field
       if (entry.credentialType === 'AccessToken' && entry.realm && !tenantId) {
         tenantId = entry.realm;
+        diagnostics.hasTenantId = true;
       }
     } catch {
       continue;
     }
   }
 
-  if (!refreshToken || !refreshTokenKey || !tenantId) return null;
+  if (!refreshToken || !refreshTokenKey || !tenantId) {
+    return { success: false, diagnostics };
+  }
 
   return {
-    refreshToken: refreshToken.secret,
-    clientId: refreshToken.clientId,
-    tenantId,
-    homeAccountId: refreshToken.homeAccountId,
-    environment: refreshToken.environment,
-    refreshTokenKey,
+    success: true,
+    cacheInfo: {
+      refreshToken: refreshToken.secret,
+      clientId: refreshToken.clientId,
+      tenantId,
+      homeAccountId: refreshToken.homeAccountId,
+      environment: refreshToken.environment,
+      refreshTokenKey,
+    },
+    diagnostics,
   };
+}
+
+/**
+ * Extracts MSAL cache info (refresh token, client ID, tenant ID) from session state.
+ */
+function extractMsalCacheInfo(state: SessionState): MsalCacheInfo | null {
+  const result = extractMsalCacheInfoWithDiagnostics(state);
+  return result.success ? result.cacheInfo! : null;
 }
 
 // ============================================================================
@@ -563,6 +605,7 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
   // Read current session state
   const state = readSessionState();
   if (!state) {
+    log.warn('token-refresh-http', 'No session state file found');
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
       'No session state found. Browser login is required for first authentication.',
@@ -570,18 +613,34 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
     ));
   }
 
-  // Extract MSAL cache info
-  const cacheInfo = extractMsalCacheInfo(state);
-  if (!cacheInfo) {
+  // Extract MSAL cache info with diagnostics
+  const extractionResult = extractMsalCacheInfoWithDiagnostics(state);
+  if (!extractionResult.success) {
+    const diag = extractionResult.diagnostics;
+    log.warn('token-refresh-http', 
+      `MSAL cache extraction failed: ` +
+      `teamsOrigin=${diag.hasTeamsOrigin}, ` +
+      `localStorageItems=${diag.localStorageItemCount}, ` +
+      `hasRefreshToken=${diag.hasRefreshToken}, ` +
+      `hasTenantId=${diag.hasTenantId}` +
+      (diag.refreshTokenClientId ? `, clientId=${diag.refreshTokenClientId.substring(0, 8)}...` : '')
+    );
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
-      'No MSAL refresh token found in session state. Browser login is required.',
+      `No MSAL refresh token found in session state (localStorage items: ${diag.localStorageItemCount}, refreshToken: ${diag.hasRefreshToken}, tenantId: ${diag.hasTenantId}). Browser login is required.`,
       { suggestions: ['Call teams_login to authenticate via browser'] }
     ));
   }
 
+  const cacheInfo = extractionResult.cacheInfo!;
+  log.debug('token-refresh-http', 
+    `MSAL cache extracted: clientId=${cacheInfo.clientId.substring(0, 8)}..., ` +
+    `tenantId=${cacheInfo.tenantId.substring(0, 8)}...`
+  );
+
   const teamsOrigin = getTeamsOrigin(state);
   if (!teamsOrigin?.localStorage) {
+    log.warn('token-refresh-http', 'Teams origin disappeared after extraction');
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
       'No Teams localStorage found in session state.',

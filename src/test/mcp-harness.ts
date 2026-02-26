@@ -38,6 +38,7 @@ const SHORTCUTS: Record<string, { tool: string; primaryArg?: string }> = {
   unread: { tool: 'teams_get_unread' },
   markread: { tool: 'teams_mark_read' },
   activity: { tool: 'teams_get_activity' },
+  message: { tool: 'teams_get_message' },
 };
 
 // Map CLI flags to tool parameter names

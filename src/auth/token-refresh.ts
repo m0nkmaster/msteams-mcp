@@ -65,11 +65,14 @@ export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResu
   // Get current token expiry for comparison
   const beforeToken = extractSubstrateToken();
   if (!beforeToken) {
+    log.warn('token-refresh', 'No Substrate token found in session - cannot refresh, browser login required');
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
       'ACTION REQUIRED: No token found in session. You MUST call teams_login to authenticate.',
     ));
   }
+
+  log.debug('token-refresh', `Current token expires at ${beforeToken.expiry.toISOString()} (${Math.round((beforeToken.expiry.getTime() - Date.now()) / 60000)} mins remaining)`);
 
   const previousExpiry = beforeToken.expiry;
   refreshInProgress = true;

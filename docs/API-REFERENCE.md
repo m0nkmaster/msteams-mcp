@@ -820,6 +820,44 @@ Drafts use a slightly different endpoint:
 
 ---
 
+### Get Single Message
+
+**Endpoint:** `GET https://teams.microsoft.com/api/chatsvc/{region}/v1/users/ME/conversations/{conversationId}/messages/{messageId}`
+
+**Auth:** Skype Token + Bearer
+
+Fetches a single message by ID with full content. No age/retention limit observed - works for messages months old.
+
+**Response:**
+```json
+{
+  "sequenceId": 3145,
+  "conversationid": "19:abc@thread.tacv2",
+  "id": "1772040539785",
+  "messagetype": "RichText/Html",
+  "content": "<p>Full message HTML content</p>",
+  "from": "https://teams.microsoft.com/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:user-guid",
+  "imdisplayname": "Smith, John",
+  "composetime": "2026-02-25T17:28:59.7850000Z",
+  "originalarrivaltime": "2026-02-25T17:28:59.7850000Z",
+  "rootMessageId": "1771973623236",
+  "annotationsSummary": { "emotions": { "heart": 1 } },
+  "properties": {
+    "mentions": "[]",
+    "links": "[]",
+    "emotions": [...]
+  }
+}
+```
+
+**Use cases:**
+- Resolving truncated search result snippets to full content
+- Fetching full content for saved message stubs (from `48:saved`)
+- Getting a specific message when you have conversationId + messageId
+
+
+---
+
 ### Reply to Thread (Channel)
 
 **Endpoint:** `POST https://teams.microsoft.com/api/chatsvc/{region}/v1/users/ME/conversations/{channelId};messageid={threadRootId}/messages`

@@ -107,6 +107,10 @@ export const CHATSVC_API = {
   /** Create a new thread (group chat). */
   createThread: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/threads`,
+  
+  /** Get a single message by ID. */
+  singleMessage: (region: string, conversationId: string, messageId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

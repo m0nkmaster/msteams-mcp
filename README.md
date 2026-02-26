@@ -76,6 +76,7 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 |------|-------------|
 | `teams_search` | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.) |
 | `teams_search_email` | Search emails in your mailbox (same auth as Teams — no extra login) |
+| `teams_get_message` | Get a single message by ID with full content (any age) |
 | `teams_get_thread` | Get messages from a conversation/thread |
 | `teams_find_channel` | Find channels by name (your teams + org-wide discovery) |
 | `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications) |

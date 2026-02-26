@@ -14,6 +14,7 @@
  */
 
 import { chromium, type BrowserContext, type Page } from 'playwright';
+import * as fs from 'fs';
 import * as path from 'path';
 import {
   ensureUserDataDir,
@@ -21,6 +22,7 @@ import {
   writeSessionState,
 } from '../auth/session-store.js';
 import { clearRegionCache } from '../utils/auth-guards.js';
+import * as log from '../utils/logger.js';
 
 export interface BrowserManager {
   /** Always null — persistent contexts have no separate Browser object. */
@@ -52,6 +54,79 @@ const DEFAULT_OPTIONS: Required<CreateBrowserOptions> = {
  * session cookies enable silent headless re-authentication without user interaction.
  */
 const BROWSER_PROFILE_DIR = path.join(CONFIG_DIR, 'browser-profile');
+
+/**
+ * Path to the Chromium SingletonLock file.
+ * This file prevents multiple processes from using the same profile.
+ */
+const SINGLETON_LOCK_PATH = path.join(BROWSER_PROFILE_DIR, 'SingletonLock');
+
+/**
+ * Checks if a process with the given PID is running.
+ */
+function isProcessRunning(pid: number): boolean {
+  try {
+    // kill with signal 0 checks if process exists without killing it
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Cleans up stale SingletonLock files left by crashed browser sessions.
+ * 
+ * On Unix systems, SingletonLock is a symlink whose target contains the PID.
+ * On Windows, it's a regular file. If the owning process is no longer running,
+ * we can safely remove the lock.
+ * 
+ * @returns true if a stale lock was removed, false otherwise
+ */
+function cleanupStaleSingletonLock(): boolean {
+  if (!fs.existsSync(SINGLETON_LOCK_PATH)) {
+    return false;
+  }
+
+  try {
+    // On Unix, SingletonLock is a symlink like "hostname-12345"
+    // The number after the last dash is the PID
+    const linkTarget = fs.readlinkSync(SINGLETON_LOCK_PATH);
+    const pidMatch = linkTarget.match(/-(\d+)$/);
+    
+    if (pidMatch) {
+      const pid = parseInt(pidMatch[1], 10);
+      
+      if (isProcessRunning(pid)) {
+        // Process is still running - lock is valid
+        return false;
+      }
+      
+      // Process is dead - remove stale lock
+      log.info('browser', `Removing stale SingletonLock (PID ${pid} not running)`);
+      fs.unlinkSync(SINGLETON_LOCK_PATH);
+      return true;
+    }
+  } catch {
+    // On Windows or if readlink fails, try checking file age
+    // If the lock file is old and we can't verify the process, remove it
+    try {
+      const stats = fs.lstatSync(SINGLETON_LOCK_PATH);
+      const ageMs = Date.now() - stats.mtimeMs;
+      const oneHourMs = 60 * 60 * 1000;
+      
+      if (ageMs > oneHourMs) {
+        log.info('browser', `Removing old SingletonLock (${Math.round(ageMs / 60000)} minutes old)`);
+        fs.unlinkSync(SINGLETON_LOCK_PATH);
+        return true;
+      }
+    } catch {
+      // Can't read stats, leave it alone
+    }
+  }
+
+  return false;
+}
 
 /**
  * Determines the browser channel to use based on the platform.
@@ -93,7 +168,10 @@ export async function createBrowserContext(
 
   const channel = getBrowserChannel();
 
-  try {
+  // Clean up any stale lock files before attempting to launch
+  cleanupStaleSingletonLock();
+
+  const launchBrowser = async (): Promise<BrowserManager> => {
     const context = await chromium.launchPersistentContext(BROWSER_PROFILE_DIR, {
       headless: opts.headless,
       channel,
@@ -111,7 +189,29 @@ export async function createBrowserContext(
       isNewSession: true,
       persistent: true,
     };
+  };
+
+  try {
+    return await launchBrowser();
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    // Check if this is a profile lock error and try to recover
+    if (errorMessage.includes('ProcessSingleton') || errorMessage.includes('SingletonLock')) {
+      log.warn('browser', 'Profile lock detected, attempting to clean up and retry...');
+      
+      // Force remove the lock file and retry once
+      try {
+        if (fs.existsSync(SINGLETON_LOCK_PATH)) {
+          fs.unlinkSync(SINGLETON_LOCK_PATH);
+          log.info('browser', 'Removed SingletonLock file, retrying browser launch...');
+          return await launchBrowser();
+        }
+      } catch (cleanupError) {
+        log.error('browser', `Failed to clean up SingletonLock: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+      }
+    }
+
     const browserName = channel === 'msedge' ? 'Microsoft Edge' : 'Google Chrome';
     const installHint = channel === 'msedge'
       ? 'Edge should be pre-installed on Windows. Try updating Windows or reinstalling Edge.'
@@ -119,7 +219,7 @@ export async function createBrowserContext(
 
     throw new Error(
       `Could not launch ${browserName}. ${installHint}\n\n` +
-      `Original error: ${error instanceof Error ? error.message : String(error)}`
+      `Original error: ${errorMessage}`
     );
   }
 }

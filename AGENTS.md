@@ -195,6 +195,7 @@ Session state and token cache files are protected by:
 | `teams_unsave_message` | Remove bookmark from a message |
 | `teams_get_saved_messages` | Get list of saved/bookmarked messages with source references |
 | `teams_get_followed_threads` | Get list of followed threads with source references |
+| `teams_get_message` | Get a single message by ID with full content (any age) |
 | `teams_get_thread` | Get messages from a conversation/thread |
 | `teams_find_channel` | Find channels by name (your teams + org-wide), shows membership |
 | `teams_get_chat` | Get conversation ID for 1:1 chat with a person |

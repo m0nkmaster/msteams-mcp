@@ -192,6 +192,96 @@ export async function sendNoteToSelf(content: string): Promise<Result<SendMessag
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Single Message
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fetches a single message by ID from a conversation.
+ * 
+ * Works for messages of any age - no retention limit observed.
+ * Useful for resolving saved message stubs, search result snippets,
+ * or any case where you have a conversationId + messageId.
+ */
+export async function getMessage(
+  conversationId: string,
+  messageId: string
+): Promise<Result<ThreadMessage>> {
+  const authResult = requireMessageAuthWithConfig();
+  if (!authResult.ok) {
+    return authResult;
+  }
+  const { auth, region, baseUrl } = authResult.value;
+
+  const url = CHATSVC_API.singleMessage(region, conversationId, messageId, baseUrl);
+
+  const response = await httpRequest<RawChatsvcMessage>(
+    url,
+    {
+      method: 'GET',
+      headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
+    }
+  );
+
+  if (!response.ok) {
+    return response;
+  }
+
+  const msg = response.value.data;
+
+  const id = msg.id || msg.originalarrivaltime;
+  if (!id) {
+    return err(createError(
+      ErrorCode.API_ERROR,
+      'Message response missing ID'
+    ));
+  }
+
+  const content = msg.content || '';
+  const contentType = msg.messagetype || 'Text';
+  const fromMri = msg.from || '';
+  const displayName = msg.imdisplayname || msg.displayName;
+
+  const timestamp = msg.originalarrivaltime ||
+    msg.composetime ||
+    timestampFromIdOrNow(id);
+
+  const rootMessageId = msg.rootMessageId;
+  const isThreadReply = !!rootMessageId && rootMessageId !== id;
+
+  const messageLink = /^\d+$/.test(id)
+    ? buildMessageLink({
+        conversationId,
+        messageId: id,
+        tenantId: getTenantId() ?? undefined,
+        parentMessageId: isThreadReply ? rootMessageId : undefined,
+        teamsBaseUrl: getTeamsBaseUrl(),
+      })
+    : undefined;
+
+  const links = extractLinks(content);
+  const when = formatHumanReadableDate(timestamp);
+
+  return ok({
+    id,
+    content: stripHtml(content),
+    contentType,
+    sender: {
+      mri: fromMri,
+      displayName,
+    },
+    timestamp,
+    when: when || undefined,
+    conversationId,
+    clientMessageId: msg.clientmessageid,
+    isFromMe: fromMri === auth.userMri,
+    messageLink,
+    links: links.length > 0 ? links : undefined,
+    threadRootId: isThreadReply ? rootMessageId : undefined,
+    isThreadReply: isThreadReply || undefined,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Thread Messages
 // ─────────────────────────────────────────────────────────────────────────────
 

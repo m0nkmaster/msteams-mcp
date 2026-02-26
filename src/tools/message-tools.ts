@@ -7,6 +7,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
 import {
   sendMessage,
+  getMessage,
   saveMessage,
   unsaveMessage,
   getOneOnOneChatId,
@@ -100,6 +101,11 @@ export const GetSavedMessagesInputSchema = z.object({
 
 export const GetFollowedThreadsInputSchema = z.object({
   limit: z.number().min(1).max(MAX_THREAD_LIMIT).optional(),
+});
+
+export const GetMessageInputSchema = z.object({
+  conversationId: z.string().min(1, 'Conversation ID cannot be empty'),
+  messageId: z.string().min(1, 'Message ID cannot be empty'),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -402,7 +408,7 @@ const removeReactionToolDefinition: Tool = {
 
 const getSavedMessagesToolDefinition: Tool = {
   name: 'teams_get_saved_messages',
-  description: 'Get the list of messages the user has saved (bookmarked) in Teams. Returns references to saved messages with source conversation IDs and direct links. Use teams_get_thread with the sourceConversationId to fetch actual message content.',
+  description: 'Get the list of messages the user has saved (bookmarked) in Teams. Returns references to saved messages with source conversation IDs and direct links. Use teams_get_message with sourceConversationId and sourceMessageId to fetch the full message content.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -416,7 +422,7 @@ const getSavedMessagesToolDefinition: Tool = {
 
 const getFollowedThreadsToolDefinition: Tool = {
   name: 'teams_get_followed_threads',
-  description: 'Get the list of threads the user is following in Teams. Returns references to followed threads with source conversation IDs and direct links. Use teams_get_thread with the sourceConversationId to fetch actual thread content.',
+  description: 'Get the list of threads the user is following in Teams. Returns references to followed threads with source conversation IDs and direct links. Use teams_get_message with sourceConversationId and sourcePostId to fetch the full post, or teams_get_thread for the full thread.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -425,6 +431,25 @@ const getFollowedThreadsToolDefinition: Tool = {
         description: 'Maximum number of followed threads to return (default: 50, max: 200)',
       },
     },
+  },
+};
+
+const getMessageToolDefinition: Tool = {
+  name: 'teams_get_message',
+  description: 'Get a single message by ID with full content. Works for messages of any age - no retention limit. Use this to resolve truncated search results, saved message stubs, or retrieve any specific message when you have the conversationId and messageId.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      conversationId: {
+        type: 'string',
+        description: 'The conversation ID containing the message (e.g., from search results, saved messages, or activity feed)',
+      },
+      messageId: {
+        type: 'string',
+        description: 'The message ID to fetch (e.g., from search results, saved messages, or teams_get_thread)',
+      },
+    },
+    required: ['conversationId', 'messageId'],
   },
 };
 
@@ -948,6 +973,36 @@ async function handleGetFollowedThreads(
   };
 }
 
+async function handleGetMessage(
+  input: z.infer<typeof GetMessageInputSchema>,
+  _ctx: ToolContext
+): Promise<ToolResult> {
+  const result = await getMessage(input.conversationId, input.messageId);
+
+  if (!result.ok) {
+    return { success: false, error: result.error };
+  }
+
+  const msg = result.value;
+  return {
+    success: true,
+    data: {
+      id: msg.id,
+      content: msg.content,
+      contentType: msg.contentType,
+      sender: msg.sender,
+      timestamp: msg.timestamp,
+      when: msg.when,
+      conversationId: msg.conversationId,
+      isFromMe: msg.isFromMe,
+      messageLink: msg.messageLink,
+      links: msg.links,
+      threadRootId: msg.threadRootId,
+      isThreadReply: msg.isThreadReply,
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Exports
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1060,6 +1115,12 @@ export const getFollowedThreadsTool: RegisteredTool<typeof GetFollowedThreadsInp
   handler: handleGetFollowedThreads,
 };
 
+export const getMessageTool: RegisteredTool<typeof GetMessageInputSchema> = {
+  definition: getMessageToolDefinition,
+  schema: GetMessageInputSchema,
+  handler: handleGetMessage,
+};
+
 /** All message-related tools. */
 export const messageTools = [
   sendMessageTool,
@@ -1080,4 +1141,5 @@ export const messageTools = [
   removeReactionTool,
   getSavedMessagesTool,
   getFollowedThreadsTool,
+  getMessageTool,
 ];
