@@ -17,7 +17,7 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const GetSharedFilesInputSchema = z.object({
-  conversationId: z.string(),
+  conversationId: z.string().min(1),
   pageSize: z.number().min(1).max(MAX_FILES_PAGE_SIZE).optional().default(DEFAULT_FILES_PAGE_SIZE),
   skipToken: z.string().optional(),
 });

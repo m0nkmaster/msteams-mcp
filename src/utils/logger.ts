@@ -6,7 +6,7 @@
  * - Log levels can be controlled via LOG_LEVEL environment variable
  * - Future structured logging can be added in one place
  * 
- * Levels: error (default) | warn | info | debug
+ * Levels: error | warn | info (default) | debug
  * Set LOG_LEVEL=debug for verbose output during development.
  */
 

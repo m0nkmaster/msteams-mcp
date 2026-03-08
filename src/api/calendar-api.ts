@@ -208,7 +208,7 @@ export async function getCalendarView(
 
   const startDate = options.startDate || now.toISOString();
   const endDate = options.endDate || defaultEnd.toISOString();
-  const limit = options.limit || DEFAULT_MEETING_LIMIT;
+  const limit = options.limit ?? DEFAULT_MEETING_LIMIT;
 
   // Build query parameters
   const params = new URLSearchParams({

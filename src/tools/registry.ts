@@ -7,6 +7,7 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 import type { ToolContext, ToolResult } from './index.js';
+import { ErrorCode, createError } from '../types/errors.js';
 
 /** Type-erased tool entry for the registry — avoids generic variance issues. */
 interface RegistryEntry {
@@ -70,13 +71,19 @@ export async function invokeTool(
   const tool = toolsByName.get(name);
   
   if (!tool) {
-    throw new Error(`Unknown tool: ${name}`);
+    return {
+      success: false,
+      error: createError(ErrorCode.INVALID_INPUT, `Unknown tool: ${name}`, { retryable: false }),
+    };
   }
 
   // Validate input
   const parseResult = tool.schema.safeParse(args);
   if (!parseResult.success) {
-    throw new Error(`Invalid input: ${parseResult.error.message}`);
+    return {
+      success: false,
+      error: createError(ErrorCode.INVALID_INPUT, `Invalid input: ${parseResult.error.message}`, { retryable: false }),
+    };
   }
 
   // Invoke handler

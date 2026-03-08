@@ -52,7 +52,7 @@ export interface CsaAuthInfo {
  */
 function shouldRefreshSubstrateToken(): boolean {
   const substrate = extractSubstrateToken();
-  if (!substrate) return false;
+  if (!substrate) return true;
 
   const timeRemaining = substrate.expiry.getTime() - Date.now();
   // Refresh if expired (timeRemaining <= 0) OR approaching expiry

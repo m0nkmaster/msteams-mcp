@@ -478,7 +478,11 @@ export async function runServer(): Promise<void> {
 
   // Handle shutdown signals
   const shutdown = async () => {
-    await teamsServer.cleanup();
+    try {
+      await teamsServer.cleanup();
+    } catch {
+      // Ignore cleanup errors during shutdown
+    }
     process.exit(0);
   };
 

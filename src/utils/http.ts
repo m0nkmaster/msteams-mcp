@@ -85,11 +85,12 @@ export async function httpRequest<T = unknown>(
         return result;
       }
 
-      // Calculate backoff delay
-      const delay = Math.min(
+      // Calculate backoff delay with jitter to avoid thundering herd
+      const baseDelay = Math.min(
         retryBaseDelayMs * Math.pow(2, attempt - 1),
         retryMaxDelayMs
       );
+      const delay = baseDelay * (0.5 + Math.random() * 0.5);
       
       await sleep(delay);
       
