@@ -12,7 +12,8 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [20.x, 22.x]
+        # Vite 7 (via Vitest) requires Node ^20.19.0 || >=22.12.0
+        node-version: ['20.19', '22.12']
 
     steps:
       - name: Checkout repository
