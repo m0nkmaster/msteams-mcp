@@ -67,7 +67,7 @@ export const DeleteMessageInputSchema = z.object({
 });
 
 export const GetUnreadInputSchema = z.object({
-  conversationId: z.string().optional(),
+  conversationId: z.string().min(1).optional(),
 });
 
 export const MarkAsReadInputSchema = z.object({

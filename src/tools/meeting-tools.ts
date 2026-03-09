@@ -24,7 +24,7 @@ export const GetMeetingsInputSchema = z.object({
 });
 
 export const GetTranscriptInputSchema = z.object({
-  threadId: z.string(),
+  threadId: z.string().min(1),
   meetingDate: z.string().optional(),
 });
 

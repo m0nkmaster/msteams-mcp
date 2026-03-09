@@ -118,7 +118,8 @@ function parseArgs(): ParsedArgs {
         i++;
         break;
       }
-      i++;
+      // Skip --flag and its value
+      i += 2;
     }
   } else if (result.command !== 'list') {
     // Treat as a tool name (add teams_ prefix if not present)

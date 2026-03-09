@@ -19,7 +19,7 @@ export function parseV2Result(item: Record<string, unknown>, linkContext?: LinkC
 
   const id = item.Id as string || 
              item.ReferenceId as string || 
-             `v2-${Date.now()}`;
+             `v2-${crypto.randomUUID()}`;
 
   // Extract links before stripping HTML
   const links = extractLinks(content);

@@ -432,7 +432,8 @@ async function checkBrowserTokenExpiry(page: Page): Promise<number> {
           if (!secret?.startsWith('ey')) continue;
 
           // Decode JWT exp claim
-          const payload = JSON.parse(atob(secret.split('.')[1]));
+          const b64 = secret.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+          const payload = JSON.parse(atob(b64));
           if (typeof payload.exp !== 'number') continue;
 
           const expiryMs = payload.exp * 1000;

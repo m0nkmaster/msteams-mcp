@@ -157,10 +157,7 @@ export function extractRetryAfter(headers: Headers): number | undefined {
   }
   
   // Try parsing as HTTP date
-  try {
-    const date = new Date(retryAfter);
-    return Math.max(0, date.getTime() - Date.now());
-  } catch {
-    return undefined;
-  }
+  const date = new Date(retryAfter);
+  if (isNaN(date.getTime())) return undefined;
+  return Math.max(0, date.getTime() - Date.now());
 }
