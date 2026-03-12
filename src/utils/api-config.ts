@@ -174,7 +174,7 @@ export function getTeamsHeaders(baseUrl = DEFAULT_TEAMS_BASE_URL): Record<string
 }
 
 /** Headers for Bearer token authentication. */
-export function getBearerHeaders(token: string, baseUrl = DEFAULT_TEAMS_BASE_URL): HeadersInit {
+export function getBearerHeaders(token: string, baseUrl = DEFAULT_TEAMS_BASE_URL): Record<string, string> {
   return {
     ...getTeamsHeaders(baseUrl),
     'Authorization': `Bearer ${token}`,
@@ -182,7 +182,7 @@ export function getBearerHeaders(token: string, baseUrl = DEFAULT_TEAMS_BASE_URL
 }
 
 /** Headers for Skype token + Bearer authentication. */
-export function getSkypeAuthHeaders(skypeToken: string, authToken: string, baseUrl = DEFAULT_TEAMS_BASE_URL): HeadersInit {
+export function getSkypeAuthHeaders(skypeToken: string, authToken: string, baseUrl = DEFAULT_TEAMS_BASE_URL): Record<string, string> {
   return {
     ...getTeamsHeaders(baseUrl),
     'Authentication': `skypetoken=${skypeToken}`,
@@ -191,7 +191,7 @@ export function getSkypeAuthHeaders(skypeToken: string, authToken: string, baseU
 }
 
 /** Headers for CSA API (Skype token + CSA Bearer). */
-export function getCsaHeaders(skypeToken: string, csaToken: string, baseUrl = DEFAULT_TEAMS_BASE_URL): HeadersInit {
+export function getCsaHeaders(skypeToken: string, csaToken: string, baseUrl = DEFAULT_TEAMS_BASE_URL): Record<string, string> {
   return {
     ...getTeamsHeaders(baseUrl),
     'Authentication': `skypetoken=${skypeToken}`,
@@ -200,7 +200,7 @@ export function getCsaHeaders(skypeToken: string, csaToken: string, baseUrl = DE
 }
 
 /** Client version header for messaging API. */
-export function getMessagingHeaders(skypeToken: string, authToken: string, baseUrl = DEFAULT_TEAMS_BASE_URL): HeadersInit {
+export function getMessagingHeaders(skypeToken: string, authToken: string, baseUrl = DEFAULT_TEAMS_BASE_URL): Record<string, string> {
   return {
     ...getSkypeAuthHeaders(skypeToken, authToken, baseUrl),
     'X-Ms-Client-Version': '1415/1.0.0.2025010401',

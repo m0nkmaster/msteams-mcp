@@ -112,6 +112,7 @@ describe('invokeTool', () => {
       getBrowserManager: () => null,
       setBrowserManager: () => {},
       markInitialised: () => {},
+      isInitialisedState: () => false,
     },
   };
 
