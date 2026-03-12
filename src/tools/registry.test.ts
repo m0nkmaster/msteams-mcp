@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
+import type { ToolContext } from './index.js';
 
 // Mock the MCP SDK
 vi.mock('@modelcontextprotocol/sdk/types.js', () => ({
@@ -104,8 +105,14 @@ describe('hasTool', () => {
 });
 
 describe('invokeTool', () => {
-  const mockContext = {
-    server: {} as { browser: () => Promise<unknown> },
+  const mockContext: ToolContext = {
+    server: {
+      ensureBrowser: async () => ({} as never),
+      resetBrowserState: () => {},
+      getBrowserManager: () => null,
+      setBrowserManager: () => {},
+      markInitialised: () => {},
+    },
   };
 
   it('invokes a known tool', async () => {

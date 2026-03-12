@@ -164,7 +164,7 @@ export const CSA_API = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Common request headers for Teams API calls. */
-export function getTeamsHeaders(baseUrl = DEFAULT_TEAMS_BASE_URL): HeadersInit {
+export function getTeamsHeaders(baseUrl = DEFAULT_TEAMS_BASE_URL): Record<string, string> {
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
