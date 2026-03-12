@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { httpRequest, clearRateLimitState, type HttpResponse } from './http.js';
+import { httpRequest, clearRateLimitState } from './http.js';
 
 describe('httpRequest', () => {
   beforeEach(() => {

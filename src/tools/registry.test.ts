@@ -2,7 +2,7 @@
  * Unit tests for tools/registry.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 
 // Mock the MCP SDK
@@ -105,8 +105,7 @@ describe('hasTool', () => {
 
 describe('invokeTool', () => {
   const mockContext = {
-    session: { tokens: { skype: 'test', auth: 'test' } } as any,
-    config: { teamsBaseUrl: 'https://teams.microsoft.com' },
+    server: {} as { browser: () => Promise<unknown> },
   };
 
   it('invokes a known tool', async () => {
@@ -134,7 +133,7 @@ describe('invokeTool', () => {
 
   it('returns validation error for invalid input', async () => {
     // teams_search_messages requires a string query
-    const result = await invokeTool('teams_search_messages', { query: 123 } as any, mockContext);
+    const result = await invokeTool('teams_search_messages', { query: 123 } as Record<string, unknown>, mockContext);
     
     expect(result.success).toBe(false);
     if (!result.success) {
