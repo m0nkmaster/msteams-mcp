@@ -119,24 +119,24 @@ export function requireCsaAuth(): Result<CsaAuthInfo, McpError> {
   return ok({ auth, csaToken });
 }
 
-/** Authentication info for calendar/meetings API. */
-export interface CalendarAuthInfo {
+/** Authentication info for Skype Spaces APIs (calendar, tags, etc.). */
+export interface SkypeSpacesAuthInfo {
   skypeToken: string;
   spacesToken: string;
 }
 
 /**
- * Requires valid calendar authentication (Skype token + Spaces token).
- * Use for mt/part calendar APIs.
+ * Requires valid Skype Spaces authentication (Skype token + Spaces token).
+ * Use for mt/part APIs (calendar, tags, etc.).
  */
-export function requireCalendarAuth(): Result<CalendarAuthInfo, McpError> {
+export function requireSkypeSpacesAuth(): Result<SkypeSpacesAuthInfo, McpError> {
   const auth = extractMessageAuth();
   const spacesToken = extractSkypeSpacesToken();
 
   if (!auth?.skypeToken || !spacesToken) {
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
-      'Calendar access requires authentication. Please run teams_login.',
+      'API access requires authentication. Please run teams_login.',
       { suggestions: ['Call teams_login to authenticate'] }
     ));
   }

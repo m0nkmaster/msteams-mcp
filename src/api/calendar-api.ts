@@ -8,8 +8,7 @@ import { httpRequest } from '../utils/http.js';
 import { CALENDAR_API, getTeamsHeaders } from '../utils/api-config.js';
 import { type Result, ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
-import { requireCalendarAuth } from '../utils/auth-guards.js';
-import { extractRegionConfig } from '../auth/token-extractor.js';
+import { requireSkypeSpacesAuth, getRegionConfig } from '../utils/auth-guards.js';
 import {
   DEFAULT_MEETING_LIMIT,
   DEFAULT_MEETING_DAYS_AHEAD,
@@ -185,14 +184,13 @@ function getSelectFields(): string {
 export async function getCalendarView(
   options: CalendarViewOptions = {}
 ): Promise<Result<CalendarViewResult>> {
-  const authResult = requireCalendarAuth();
+  const authResult = requireSkypeSpacesAuth();
   if (!authResult.ok) {
     return authResult;
   }
   const { skypeToken, spacesToken } = authResult.value;
 
-  // Get the user's region/partition from session discovery config
-  const regionConfig = extractRegionConfig();
+  const regionConfig = getRegionConfig();
   if (!regionConfig) {
     return err(createError(
       ErrorCode.AUTH_REQUIRED,

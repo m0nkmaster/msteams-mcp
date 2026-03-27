@@ -140,6 +140,9 @@ export async function markAsRead(
 /**
  * Gets unread count for a conversation by comparing consumption horizon
  * with recent messages.
+ *
+ * If the consumption horizon endpoint fails, falls back to message-only
+ * checking (reports recent messages from others without precise read position).
  */
 export async function getUnreadStatus(
   conversationId: string
@@ -149,11 +152,9 @@ export async function getUnreadStatus(
   lastReadMessageId?: string;
   latestMessageId?: string;
 }>> {
-  // Get consumption horizon
+  // Get consumption horizon — non-fatal if it fails
   const horizonResult = await getConsumptionHorizon(conversationId);
-  if (!horizonResult.ok) {
-    return horizonResult;
-  }
+  const lastReadId = horizonResult.ok ? horizonResult.value.lastReadMessageId : undefined;
 
   // Get recent messages
   const messagesResult = await getThreadMessages(conversationId, { limit: 50 });
@@ -161,7 +162,6 @@ export async function getUnreadStatus(
     return messagesResult;
   }
 
-  const lastReadId = horizonResult.value.lastReadMessageId;
   const messages = messagesResult.value.messages;
 
   // Count messages after the last read position
@@ -192,5 +192,119 @@ export async function getUnreadStatus(
     unreadCount,
     lastReadMessageId: lastReadId,
     latestMessageId,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bulk unread check via conversations list
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** An unread conversation from the bulk check. */
+export interface UnreadConversation {
+  conversationId: string;
+  displayName?: string;
+  isChannel: boolean;
+  lastMessageFrom?: string;
+  lastMessageTime: number;
+  readUpTo: number;
+}
+
+/** Result of the bulk unread conversations check. */
+export interface UnreadConversationsResult {
+  unreadChats: UnreadConversation[];
+  unreadChannels: UnreadConversation[];
+  totalChecked: number;
+}
+
+/**
+ * Gets all unread conversations in a single API call.
+ *
+ * Uses the conversations list endpoint which returns each conversation's
+ * consumptionhorizon inline, avoiding N+1 API calls. Compares the last
+ * message timestamp against the read horizon to determine unread state.
+ */
+export async function getUnreadConversations(): Promise<Result<UnreadConversationsResult>> {
+  const authResult = requireMessageAuthWithConfig();
+  if (!authResult.ok) {
+    return authResult;
+  }
+  const { auth, region, baseUrl } = authResult.value;
+
+  const url = CHATSVC_API.conversations(region, baseUrl);
+  const response = await httpRequest<Record<string, unknown>>(
+    url,
+    {
+      method: 'GET',
+      headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
+    }
+  );
+
+  if (!response.ok) {
+    return response;
+  }
+
+  const data = response.value.data as Record<string, unknown> | undefined;
+  const convs = (data?.conversations as unknown[]) || [];
+
+  const unreadChats: UnreadConversation[] = [];
+  const unreadChannels: UnreadConversation[] = [];
+
+  for (const raw of convs) {
+    const c = raw as Record<string, unknown>;
+    const props = (c.properties || {}) as Record<string, string>;
+    const tp = (c.threadProperties || {}) as Record<string, string>;
+    const lastMsg = c.lastMessage as Record<string, string> | undefined;
+
+    if (!lastMsg?.id) continue;
+
+    const lastMsgTime = parseInt(lastMsg.id, 10);
+    const fromMe = lastMsg.from?.includes(auth.userMri);
+    const isChannel = tp.threadType === 'channel' || (c.id as string).includes('@thread.tacv2');
+    const displayName = tp.topic || lastMsg.imdisplayname;
+
+    const horizon = props.consumptionhorizon;
+
+    if (!horizon) {
+      // Never-opened conversation — only flag DMs where last message isn't from us
+      if (fromMe || isChannel) continue;
+      unreadChats.push({
+        conversationId: c.id as string,
+        displayName,
+        isChannel: false,
+        lastMessageFrom: lastMsg.imdisplayname,
+        lastMessageTime: lastMsgTime,
+        readUpTo: 0,
+      });
+      continue;
+    }
+
+    const readUpTo = parseInt(horizon.split(';')[0], 10);
+    if (lastMsgTime <= readUpTo) continue; // Already read
+
+    // For channels, preserve original behavior (skip if last msg is ours).
+    // For chats, only skip if read horizon is within 2s of our reply —
+    // a larger gap means unread messages exist before our reply.
+    if (fromMe && (isChannel || (lastMsgTime - readUpTo) < 2000)) continue;
+
+    const entry: UnreadConversation = {
+      conversationId: c.id as string,
+      displayName,
+      isChannel,
+      lastMessageFrom: lastMsg.imdisplayname,
+      lastMessageTime: lastMsgTime,
+      readUpTo,
+    };
+
+    if (isChannel) {
+      unreadChannels.push(entry);
+    } else {
+      unreadChats.push(entry);
+    }
+  }
+
+  return ok({
+    unreadChats,
+    unreadChannels,
+    totalChecked: convs.length,
   });
 }

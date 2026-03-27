@@ -103,13 +103,23 @@ async function handleLogin(
   // Headless-first strategy:
   // The persistent browser profile retains Microsoft's long-lived session cookies,
   // so headless SSO can succeed even without a session-state file. Always try
-  // headless first unless the user explicitly wants a fresh login.
-  if (!input.forceNew) {
-    // Try headless first - SSO may complete silently
+  // headless first — even for forceNew. Chrome cookie import enables headless SSO
+  // to succeed without a session file, so most recovery scenarios complete silently.
+  {
     const headlessManager = await createBrowserContext({ headless: true });
     ctx.server.setBrowserManager(headlessManager);
 
     try {
+      if (input.forceNew) {
+        // Clear persistent profile cookies, then import Chrome's Microsoft SSO
+        // cookies so headless SSO can succeed without a session file.
+        // (createBrowserContext skips cookie import in headless mode to avoid
+        // Keychain access on routine refresh — this is the intentional exception.)
+        await headlessManager.context.clearCookies();
+        const { importMicrosoftCookies } = await import('../browser/chrome-cookie-import.js');
+        await importMicrosoftCookies(headlessManager.context);
+      }
+
       await ensureAuthenticated(
         headlessManager.page,
         headlessManager.context,
@@ -118,8 +128,6 @@ async function handleLogin(
         true   // Headless mode - throw immediately if user interaction required
       );
 
-      // If ensureAuthenticated completed without throwing, we're authenticated
-      // (it would have thrown or hung if stuck on login page)
       await closeBrowser(headlessManager, true);
       ctx.server.resetBrowserState();
       ctx.server.markInitialised();

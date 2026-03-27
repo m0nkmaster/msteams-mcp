@@ -23,6 +23,7 @@ import {
 } from '../auth/session-store.js';
 import { clearRegionCache } from '../utils/auth-guards.js';
 import * as log from '../utils/logger.js';
+import { importMicrosoftCookies } from './chrome-cookie-import.js';
 
 export interface BrowserManager {
   /** Always null — persistent contexts have no separate Browser object. */
@@ -178,6 +179,15 @@ export async function createBrowserContext(
       viewport: opts.viewport,
       acceptDownloads: false,
     });
+
+    // Import Microsoft SSO cookies from the user's real Chrome profile.
+    // Only for visible (interactive) logins — enables SSO so user doesn't have
+    // to type credentials. Headless refresh uses the persistent profile's saved
+    // cookies, avoiding Keychain access on every hourly auto-refresh cycle.
+    // (forceNew login imports cookies explicitly via auth-tools.ts)
+    if (!opts.headless) {
+      await importMicrosoftCookies(context);
+    }
 
     // Persistent contexts start with one page; use it or create one
     const page = context.pages()[0] ?? await context.newPage();

@@ -15,6 +15,7 @@ import {
   editMessage,
   deleteMessage,
   getUnreadStatus,
+  getUnreadConversations,
   markAsRead,
   getActivityFeed,
   addReaction,
@@ -23,8 +24,7 @@ import {
   getFollowedThreads,
 } from '../api/chatsvc-api.js';
 import { getFavorites, addFavorite, removeFavorite, getCustomEmojis } from '../api/csa-api.js';
-import { SELF_CHAT_ID, MAX_UNREAD_AGGREGATE_CHECK, MAX_THREAD_LIMIT, STANDARD_EMOJIS } from '../constants.js';
-import { ErrorCode } from '../types/errors.js';
+import { SELF_CHAT_ID, MAX_THREAD_LIMIT, STANDARD_EMOJIS } from '../constants.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -77,6 +77,7 @@ export const MarkAsReadInputSchema = z.object({
 
 export const GetActivityInputSchema = z.object({
   limit: z.number().min(1).max(200).optional(),
+  syncState: z.string().optional(),
 });
 
 export const SearchEmojiInputSchema = z.object({
@@ -333,13 +334,17 @@ const markAsReadToolDefinition: Tool = {
 
 const getActivityToolDefinition: Tool = {
   name: 'teams_get_activity',
-  description: 'Get the user\'s activity feed - mentions, reactions, replies, and other notifications. Returns recent activity items with sender, content, and source conversation context.',
+  description: 'Get the user\'s activity feed - mentions, reactions, replies, and other notifications. Returns recent activity items with sender, content, and source conversation context. Pass syncState from a previous response to get only newer items.',
   inputSchema: {
     type: 'object',
     properties: {
       limit: {
         type: 'number',
         description: 'Maximum number of activity items to return (default: 50, max: 200)',
+      },
+      syncState: {
+        type: 'string',
+        description: 'Pagination token from a previous teams_get_activity response. When provided, returns only activity newer than the previous fetch.',
       },
     },
   },
@@ -700,75 +705,29 @@ async function handleGetUnread(
     };
   }
 
-  // Aggregate mode: check all favourites
-  const favResult = await getFavorites();
-  if (!favResult.ok) {
-    return { success: false, error: favResult.error };
+  // Aggregate mode: bulk check all conversations in a single API call
+  const result = await getUnreadConversations();
+  if (!result.ok) {
+    return { success: false, error: result.error };
   }
 
-  const favorites = favResult.value.favorites;
-  const conversations: Array<{
-    conversationId: string;
-    displayName?: string;
-    conversationType?: string;
-    unreadCount: number;
-  }> = [];
+  const { unreadChats, unreadChannels, totalChecked } = result.value;
 
-  let totalUnread = 0;
-  let errorCount = 0;
-
-  // Check unread status for each favourite in parallel (limit to prevent timeout)
-  const maxToCheck = MAX_UNREAD_AGGREGATE_CHECK;
-  const favsToCheck = favorites.slice(0, maxToCheck);
-  const results = await Promise.allSettled(
-    favsToCheck.map(fav => getUnreadStatus(fav.conversationId))
-  );
-
-  const checkedCount = results.length;
-  for (let i = 0; i < results.length; i++) {
-    const settled = results[i];
-    const fav = favsToCheck[i];
-
-    if (settled.status === 'fulfilled' && settled.value.ok) {
-      if (settled.value.value.unreadCount > 0) {
-        conversations.push({
-          conversationId: fav.conversationId,
-          displayName: fav.displayName,
-          conversationType: fav.conversationType,
-          unreadCount: settled.value.value.unreadCount,
-        });
-        totalUnread += settled.value.value.unreadCount;
-      }
-    } else {
-      errorCount++;
-    }
-  }
-
-  // If all checks failed, return an error rather than misleading success
-  if (checkedCount > 0 && errorCount === checkedCount) {
-    return {
-      success: false,
-      error: {
-        code: ErrorCode.API_ERROR,
-        message: `Failed to check unread status for all ${checkedCount} favourites`,
-        retryable: true,
-        suggestions: ['Check authentication status with teams_status', 'Try teams_login to refresh session'],
-      },
-    };
-  }
+  const formatConv = (c: typeof unreadChats[number]) => ({
+    conversationId: c.conversationId,
+    displayName: c.displayName,
+    lastMessageFrom: c.lastMessageFrom,
+  });
 
   return {
     success: true,
     data: {
-      totalUnread,
-      conversationsWithUnread: conversations.length,
-      conversations,
-      checked: checkedCount,
-      totalFavorites: favorites.length,
-      errors: errorCount > 0 ? errorCount : undefined,
-      note: favorites.length > maxToCheck
-        ? `Checked first ${maxToCheck} of ${favorites.length} favourites`
-        : undefined,
+      unreadChats: unreadChats.length,
+      unreadChannels: unreadChannels.length,
+      chats: unreadChats.map(formatConv),
+      channels: unreadChannels.map(formatConv),
+      totalChecked,
+      note: totalChecked >= 200 ? 'Only checked most recent 200 conversations' : undefined,
     },
   };
 }
@@ -797,7 +756,7 @@ async function handleGetActivity(
   input: z.infer<typeof GetActivityInputSchema>,
   _ctx: ToolContext
 ): Promise<ToolResult> {
-  const result = await getActivityFeed({ limit: input.limit });
+  const result = await getActivityFeed({ limit: input.limit, syncState: input.syncState });
 
   if (!result.ok) {
     return { success: false, error: result.error };
