@@ -138,10 +138,7 @@ export async function getActivityFeed(
   let syncState: string | undefined;
   if (metadata?.syncState) {
     try {
-      const metaUrl = new URL(metadata.syncState);
-      const metaUrl = new URL(metadata.syncState);
-      const extracted = metaUrl.searchParams.get('syncState');
-      syncState = extracted ?? metadata.syncState; // fall back to raw value if param absent
+      syncState = new URL(metadata.syncState).searchParams.get('syncState') ?? undefined;
     } catch {
       syncState = metadata.syncState;
     }
