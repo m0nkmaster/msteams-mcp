@@ -115,13 +115,13 @@ export const GetMessageInputSchema = z.object({
 
 const sendMessageToolDefinition: Tool = {
   name: 'teams_send_message',
-  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions using @[Name](mri) syntax inline. Example: "Hey @[John Smith](8:orgid:abc...), check this". Get MRI from teams_search_people. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId.',
+  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId.',
   inputSchema: {
     type: 'object',
     properties: {
       content: {
         type: 'string',
-        description: 'The message content in markdown (not HTML). Supports: **bold**, *italic*, ~~strikethrough~~, `inline code`, ```code blocks```, bullet lists (- item), numbered lists (1. item), and newlines. Do NOT send raw HTML tags. For @mentions, use @[DisplayName](mri) syntax. Example: "Hey @[John Smith](8:orgid:abc...), can you review this?"',
+        description: 'The message content in markdown (not HTML). Supports: **bold**, *italic*, ~~strikethrough~~, `inline code`, ```code blocks```, bullet lists (- item), numbered lists (1. item), and newlines. Do NOT send raw HTML tags. For people @mentions use @[DisplayName](mri) (MRI from teams_search_people). For channel tag @mentions use @[DisplayName](tag:tagId) (tag IDs from teams_get_tags). Markdown links [text](url) are supported.',
       },
       conversationId: {
         type: 'string',
@@ -259,7 +259,7 @@ const createGroupChatToolDefinition: Tool = {
 
 const editMessageToolDefinition: Tool = {
   name: 'teams_edit_message',
-  description: 'Edit one of your own messages. You can only edit messages you sent. The API will reject attempts to edit other users\' messages.',
+  description: 'Edit one of your own messages (same markdown and @mention rules as teams_send_message: people @[Name](mri), channel tags @[TagName](tag:tagId) from teams_get_tags). You can only edit messages you sent.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -273,7 +273,7 @@ const editMessageToolDefinition: Tool = {
       },
       content: {
         type: 'string',
-        description: 'The new content for the message. Can include basic HTML formatting.',
+        description: 'New content in markdown (not raw HTML): **bold**, *italic*, lists, code, @[Person](mri), @[Tag](tag:id), [text](url) — same as teams_send_message.',
       },
     },
     required: ['conversationId', 'messageId', 'content'],
@@ -301,13 +301,13 @@ const deleteMessageToolDefinition: Tool = {
 
 const getUnreadToolDefinition: Tool = {
   name: 'teams_get_unread',
-  description: 'Get unread message status. Without parameters, returns aggregate unread counts across all favourite/pinned conversations. With a conversationId, returns unread status for that specific conversation.',
+  description: 'Get unread status. Without conversationId: one bulk API call over your recent conversations (up to 200), returns separate lists of unread chats and channels (conversationId, displayName, lastMessageFrom) plus counts. With conversationId: unread count for that chat/channel using read horizon vs recent messages.',
   inputSchema: {
     type: 'object',
     properties: {
       conversationId: {
         type: 'string',
-        description: 'Optional. A specific conversation ID to check. If omitted, checks all favourites.',
+        description: 'Optional. If set, returns unreadCount (and related fields) for this conversation only. If omitted, returns bulk unreadChats/unreadChannels across recent conversations.',
       },
     },
   },

@@ -1,16 +1,5 @@
 # Roadmap
 
-## Recently Completed
-
-| Feature | Description |
-|---------|-------------|
-| Tag mentions | `@[Tag](tag:id)` syntax in `teams_send_message`; `teams_get_tags` tool lists channel tags |
-| Unread conversations | `teams_get_unread` (no args) uses bulk API — single call returns all unread chats and channels |
-| Activity feed pagination | `teams_get_activity` accepts `syncState` to fetch only newer items incrementally |
-| Thread `since` filter | `teams_get_thread` accepts `since` (ISO 8601) to fetch only messages after a timestamp |
-| Recording/transcript links | Messages with recording/transcript `<item>` tags now include URIs in `links` |
-| Silent `forceNew` login | `teams_login forceNew:true` tries headless SSO before showing visible browser |
-
 ## Pending
 
 | Priority | Feature | Description | Difficulty | Notes |

@@ -433,13 +433,15 @@ export async function getThreadMessages(
 
 /**
  * Edits an existing message.
- * 
+ *
+ * Uses the same content pipeline as {@link sendMessage} (markdown, @[mentions], links).
+ *
  * Note: You can only edit your own messages. The API will reject
  * attempts to edit messages from other users.
- * 
+ *
  * @param conversationId - The conversation containing the message
  * @param messageId - The ID of the message to edit
- * @param newContent - The new content for the message
+ * @param newContent - New content (markdown; supports mentions like sendMessage)
  */
 export async function editMessage(
   conversationId: string,
@@ -452,14 +454,13 @@ export async function editMessage(
   }
   const { auth, region, baseUrl } = authResult.value;
   const displayName = getUserDisplayName() || 'User';
-  
-  // Always convert through markdown→HTML pipeline (never pass raw HTML through,
-  // as Teams requires proper block-level wrapping like <p> tags)
-  const htmlContent = markdownToTeamsHtml(newContent);
 
-  // Build the edit request body
-  // The API requires the message structure with updated content
-  const body = {
+  // Same pipeline as sendMessage: markdown, @[mentions](mri), links, then mentions property.
+  const parsed = parseContentWithMentionsAndLinks(newContent);
+  const htmlContent = parsed.html;
+  const mentionsToSend = parsed.mentions;
+
+  const body: Record<string, unknown> = {
     id: messageId,
     type: 'Message',
     conversationid: conversationId,
@@ -468,6 +469,12 @@ export async function editMessage(
     contenttype: 'text',
     imdisplayname: displayName,
   };
+
+  if (mentionsToSend.length > 0) {
+    body.properties = {
+      mentions: buildMentionsProperty(mentionsToSend),
+    };
+  }
 
   const url = CHATSVC_API.editMessage(region, conversationId, messageId, baseUrl);
 
