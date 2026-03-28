@@ -67,12 +67,22 @@ export interface DeleteMessageResult {
   conversationId: string;
 }
 
-/** A mention to include in a message (internal). */
-interface Mention {
-  /** The user's MRI (e.g., '8:orgid:uuid'). */
+/** A mention to include in a message. */
+export interface Mention {
+  /** The user's MRI (e.g., '8:orgid:uuid') or tag MRI (e.g., 'tag:abc123'). */
   mri: string;
   /** Display name to show for the mention. */
   displayName: string;
+}
+
+/** Returns true if the MRI refers to a channel tag (e.g., 'tag:abc123'). */
+function isTagMention(mri: string): boolean {
+  return mri.startsWith('tag:');
+}
+
+/** Returns the actual MRI to send in the API payload (strips 'tag:' prefix for tags). */
+function getActualMri(mri: string): string {
+  return isTagMention(mri) ? mri.substring(4) : mri;
 }
 
 /** Options for sending a message. */
@@ -423,13 +433,15 @@ export async function getThreadMessages(
 
 /**
  * Edits an existing message.
- * 
+ *
+ * Uses the same content pipeline as {@link sendMessage} (markdown, @[mentions], links).
+ *
  * Note: You can only edit your own messages. The API will reject
  * attempts to edit messages from other users.
- * 
+ *
  * @param conversationId - The conversation containing the message
  * @param messageId - The ID of the message to edit
- * @param newContent - The new content for the message
+ * @param newContent - New content (markdown; supports mentions like sendMessage)
  */
 export async function editMessage(
   conversationId: string,
@@ -442,14 +454,13 @@ export async function editMessage(
   }
   const { auth, region, baseUrl } = authResult.value;
   const displayName = getUserDisplayName() || 'User';
-  
-  // Always convert through markdown→HTML pipeline (never pass raw HTML through,
-  // as Teams requires proper block-level wrapping like <p> tags)
-  const htmlContent = markdownToTeamsHtml(newContent);
 
-  // Build the edit request body
-  // The API requires the message structure with updated content
-  const body = {
+  // Same pipeline as sendMessage: markdown, @[mentions](mri), links, then mentions property.
+  const parsed = parseContentWithMentionsAndLinks(newContent);
+  const htmlContent = parsed.html;
+  const mentionsToSend = parsed.mentions;
+
+  const body: Record<string, unknown> = {
     id: messageId,
     type: 'Message',
     conversationid: conversationId,
@@ -458,6 +469,12 @@ export async function editMessage(
     contenttype: 'text',
     imdisplayname: displayName,
   };
+
+  if (mentionsToSend.length > 0) {
+    body.properties = {
+      mentions: buildMentionsProperty(mentionsToSend),
+    };
+  }
 
   const url = CHATSVC_API.editMessage(region, conversationId, messageId, baseUrl);
 
@@ -891,20 +908,28 @@ function timestampFromIdOrNow(id: string): string {
 
 /**
  * Builds the HTML for a single mention.
+ * 
+ * Tag mentions use a span-only format; person mentions include a readonly wrapper.
  */
-function buildMentionHtml(displayName: string, itemId: number): string {
-  return `<readonly class="skipProofing" itemtype="http://schema.skype.com/Mention" contenteditable="false" spellcheck="false"><span itemtype="http://schema.skype.com/Mention" itemscope itemid="${itemId}">${escapeHtmlChars(displayName)}</span></readonly>`;
+export function buildMentionHtml(displayName: string, itemId: number, mri: string): string {
+  const spanHtml = `<span itemtype="http://schema.skype.com/Mention" itemscope itemid="${itemId}">${escapeHtmlChars(displayName)}</span>`;
+  if (isTagMention(mri)) {
+    return spanHtml;
+  }
+  return `<readonly class="skipProofing" itemtype="http://schema.skype.com/Mention" contenteditable="false" spellcheck="false">${spanHtml}</readonly>`;
 }
 
 /**
  * Builds the mentions property array for the API request.
+ * 
+ * Tag mentions use mentionType 'tag' with the raw tag ID (without 'tag:' prefix).
  */
-function buildMentionsProperty(mentions: Mention[]): string {
+export function buildMentionsProperty(mentions: Mention[]): string {
   const mentionObjects = mentions.map((mention, index) => ({
     '@type': 'http://schema.skype.com/Mention',
     'itemid': String(index),
-    'mri': mention.mri,
-    'mentionType': 'person',
+    'mri': getActualMri(mention.mri),
+    'mentionType': isTagMention(mention.mri) ? 'tag' : 'person',
     'displayName': mention.displayName,
   }));
   return JSON.stringify(mentionObjects);
@@ -914,7 +939,7 @@ function buildMentionsProperty(mentions: Mention[]): string {
  * Parses content for both mentions @[Name](mri) and links [text](url).
  * Processes them in a single pass to avoid escaping conflicts.
  */
-function parseContentWithMentionsAndLinks(content: string): { html: string; mentions: Mention[] } {
+export function parseContentWithMentionsAndLinks(content: string): { html: string; mentions: Mention[] } {
   // Patterns for mentions and links
   // Note: Link pattern uses [^)\s] to reject URLs with spaces
   const mentionPattern = /@\[([^\]]+)\]\(([^)]+)\)/g;
@@ -974,7 +999,7 @@ function parseContentWithMentionsAndLinks(content: string): { html: string; ment
     let html: string;
     if (m.type === 'mention') {
       mentions.push({ mri: m.target, displayName: m.text });
-      html = buildMentionHtml(m.text, mentionId);
+      html = buildMentionHtml(m.text, mentionId, m.target);
       mentionId++;
     } else {
       const safeText = escapeHtmlChars(m.text);

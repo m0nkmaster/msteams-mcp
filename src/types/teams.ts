@@ -6,6 +6,8 @@
 export interface ExtractedLink {
   url: string;
   text: string;
+  /** Link type from <item type="..."> elements (e.g., amsTranscript, onedriveForBusinessVideo). */
+  contentType?: string;
 }
 
 export interface TeamsSearchResult {

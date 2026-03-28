@@ -96,9 +96,12 @@ function detectActivityType(msg: Record<string, unknown>): ActivityType {
 /**
  * Gets the activity feed (notifications) for the current user.
  * Includes mentions, reactions, replies, and other notifications.
+ * 
+ * @param options.limit - Maximum items to return (default: 50, max: 200)
+ * @param options.syncState - Pagination token from previous response for next page
  */
 export async function getActivityFeed(
-  options: { limit?: number } = {}
+  options: { limit?: number; syncState?: string } = {}
 ): Promise<Result<GetActivityResult>> {
   const authResult = requireMessageAuthWithConfig();
   if (!authResult.ok) {
@@ -109,8 +112,15 @@ export async function getActivityFeed(
 
   let url = CHATSVC_API.activityFeed(region, baseUrl);
   url += `?view=msnp24Equivalent&pageSize=${limit}`;
+  if (options.syncState) {
+    url += `&syncState=${encodeURIComponent(options.syncState)}`;
+  }
 
-  const response = await httpRequest<{ messages?: unknown[]; syncState?: string }>(
+  const response = await httpRequest<{
+    messages?: unknown[];
+    syncState?: string;
+    _metadata?: { syncState?: string };
+  }>(
     url,
     {
       method: 'GET',
@@ -123,7 +133,16 @@ export async function getActivityFeed(
   }
 
   const rawMessages = response.value.data.messages;
-  const syncState = response.value.data.syncState;
+  // syncState is in _metadata as a full URL — extract just the token
+  const metadata = response.value.data._metadata;
+  let syncState: string | undefined;
+  if (metadata?.syncState) {
+    try {
+      syncState = new URL(metadata.syncState).searchParams.get('syncState') ?? undefined;
+    } catch {
+      syncState = metadata.syncState;
+    }
+  }
   
   if (!Array.isArray(rawMessages)) {
     return ok({

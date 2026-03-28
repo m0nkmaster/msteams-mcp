@@ -182,7 +182,7 @@ Session state and token cache files are protected by:
 |------|---------|
 | `teams_search` | Search Teams messages with query operators, supports pagination |
 | `teams_search_email` | Search emails in user's mailbox (same Substrate token as Teams search) |
-| `teams_send_message` | Send a message to a Teams conversation (use `replyToMessageId` for thread replies) |
+| `teams_send_message` | Send a message (markdown); person `@[Name](mri)` or channel tag `@[Tag](tag:id)` via `teams_get_tags`; `replyToMessageId` for channel thread replies |
 | `teams_get_me` | Get current user profile (email, name, ID) |
 | `teams_get_frequent_contacts` | Get frequently contacted people (for name resolution) |
 | `teams_search_people` | Search for people by name or email |
@@ -196,15 +196,16 @@ Session state and token cache files are protected by:
 | `teams_get_saved_messages` | Get list of saved/bookmarked messages with source references |
 | `teams_get_followed_threads` | Get list of followed threads with source references |
 | `teams_get_message` | Get a single message by ID with full content (any age) |
-| `teams_get_thread` | Get messages from a conversation/thread |
+| `teams_get_thread` | Get messages from a conversation/thread; optional `since` (ISO 8601) for messages after a time |
 | `teams_find_channel` | Find channels by name (your teams + org-wide), shows membership |
+| `teams_get_tags` | List channel tags for a team (`teamId` from `teams_find_channel`) for tag @mentions |
 | `teams_get_chat` | Get conversation ID for 1:1 chat with a person |
 | `teams_create_group_chat` | Create a new group chat with multiple people |
-| `teams_edit_message` | Edit one of your own messages |
+| `teams_edit_message` | Edit one of your own messages (same markdown and @mentions as send) |
 | `teams_delete_message` | Delete one of your own messages (soft delete) |
-| `teams_get_unread` | Get unread status for favourites (aggregate) or specific conversation |
+| `teams_get_unread` | Without `conversationId`: bulk unread across recent conversations (up to 200); with `conversationId`: unread count for that chat/channel |
 | `teams_mark_read` | Mark a conversation as read up to a specific message |
-| `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications) |
+| `teams_get_activity` | Activity feed (mentions, reactions, replies, notifications); pass `syncState` from a prior response for newer items only |
 | `teams_search_emoji` | Search for emojis by name (standard + custom org emojis) |
 | `teams_add_reaction` | Add an emoji reaction to a message |
 | `teams_remove_reaction` | Remove an emoji reaction from a message |

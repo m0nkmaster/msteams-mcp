@@ -120,13 +120,6 @@ export const DEFAULT_ACTIVITY_LIMIT = 50;
 export const MAX_ACTIVITY_LIMIT = 200;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Unread Status
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Maximum conversations to check when aggregating unread status. */
-export const MAX_UNREAD_AGGREGATE_CHECK = 20;
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Calendar/Meetings
 // ─────────────────────────────────────────────────────────────────────────────
 

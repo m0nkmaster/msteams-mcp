@@ -8,3 +8,4 @@ export * from './csa-api.js';
 export * from './calendar-api.js';
 export * from './transcript-api.js';
 export * from './files-api.js';
+export * from './tags-api.js';

@@ -1,5 +1,7 @@
 # Roadmap
 
+## Pending
+
 | Priority | Feature | Description | Difficulty | Notes |
 |----------|---------|-------------|------------|-------|
 | P3 | Find team | Search/discover teams by name | Easy | Teams List API |

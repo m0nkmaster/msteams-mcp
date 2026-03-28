@@ -8,6 +8,7 @@ import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchMessages, searchEmails, searchChannels } from '../api/substrate-api.js';
 import { getThreadMessages, getConsumptionHorizon, markAsRead } from '../api/chatsvc-api.js';
+import { ErrorCode, createError } from '../types/errors.js';
 import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
@@ -33,6 +34,7 @@ export const GetThreadInputSchema = z.object({
   limit: z.number().min(1).max(MAX_THREAD_LIMIT).optional().default(DEFAULT_THREAD_LIMIT),
   markRead: z.boolean().optional().default(false),
   order: z.enum(['asc', 'desc']).optional().default('desc'),
+  since: z.string().optional(),
 });
 
 export const FindChannelInputSchema = z.object({
@@ -100,6 +102,10 @@ const getThreadToolDefinition: Tool = {
         type: 'string',
         enum: ['asc', 'desc'],
         description: 'Sort order: "desc" (newest-first, default) or "asc" (oldest-first for chronological reading)',
+      },
+      since: {
+        type: 'string',
+        description: 'ISO 8601 timestamp (e.g., "2026-02-26T00:00:00Z"). When provided, only returns messages after this time.',
       },
     },
     required: ['conversationId'],
@@ -194,9 +200,26 @@ async function handleGetThread(
   input: z.infer<typeof GetThreadInputSchema>,
   _ctx: ToolContext
 ): Promise<ToolResult> {
+  // Validate since parameter if provided
+  let startTime: number | undefined;
+  if (input.since) {
+    const parsed = new Date(input.since).getTime();
+    if (isNaN(parsed)) {
+      return {
+        success: false,
+        error: createError(
+          ErrorCode.INVALID_INPUT,
+          `Invalid 'since' timestamp: "${input.since}". Expected ISO 8601 format (e.g., "2026-02-26T00:00:00Z").`
+        ),
+      };
+    }
+    startTime = parsed;
+  }
+
   const result = await getThreadMessages(input.conversationId, { 
     limit: input.limit,
     order: input.order,
+    startTime,
   });
 
   if (!result.ok) {

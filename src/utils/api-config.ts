@@ -111,6 +111,10 @@ export const CHATSVC_API = {
   /** Get a single message by ID. */
   singleMessage: (region: string, conversationId: string, messageId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}`,
+
+  /** List all recent conversations with inline properties. */
+  conversations: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=200`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +142,23 @@ export const CALENDAR_API = {
     hasPartition
       ? `${baseUrl}/api/mt/part/${regionPartition}/v2.1/me/calendars/calendarView`
       : `${baseUrl}/api/mt/${regionPartition}/v2.1/me/calendars/calendarView`,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tags API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Team tags API endpoints (middleTier).
+ * 
+ * Uses the same mt/part partitioned region pattern as Calendar.
+ */
+export const TAGS_API = {
+  /** List tags for a team. */
+  teamTags: (regionPartition: string, hasPartition: boolean, teamId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    hasPartition
+      ? `${baseUrl}/api/mt/part/${regionPartition}/beta/teams/${encodeURIComponent(teamId)}/tags`
+      : `${baseUrl}/api/mt/${regionPartition}/beta/teams/${encodeURIComponent(teamId)}/tags`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

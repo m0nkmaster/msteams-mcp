@@ -9,21 +9,38 @@ export type { ExtractedLink };
 
 /**
  * Extracts links from HTML content before stripping.
- * Returns an array of { url, text } objects.
+ * Returns an array of { url, text, contentType? } objects.
+ *
+ * Parses both:
+ * - <a href="...">text</a> - standard HTML links
+ * - <item type="..." uri="..."> - Teams recording/transcript URIs (amsTranscript, onedriveForBusinessVideo, etc.)
+ *   Handles type and uri in either order.
  */
 export function extractLinks(html: string): ExtractedLink[] {
   const links: ExtractedLink[] = [];
-  const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  
-  let match;
-  while ((match = linkRegex.exec(html)) !== null) {
-    const url = match[1];
-    const text = stripHtml(match[2]); // Clean nested HTML in link text
+
+  // <a href="...">text</a> - standard HTML links
+  for (const m of html.matchAll(/<a\s+[^>]*href=["'](?<url>[^"']+)["'][^>]*>(?<text>[\s\S]*?)<\/a>/gi)) {
+    const { url, text } = m.groups!;
     if (url && !url.startsWith('javascript:')) {
-      links.push({ url, text: text || url });
+      links.push({ url, text: stripHtml(text) || url });
     }
   }
-  
+
+  // <item type="..." uri="..."> - Teams recording/transcript URIs (attribute order may vary)
+  const itemTypeFirst = /<item\s+[^>]*type=["'](?<type>[^"']+)["'][^>]*uri=["'](?<uri>[^"']+)["'][^>]*>/gi;
+  const itemUriFirst = /<item\s+[^>]*uri=["'](?<uri>[^"']+)["'][^>]*type=["'](?<type>[^"']+)["'][^>]*>/gi;
+  const seen = new Set<string>();
+  for (const re of [itemTypeFirst, itemUriFirst]) {
+    for (const m of html.matchAll(re)) {
+      const { type, uri } = m.groups!;
+      if (uri && !seen.has(uri)) {
+        seen.add(uri);
+        links.push({ url: uri, text: type, contentType: type });
+      }
+    }
+  }
+
   return links;
 }
 
