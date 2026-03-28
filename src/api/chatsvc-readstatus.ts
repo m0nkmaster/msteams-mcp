@@ -258,6 +258,7 @@ export async function getUnreadConversations(): Promise<Result<UnreadConversatio
     if (!lastMsg?.id) continue;
 
     const lastMsgTime = parseInt(lastMsg.id, 10);
+    if (isNaN(lastMsgTime)) continue;
     const fromMe = lastMsg.from?.includes(auth.userMri);
     const isChannel = tp.threadType === 'channel' || (c.id as string).includes('@thread.tacv2');
     const displayName = tp.topic || lastMsg.imdisplayname;
