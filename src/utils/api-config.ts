@@ -142,6 +142,18 @@ export const CALENDAR_API = {
     hasPartition
       ? `${baseUrl}/api/mt/part/${regionPartition}/v2.1/me/calendars/calendarView`
       : `${baseUrl}/api/mt/${regionPartition}/v2.1/me/calendars/calendarView`,
+
+  /**
+   * Create a new calendar event (meeting).
+   * 
+   * @param regionPartition - The full region-partition (e.g., "amer-02") or just region (e.g., "emea")
+   * @param hasPartition - Whether the tenant uses partitioned URLs
+   * @param baseUrl - Teams base URL (from config or default)
+   */
+  createEvent: (regionPartition: string, hasPartition: boolean, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    hasPartition
+      ? `${baseUrl}/api/mt/part/${regionPartition}/v2.1/me/events`
+      : `${baseUrl}/api/mt/${regionPartition}/v2.1/me/events`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

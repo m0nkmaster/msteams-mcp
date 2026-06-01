@@ -72,6 +72,46 @@ export interface CalendarViewResult {
   meetings: Meeting[];
 }
 
+/** An attendee for a meeting invite. */
+export interface MeetingAttendee {
+  /** Email address of the attendee. */
+  email: string;
+  /** Display name of the attendee (optional). */
+  name?: string;
+}
+
+/** Options for creating a new calendar event. */
+export interface CreateMeetingOptions {
+  /** Meeting subject/title. */
+  subject: string;
+  /** Start time (ISO 8601, e.g. "2026-06-05T10:00:00Z"). */
+  startTime: string;
+  /** End time (ISO 8601, e.g. "2026-06-05T10:30:00Z"). */
+  endTime: string;
+  /** Attendees to invite (email addresses). */
+  attendees?: MeetingAttendee[];
+  /** Meeting body/description text. */
+  body?: string;
+  /** Whether to create as a Teams online meeting (default: true). */
+  isOnlineMeeting?: boolean;
+  /** Physical or virtual location. */
+  location?: string;
+}
+
+/** Result from creating a calendar event. */
+export interface CreatedMeeting {
+  /** The newly created meeting's ID. */
+  id: string;
+  /** Meeting subject. */
+  subject: string;
+  /** Start time (ISO 8601). */
+  startTime: string;
+  /** End time (ISO 8601). */
+  endTime: string;
+  /** Teams join URL (if online meeting). */
+  joinUrl?: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -257,5 +297,94 @@ export async function getCalendarView(
   return ok({
     count: meetings.length,
     meetings,
+  });
+}
+
+/**
+ * Creates a new calendar event (meeting) in the user's Teams calendar.
+ *
+ * Uses the Teams mt/part API with the same Skype Spaces auth as getCalendarView.
+ * Optionally adds a Teams online meeting link and sends invites to attendees.
+ *
+ * @param options - Event creation options
+ * @returns The created meeting's ID, subject, times, and join URL
+ */
+export async function createMeeting(
+  options: CreateMeetingOptions
+): Promise<Result<CreatedMeeting>> {
+  const authResult = requireSkypeSpacesAuth();
+  if (!authResult.ok) {
+    return authResult;
+  }
+  const { skypeToken, spacesToken } = authResult.value;
+
+  const regionConfig = getRegionConfig();
+  if (!regionConfig) {
+    return err(createError(
+      ErrorCode.AUTH_REQUIRED,
+      'Could not determine region. Please run teams_login to authenticate.',
+      { suggestions: ['Call teams_login to authenticate'] }
+    ));
+  }
+
+  const body: Record<string, unknown> = {
+    subject: options.subject,
+    start: { dateTime: options.startTime, timeZone: 'UTC' },
+    end: { dateTime: options.endTime, timeZone: 'UTC' },
+    isOnlineMeeting: options.isOnlineMeeting !== false,
+    onlineMeetingProvider: 'teamsForBusiness',
+  };
+
+  if (options.attendees && options.attendees.length > 0) {
+    body.attendees = options.attendees.map((a) => ({
+      emailAddress: { address: a.email, name: a.name ?? a.email },
+      type: 'required',
+    }));
+  }
+
+  if (options.body) {
+    body.body = { contentType: 'text', content: options.body };
+  }
+
+  if (options.location) {
+    body.location = { displayName: options.location };
+  }
+
+  const createUrl = CALENDAR_API.createEvent(
+    regionConfig.regionPartition,
+    regionConfig.hasPartition,
+    regionConfig.teamsBaseUrl
+  );
+
+  const response = await httpRequest<Record<string, unknown>>(
+    createUrl,
+    {
+      method: 'POST',
+      headers: {
+        ...getTeamsHeaders(regionConfig.teamsBaseUrl),
+        'Authentication': `skypetoken=${skypeToken}`,
+        'Authorization': `Bearer ${spacesToken}`,
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    return response;
+  }
+
+  const data = response.value.data as Record<string, unknown>;
+
+  // Extract the Teams join URL from the online meeting details
+  const onlineMeeting = data.onlineMeeting as Record<string, unknown> | undefined;
+  const joinUrl = (onlineMeeting?.joinUrl as string | undefined)
+    ?? (data.skypeTeamsMeetingUrl as string | undefined);
+
+  return ok({
+    id: data.id as string,
+    subject: (data.subject as string) ?? options.subject,
+    startTime: (data.start as Record<string, string>)?.dateTime ?? options.startTime,
+    endTime: (data.end as Record<string, string>)?.dateTime ?? options.endTime,
+    joinUrl,
   });
 }
