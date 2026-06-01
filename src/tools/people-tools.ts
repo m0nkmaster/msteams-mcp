@@ -7,6 +7,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchPeople, getFrequentContacts } from '../api/substrate-api.js';
+import { getPresence } from '../api/presence-api.js';
 import { getUserProfile } from '../auth/token-extractor.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import {
@@ -27,6 +28,10 @@ export const SearchPeopleInputSchema = z.object({
 
 export const FrequentContactsInputSchema = z.object({
   limit: z.number().min(1).max(MAX_CONTACTS_LIMIT).optional().default(DEFAULT_CONTACTS_LIMIT),
+});
+
+export const GetPresenceInputSchema = z.object({
+  userIds: z.array(z.string().min(1)).min(1),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,6 +77,22 @@ const frequentContactsToolDefinition: Tool = {
         description: 'Maximum number of contacts to return (default: 50)',
       },
     },
+  },
+};
+
+const getPresenceToolDefinition: Tool = {
+  name: 'teams_get_presence',
+  description: 'Get the real time presence of one or more people: availability (Available, Busy, Away, Offline, DoNotDisturb), activity (e.g. InACall, InAMeeting, Presenting), device, last active time, whether they are out of office, and their out of office auto reply message if set. Pass user identifiers (MRI like "8:orgid:<guid>" or a raw object id from teams_search_people / teams_get_frequent_contacts).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      userIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'User identifiers to look up: MRI ("8:orgid:<guid>") or raw object id. Get these from teams_search_people or teams_get_frequent_contacts.',
+      },
+    },
+    required: ['userIds'],
   },
 };
 
@@ -126,6 +147,15 @@ async function handleGetFrequentContacts(
   }));
 }
 
+async function handleGetPresence(
+  input: z.infer<typeof GetPresenceInputSchema>,
+  _ctx: ToolContext
+): Promise<ToolResult> {
+  const result = await getPresence(input.userIds);
+
+  return handleApiResult(result, (value) => ({ presences: value }));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Exports
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,5 +178,11 @@ export const frequentContactsTool: RegisteredTool<typeof FrequentContactsInputSc
   handler: handleGetFrequentContacts,
 };
 
+export const getPresenceTool: RegisteredTool<typeof GetPresenceInputSchema> = {
+  definition: getPresenceToolDefinition,
+  schema: GetPresenceInputSchema,
+  handler: handleGetPresence,
+};
+
 /** All people-related tools. */
-export const peopleTools = [getMeTool, searchPeopleTool, frequentContactsTool];
+export const peopleTools = [getMeTool, searchPeopleTool, frequentContactsTool, getPresenceTool];

@@ -142,6 +142,68 @@ export const CALENDAR_API = {
     hasPartition
       ? `${baseUrl}/api/mt/part/${regionPartition}/v2.1/me/calendars/calendarView`
       : `${baseUrl}/api/mt/${regionPartition}/v2.1/me/calendars/calendarView`,
+
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Microsoft Graph Calendar API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Microsoft Graph API base URL. */
+export const GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
+
+/**
+ * Microsoft Graph calendar endpoints.
+ *
+ * The Teams web client performs calendar writes (create/update/cancel/RSVP) and
+ * free/busy lookups against graph.microsoft.com, not the mt/part middle-tier API.
+ * These use a Graph bearer token (Calendars.ReadWrite scope) extracted from the
+ * same session. Event IDs returned by the mt/part calendarView are compatible
+ * with these Graph endpoints.
+ */
+export const GRAPH_CALENDAR_API = {
+  /** Create a new event (POST) or list events (GET). */
+  events: () => `${GRAPH_BASE_URL}/me/events`,
+
+  /** Get (GET), update (PATCH), or delete (DELETE) a single event by ID. */
+  event: (eventId: string) => `${GRAPH_BASE_URL}/me/events/${encodeURIComponent(eventId)}`,
+
+  /**
+   * RSVP to an event.
+   *
+   * @param action - "accept" | "tentativelyAccept" | "decline"
+   */
+  respondToEvent: (eventId: string, action: 'accept' | 'tentativelyAccept' | 'decline') =>
+    `${GRAPH_BASE_URL}/me/events/${encodeURIComponent(eventId)}/${action}`,
+
+  /** Get free/busy schedule for one or more users (POST). */
+  getSchedule: () => `${GRAPH_BASE_URL}/me/calendar/getSchedule`,
+} as const;
+
+/** Headers for Microsoft Graph API calls. */
+export function getGraphHeaders(token: string): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'Authorization': `Bearer ${token}`,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Presence API (UPS)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * User Presence Service (UPS) endpoints.
+ *
+ * Returns availability/activity plus calendar-derived out of office state and
+ * the user's auto reply note. Uses the base region (e.g. "emea"), not the
+ * partitioned region, and authenticates with the Skype Spaces token as Bearer.
+ */
+export const PRESENCE_API = {
+  /** Fetch presence for a batch of users (POST). */
+  getPresence: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/ups/${region}/v1/presence/getpresence/`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

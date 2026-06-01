@@ -13,6 +13,7 @@ import {
   extractCsaToken,
   extractSubstrateToken,
   extractSkypeSpacesToken,
+  extractGraphToken,
   extractRegionConfig,
   getUserProfile,
   clearTokenCache,
@@ -142,6 +143,26 @@ export function requireSkypeSpacesAuth(): Result<SkypeSpacesAuthInfo, McpError> 
   }
 
   return ok({ skypeToken: auth.skypeToken, spacesToken });
+}
+
+/**
+ * Requires a valid Microsoft Graph API token.
+ *
+ * Use for calendar write operations (create/update/cancel/RSVP) and free/busy
+ * lookups, which go through graph.microsoft.com rather than the mt/part API.
+ */
+export function requireGraphAuth(): Result<string, McpError> {
+  const graphToken = extractGraphToken();
+
+  if (!graphToken) {
+    return err(createError(
+      ErrorCode.AUTH_REQUIRED,
+      'Calendar write access requires a Microsoft Graph token. Please run teams_login.',
+      { suggestions: ['Call teams_login to authenticate'] }
+    ));
+  }
+
+  return ok(graphToken);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -98,6 +98,7 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 | `teams_get_frequent_contacts` | Get frequently contacted people (useful for name resolution) |
 | `teams_get_chat` | Get conversation ID for 1:1 chat with a person |
 | `teams_create_group_chat` | Create a new group chat with multiple people (2+ others) |
+| `teams_get_presence` | Get real time presence (availability, activity, device, out of office) for one or more people |
 
 ### Organisation
 
@@ -128,6 +129,12 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 | Tool | Description |
 |------|-------------|
 | `teams_get_meetings` | Get meetings from calendar (defaults to next 7 days) |
+| `teams_get_meeting` | Get full details of a single event by ID (attendees, body, location, join URL) |
+| `teams_create_meeting` | Create a calendar meeting and send invites (Teams join link by default) |
+| `teams_update_meeting` | Update or reschedule an existing event (only provided fields change) |
+| `teams_cancel_meeting` | Cancel an event (organiser notifies attendees; attendee removes from own calendar) |
+| `teams_respond_to_meeting` | Accept, tentatively accept, or decline a meeting invite |
+| `teams_get_schedule` | Check free/busy availability for one or more people over a time window |
 | `teams_get_transcript` | Get meeting transcript (requires `threadId` from `teams_get_meetings`) |
 
 `teams_get_meetings` returns: subject, times, organiser, join URL, `threadId` for meeting chat. Use `threadId` with `teams_get_thread` to read meeting chat, or with `teams_get_transcript` to get the full transcript with speakers and timestamps.
