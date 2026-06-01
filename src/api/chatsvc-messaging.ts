@@ -147,7 +147,7 @@ export async function sendMessage(
   const { replyToMessageId } = options;
   const displayName = getUserDisplayName() || 'User';
 
-  const clientMessageId = crypto.randomUUID();
+  const clientMessageId = Date.now().toString();
 
   // Process content: handle mentions, links, and markdown formatting.
   // Always convert through markdown→HTML pipeline (never pass user content through
