@@ -808,6 +808,56 @@ describe('markdownToTeamsHtml', () => {
     );
   });
 
+  it('converts ATX headings to h1-h6', () => {
+    expect(markdownToTeamsHtml('# Heading one\n## Heading two\n### Heading three')).toBe(
+      '<h1>Heading one</h1><h2>Heading two</h2><h3>Heading three</h3>'
+    );
+  });
+
+  it('mixes headings and paragraph text within a block', () => {
+    expect(markdownToTeamsHtml('# Title\nSome text')).toBe('<h1>Title</h1><p>Some text</p>');
+  });
+
+  it('converts a single blockquote line', () => {
+    expect(markdownToTeamsHtml('> quoted line')).toBe('<blockquote>quoted line</blockquote>');
+  });
+
+  it('joins multiple blockquote lines with br', () => {
+    expect(markdownToTeamsHtml('> line one\n> line two')).toBe(
+      '<blockquote>line one<br>line two</blockquote>'
+    );
+  });
+
+  it('applies inline formatting inside a blockquote', () => {
+    expect(markdownToTeamsHtml('> a **bold** quote')).toBe(
+      '<blockquote>a <b>bold</b> quote</blockquote>'
+    );
+  });
+
+  it('converts a pipe table to an HTML table', () => {
+    const input = '| Name | Value |\n| --- | --- |\n| Alpha | 1 |\n| Beta | 2 |';
+    expect(markdownToTeamsHtml(input)).toBe(
+      '<table><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody>' +
+        '<tr><td>Alpha</td><td>1</td></tr><tr><td>Beta</td><td>2</td></tr></tbody></table>'
+    );
+  });
+
+  it('supports aligned table separators and inline formatting in cells', () => {
+    const input = '| Name | Status |\n|:---|:---:|\n| **Bob** | `ok` |';
+    expect(markdownToTeamsHtml(input)).toBe(
+      '<table><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody>' +
+        '<tr><td><b>Bob</b></td><td><code>ok</code></td></tr></tbody></table>'
+    );
+  });
+
+  it('keeps a table as its own block alongside surrounding paragraphs', () => {
+    const input = 'Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nOutro';
+    expect(markdownToTeamsHtml(input)).toBe(
+      '<p>Intro</p><table><thead><tr><th>A</th><th>B</th></tr></thead><tbody>' +
+        '<tr><td>1</td><td>2</td></tr></tbody></table><p>Outro</p>'
+    );
+  });
+
   it('returns empty paragraph for empty string', () => {
     expect(markdownToTeamsHtml('')).toBe('<p></p>');
   });

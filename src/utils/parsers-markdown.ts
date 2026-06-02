@@ -42,6 +42,22 @@ function convertInlineFormatting(line: string): string {
 }
 
 /**
+ * Converts a markdown pipe table (header row, a separator row of dashes, then
+ * body rows) into a Teams HTML <table>.
+ */
+function buildTableHtml(lines: string[]): string {
+  const parseRow = (l: string): string[] =>
+    l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+  const header = parseRow(lines[0]);
+  const bodyRows = lines.slice(2);
+  const headHtml = `<thead><tr>${header.map(c => `<th>${convertInlineFormatting(c)}</th>`).join('')}</tr></thead>`;
+  const bodyHtml = bodyRows
+    .map(l => `<tr>${parseRow(l).map(c => `<td>${convertInlineFormatting(c)}</td>`).join('')}</tr>`)
+    .join('');
+  return `<table>${headHtml}<tbody>${bodyHtml}</tbody></table>`;
+}
+
+/**
  * Converts markdown-formatted text to Teams-compatible HTML.
  * 
  * Supports:
@@ -53,6 +69,9 @@ function convertInlineFormatting(line: string): string {
  * - Newlines → paragraph breaks
  * - Ordered lists (1. item) → <ol><li>
  * - Unordered lists (- item, * item) → <ul><li>
+ * - Headings (#..###### ) → <h1>..<h6>
+ * - Blockquotes (> line) → <blockquote>
+ * - Pipe tables (| a | b | with a --- separator row) → <table>
  * 
  * Plain text without any formatting is returned as-is (HTML-escaped).
  */
@@ -96,9 +115,20 @@ export function markdownToTeamsHtml(text: string): string {
       
       const lines = trimmed.split('\n');
       
-      // Check if this paragraph is a list
+      // Table block: a header row plus a separator row of dashes/pipes
+      if (
+        lines.length >= 2 &&
+        /\|/.test(lines[0]) &&
+        /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[1])
+      ) {
+        htmlParts.push(buildTableHtml(lines));
+        continue;
+      }
+      
+      // Check if this paragraph is a list or a blockquote
       const isUnorderedList = lines.every(l => /^\s*[-*]\s+/.test(l));
       const isOrderedList = lines.every(l => /^\s*\d+[.)]\s+/.test(l));
+      const isBlockquote = lines.every(l => /^\s*>\s?/.test(l));
       
       if (isUnorderedList) {
         const items = lines.map(l => {
@@ -112,10 +142,31 @@ export function markdownToTeamsHtml(text: string): string {
           return `<li>${convertInlineFormatting(content)}</li>`;
         });
         htmlParts.push(`<ol>${items.join('')}</ol>`);
+      } else if (isBlockquote) {
+        const inner = lines.map(l => convertInlineFormatting(l.replace(/^\s*>\s?/, ''))).join('<br>');
+        htmlParts.push(`<blockquote>${inner}</blockquote>`);
       } else {
-        // Regular paragraph - join lines with <br>
-        const htmlLines = lines.map(l => convertInlineFormatting(l));
-        htmlParts.push(`<p>${htmlLines.join('<br>')}</p>`);
+        // Regular paragraph - convert heading lines to <h*>, join the rest with <br>
+        const out: string[] = [];
+        let buf: string[] = [];
+        const flushBuf = (): void => {
+          if (buf.length) {
+            out.push(`<p>${buf.join('<br>')}</p>`);
+            buf = [];
+          }
+        };
+        for (const l of lines) {
+          const h = l.match(/^\s*(#{1,6})\s+(.*)$/);
+          if (h) {
+            flushBuf();
+            const level = h[1].length;
+            out.push(`<h${level}>${convertInlineFormatting(h[2])}</h${level}>`);
+          } else {
+            buf.push(convertInlineFormatting(l));
+          }
+        }
+        flushBuf();
+        htmlParts.push(out.join(''));
       }
     }
   }
