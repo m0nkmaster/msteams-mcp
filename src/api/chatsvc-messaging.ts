@@ -11,7 +11,7 @@ import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import { getUserDisplayName } from '../auth/token-extractor.js';
 import { requireMessageAuth, requireMessageAuthWithConfig, getTeamsBaseUrl, getTenantId } from '../utils/auth-guards.js';
-import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, markdownToTeamsHtml, escapeHtmlChars, type ExtractedLink } from '../utils/parsers.js';
+import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, getConversationType, markdownToTeamsHtml, escapeHtmlChars, type ExtractedLink } from '../utils/parsers.js';
 import { SELF_CHAT_ID, MRI_ORGID_PREFIX } from '../constants.js';
 import { formatHumanReadableDate } from './chatsvc-common.js';
 import type { RawChatsvcMessage, RawConversationResponse, RawCreateThreadResponse } from '../types/api-responses.js';
@@ -85,17 +85,39 @@ function getActualMri(mri: string): string {
   return isTagMention(mri) ? mri.substring(4) : mri;
 }
 
+/**
+ * Builds a Skype "Reply" quoted block referencing an existing message.
+ *
+ * Used for chats (1:1, group, meeting) where native reply chains are not
+ * allowed: the block is prepended to the outgoing message content and Teams
+ * renders it as a quoted reply card above the new text. The sender MRI is
+ * normalised to its bare form (e.g. `8:orgid:<guid>`) and all text is escaped.
+ */
+export function buildReplyQuoteHtml(quote: ThreadMessage): string {
+  const mriMatch = quote.sender.mri.match(/(?:8:|48:|28:)[^/"]+/);
+  const senderMri = mriMatch ? mriMatch[0] : quote.sender.mri;
+  const senderName = escapeHtmlChars(quote.sender.displayName || 'Unknown');
+  const preview = escapeHtmlChars(quote.content.slice(0, 1000));
+  return (
+    `<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="${quote.id}">` +
+    `<strong itemprop="mri" itemid="${senderMri}">${senderName}</strong>` +
+    `<span itemprop="time" itemid="${quote.id}"></span>` +
+    `<p itemprop="preview">${preview}</p></blockquote>`
+  );
+}
+
 /** Options for sending a message. */
 export interface SendMessageOptions {
   /**
    * Message ID of the thread root to reply to.
    * 
-   * When provided, the message is posted as a reply to an existing thread
-   * in a channel. The conversationId should be the channel ID, and this
+   * In a channel, the message is posted as a native reply within the
+   * referenced thread. The conversationId should be the channel ID, and this
    * should be the ID of the first message in the thread.
    * 
-   * For chats (1:1, group, meeting), this is not needed - all messages
-   * are part of the same flat conversation.
+   * In a chat (1:1, group, meeting), threaded reply chains are not allowed,
+   * so the referenced message is instead embedded as a quoted reply block at
+   * the top of the message and posted normally.
    */
   replyToMessageId?: string;
 }
@@ -131,7 +153,8 @@ export interface CreateGroupChatResult {
  * - Reply to a thread: provide the channel's conversationId AND replyToMessageId
  * 
  * For chats (1:1, group, meeting), all messages go to the same conversation
- * without threading - just provide the conversationId.
+ * without threading. Passing replyToMessageId there embeds a quoted reply
+ * block referencing that message (reply chains are channel-only).
  */
 export async function sendMessage(
   conversationId: string,
@@ -153,8 +176,22 @@ export async function sendMessage(
   // Always convert through markdown→HTML pipeline (never pass user content through
   // without sanitization, as Teams requires proper block-level wrapping like <p> tags)
   const parsed = parseContentWithMentionsAndLinks(content);
-  const htmlContent = parsed.html;
+  let htmlContent = parsed.html;
   const mentionsToSend = parsed.mentions;
+
+  // Reply handling. Channels support native reply chains via the URL. Chats
+  // (1:1, group, meeting) reject reply chains ("Reply chains is not allowed in
+  // this thread type"), so when replyToMessageId is given for a chat we embed a
+  // Skype "Reply" quoted block referencing the original and post it normally.
+  let threadReplyId = replyToMessageId;
+  if (replyToMessageId && getConversationType(conversationId) !== 'channel') {
+    const original = await getMessage(conversationId, replyToMessageId);
+    if (original.ok) {
+      htmlContent = buildReplyQuoteHtml(original.value) + htmlContent;
+    }
+    // The quote is carried in the body, so post as a normal (non-threaded) message.
+    threadReplyId = undefined;
+  }
 
   // Build the message body
   const body: Record<string, unknown> = {
@@ -172,7 +209,7 @@ export async function sendMessage(
     };
   }
 
-  const url = CHATSVC_API.messages(region, conversationId, replyToMessageId, baseUrl);
+  const url = CHATSVC_API.messages(region, conversationId, threadReplyId, baseUrl);
 
   const response = await httpRequest<{ OriginalArrivalTime?: number }>(
     url,

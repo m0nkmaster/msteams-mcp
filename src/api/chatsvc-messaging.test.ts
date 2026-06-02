@@ -10,7 +10,22 @@ import {
   buildMentionHtml,
   buildMentionsProperty,
   parseContentWithMentionsAndLinks,
+  buildReplyQuoteHtml,
+  type ThreadMessage,
 } from './chatsvc-messaging.js';
+
+/** Minimal ThreadMessage factory for quote tests. */
+function makeMessage(overrides: Partial<ThreadMessage> = {}): ThreadMessage {
+  return {
+    id: '1780429789320',
+    content: 'original message',
+    contentType: 'RichText/Html',
+    sender: { mri: '8:orgid:abc-123', displayName: 'Alice' },
+    timestamp: '2026-06-02T20:55:00Z',
+    conversationId: '48:notes',
+    ...overrides,
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // buildMentionHtml
@@ -154,5 +169,48 @@ describe('parseContentWithMentionsAndLinks', () => {
     expect(mentions[0].mri).toBe('tag:abc');
     expect(html).toContain('<a href="https://example.com">docs</a>');
     expect(html).toContain('my-tag');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// buildReplyQuoteHtml
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('buildReplyQuoteHtml', () => {
+  it('builds a Skype Reply block with sender, id and preview', () => {
+    const html = buildReplyQuoteHtml(makeMessage());
+    expect(html).toContain('itemtype="http://schema.skype.com/Reply"');
+    expect(html).toContain('itemid="1780429789320"');
+    expect(html).toContain('itemprop="mri" itemid="8:orgid:abc-123"');
+    expect(html).toContain('>Alice<');
+    expect(html).toContain('<p itemprop="preview">original message</p>');
+    expect(html.startsWith('<blockquote')).toBe(true);
+    expect(html.endsWith('</blockquote>')).toBe(true);
+  });
+
+  it('normalises a full contact-URL MRI to its bare form', () => {
+    const html = buildReplyQuoteHtml(
+      makeMessage({
+        sender: {
+          mri: 'https://teams.microsoft.com/api/chatsvc/uk/v1/users/ME/contacts/8:orgid:abc-123',
+          displayName: 'Alice',
+        },
+      })
+    );
+    expect(html).toContain('itemid="8:orgid:abc-123"');
+    expect(html).not.toContain('contacts/');
+  });
+
+  it('escapes HTML in the sender name and preview', () => {
+    const html = buildReplyQuoteHtml(
+      makeMessage({ content: '1 < 2 & 3 > 0', sender: { mri: '8:orgid:x', displayName: '<b>Bob</b>' } })
+    );
+    expect(html).toContain('&lt;b&gt;Bob&lt;/b&gt;');
+    expect(html).toContain('1 &lt; 2 &amp; 3 &gt; 0');
+  });
+
+  it('falls back to Unknown when the display name is missing', () => {
+    const html = buildReplyQuoteHtml(makeMessage({ sender: { mri: '8:orgid:x' } }));
+    expect(html).toContain('>Unknown<');
   });
 });
