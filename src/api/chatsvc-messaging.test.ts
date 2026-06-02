@@ -140,6 +140,40 @@ describe('parseContentWithMentionsAndLinks', () => {
     expect(html).toContain('my-tag');
   });
 
+  it('keeps inline span itemids aligned with the mentions array for multiple mentions', () => {
+    // Regression: the inline <span itemid> was numbered in reverse
+    // placeholder-processing order while the mentions array (and
+    // buildMentionsProperty, which keys by array index) stayed source-ordered.
+    // That mismatch reversed the mention→MRI mapping: one mention was fine, two
+    // swapped, three reversed (middle fixed).
+    const { html, mentions } = parseContentWithMentionsAndLinks(
+      '@[Noah](8:orgid:noah) @[Kubra](8:orgid:kubra) @[Atakan](8:orgid:atakan)'
+    );
+
+    expect(mentions.map((m) => m.mri)).toEqual([
+      '8:orgid:noah',
+      '8:orgid:kubra',
+      '8:orgid:atakan',
+    ]);
+
+    // The itemid on each name's span must equal that mention's index in the array.
+    const itemIdFor = (name: string): number => {
+      const match = html.match(new RegExp(`itemid="(\\d+)"[^>]*>${name}<`));
+      if (!match) throw new Error(`no mention span found for ${name}`);
+      return Number(match[1]);
+    };
+    expect(itemIdFor('Noah')).toBe(0);
+    expect(itemIdFor('Kubra')).toBe(1);
+    expect(itemIdFor('Atakan')).toBe(2);
+
+    // And the property built from that array resolves each span's itemid back to
+    // the correct MRI (this is what Teams uses to render the chip / notify).
+    const props = JSON.parse(buildMentionsProperty(mentions));
+    expect(props[itemIdFor('Noah')].mri).toBe('8:orgid:noah');
+    expect(props[itemIdFor('Kubra')].mri).toBe('8:orgid:kubra');
+    expect(props[itemIdFor('Atakan')].mri).toBe('8:orgid:atakan');
+  });
+
   it('returns markdown-converted HTML when no mentions or links', () => {
     const { html, mentions } = parseContentWithMentionsAndLinks('Just plain text');
     expect(mentions).toHaveLength(0);

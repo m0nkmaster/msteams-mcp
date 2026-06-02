@@ -984,9 +984,24 @@ export function parseContentWithMentionsAndLinks(content: string): { html: strin
   // Strategy: replace mentions/links with unique placeholders, run the whole
   // content through markdownToTeamsHtml (so links stay inline within their
   // paragraph), then substitute placeholders back with actual HTML.
+  //
+  // Assign each mention a stable id up front, based on its source-order
+  // position. This same id is used for the inline <span itemid> AND as the
+  // mention's index in the returned array. buildMentionsProperty() keys each
+  // entry by its array index, so the inline itemid and the property itemid must
+  // agree. Numbering the spans in placeholder-processing order (reverse) instead
+  // would mismatch the source-ordered array and reverse the mention→MRI mapping
+  // (a single mention is unaffected, two swap, three reverse, etc.).
   const mentions: Mention[] = [];
+  const mentionIdByMatch = new Map<number, number>();
+  matches.forEach((m, i) => {
+    if (m.type === 'mention') {
+      mentionIdByMatch.set(i, mentions.length);
+      mentions.push({ mri: m.target, displayName: m.text });
+    }
+  });
+
   const placeholders: Map<string, string> = new Map();
-  let mentionId = 0;
   
   // Build content with placeholders (process in reverse to preserve indices).
   // Uses Unicode Private Use Area characters (U+E000, U+E001) as delimiters —
@@ -998,9 +1013,7 @@ export function parseContentWithMentionsAndLinks(content: string): { html: strin
     
     let html: string;
     if (m.type === 'mention') {
-      mentions.push({ mri: m.target, displayName: m.text });
-      html = buildMentionHtml(m.text, mentionId, m.target);
-      mentionId++;
+      html = buildMentionHtml(m.text, mentionIdByMatch.get(i)!, m.target);
     } else {
       const safeText = escapeHtmlChars(m.text);
       const safeUrl = m.target.replace(/"/g, '&quot;');
@@ -1010,9 +1023,6 @@ export function parseContentWithMentionsAndLinks(content: string): { html: strin
     
     placeholderContent = placeholderContent.substring(0, m.index) + placeholder + placeholderContent.substring(m.index + m.length);
   }
-  
-  // Reverse mentions array since we processed in reverse order
-  mentions.reverse();
   
   // Convert the whole content (with placeholders) through markdown pipeline
   let result = markdownToTeamsHtml(placeholderContent);
