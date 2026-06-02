@@ -10,11 +10,15 @@ import {
   CHATSVC_API,
   CALENDAR_API,
   CSA_API,
+  GRAPH_BASE_URL,
+  GRAPH_CALENDAR_API,
+  PRESENCE_API,
   getTeamsHeaders,
   getBearerHeaders,
   getSkypeAuthHeaders,
   getCsaHeaders,
   getMessagingHeaders,
+  getGraphHeaders,
 } from './api-config.js';
 
 describe('DEFAULT_TEAMS_BASE_URL', () => {
@@ -171,6 +175,56 @@ describe('CSA_API', () => {
   });
 });
 
+describe('GRAPH_BASE_URL', () => {
+  it('points at the v1.0 Graph endpoint', () => {
+    expect(GRAPH_BASE_URL).toBe('https://graph.microsoft.com/v1.0');
+  });
+});
+
+describe('GRAPH_CALENDAR_API', () => {
+  it('builds events URL', () => {
+    const url = GRAPH_CALENDAR_API.events();
+    expect(url).toContain('graph.microsoft.com');
+    expect(url).toContain('/me/events');
+  });
+
+  it('builds single event URL with encoded id', () => {
+    const url = GRAPH_CALENDAR_API.event('AAMk/Abc=');
+    expect(url).toContain('/me/events/');
+    expect(url).toContain('AAMk%2FAbc%3D');
+  });
+
+  it('builds respondToEvent URL for each action', () => {
+    expect(GRAPH_CALENDAR_API.respondToEvent('id1', 'accept')).toMatch(/\/me\/events\/id1\/accept$/);
+    expect(GRAPH_CALENDAR_API.respondToEvent('id1', 'tentativelyAccept')).toMatch(/\/tentativelyAccept$/);
+    expect(GRAPH_CALENDAR_API.respondToEvent('id1', 'decline')).toMatch(/\/decline$/);
+  });
+
+  it('encodes the event id in respondToEvent URL', () => {
+    const url = GRAPH_CALENDAR_API.respondToEvent('AAMk/Abc=', 'accept');
+    expect(url).toContain('AAMk%2FAbc%3D');
+  });
+
+  it('builds getSchedule URL', () => {
+    const url = GRAPH_CALENDAR_API.getSchedule();
+    expect(url).toContain('/me/calendar/getSchedule');
+  });
+});
+
+describe('PRESENCE_API', () => {
+  it('builds getPresence URL with region', () => {
+    const url = PRESENCE_API.getPresence('emea');
+    expect(url).toContain(DEFAULT_TEAMS_BASE_URL);
+    expect(url).toContain('/ups/emea/');
+    expect(url).toContain('getpresence');
+  });
+
+  it('accepts custom baseUrl for government clouds', () => {
+    const url = PRESENCE_API.getPresence('emea', 'https://teams.microsoft.us');
+    expect(url).toContain('teams.microsoft.us');
+  });
+});
+
 describe('getTeamsHeaders', () => {
   it('returns headers with content-type and origin', () => {
     const headers = getTeamsHeaders();
@@ -235,5 +289,15 @@ describe('getMessagingHeaders', () => {
     
     expect(headers['Authentication']).toContain('skypetoken');
     expect(headers['Authorization']).toContain('Bearer');
+  });
+});
+
+describe('getGraphHeaders', () => {
+  it('adds Authorization bearer and JSON headers', () => {
+    const headers = getGraphHeaders('graph-token');
+
+    expect(headers['Authorization']).toBe('Bearer graph-token');
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['Accept']).toBe('application/json');
   });
 });
