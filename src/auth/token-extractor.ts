@@ -51,6 +51,26 @@ function isJwtToken(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('ey');
 }
 
+/**
+ * Checks whether a decoded JWT payload grants a given delegated/app scope.
+ *
+ * Returns `null` when the token's scopes can't be determined (no `scp`/`roles`
+ * claim), so callers can decide whether to be lenient rather than wrongly
+ * rejecting a token.
+ */
+export function jwtGrantsScope(
+  payload: Record<string, unknown> | null,
+  scope: string
+): boolean | null {
+  if (!payload) return null;
+  const scp = typeof payload.scp === 'string' ? payload.scp.split(' ') : null;
+  const roles = Array.isArray(payload.roles) ? (payload.roles as string[]) : null;
+  const granted = scp ?? roles;
+  if (!granted) return null;
+  const target = scope.toLowerCase();
+  return granted.some((s) => s.toLowerCase() === target);
+}
+
 // ============================================================================
 // Session Helpers
 // ============================================================================
@@ -325,7 +345,11 @@ export function extractSkypeSpacesToken(state?: SessionState): string | null {
  *
  * This token is required for calendar write operations (create/update/cancel/RSVP)
  * and free/busy lookups, which Teams performs via graph.microsoft.com rather than
- * the mt/part middle-tier API. The token carries Calendars.ReadWrite scope.
+ * the mt/part middle-tier API. The token must carry the Calendars.ReadWrite scope.
+ *
+ * Teams caches several graph.microsoft.com tokens with different scope sets; we
+ * deliberately skip any whose scopes are known to lack Calendars.ReadWrite so
+ * calendar calls fail fast with a clear auth error instead of a confusing 403.
  */
 export function extractGraphToken(state?: SessionState): string | null {
   return withLocalStorage(state, (localStorage) => {
@@ -336,7 +360,7 @@ export function extractGraphToken(state?: SessionState): string | null {
         const entry = JSON.parse(item.value);
         if (!entry.target || !isJwtToken(entry.secret)) continue;
 
-        // Look for a graph.microsoft.com token (any scope set including Calendars)
+        // Look for a graph.microsoft.com token.
         if (!entry.target.includes('graph.microsoft.com')) continue;
 
         const payload = decodeJwtPayload(entry.secret);
@@ -344,10 +368,14 @@ export function extractGraphToken(state?: SessionState): string | null {
 
         const expiry = new Date(payload.exp * 1000);
 
-        // Skip expired tokens
+        // Skip expired tokens.
         if (expiry.getTime() <= Date.now()) continue;
 
-        // Keep the one with the latest expiry
+        // Skip tokens that explicitly lack calendar write access. When the
+        // scopes can't be determined (null) we stay lenient and accept it.
+        if (jwtGrantsScope(payload, 'Calendars.ReadWrite') === false) continue;
+
+        // Keep the one with the latest expiry.
         if (!bestCandidate || expiry > bestCandidate.expiry) {
           bestCandidate = { token: entry.secret, expiry };
         }

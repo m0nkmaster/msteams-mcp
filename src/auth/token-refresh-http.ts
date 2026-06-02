@@ -138,6 +138,11 @@ const REFRESH_SCOPES = [
     resource: 'chatsvcagg.teams.microsoft.com',
     scopes: 'https://chatsvcagg.teams.microsoft.com/.default offline_access',
   },
+  {
+    /** Microsoft Graph — calendar read/write (create/update/cancel/RSVP) and free/busy. */
+    resource: 'graph.microsoft.com',
+    scopes: 'https://graph.microsoft.com/.default offline_access',
+  },
 ] as const;
 
 /** HTTP request timeout for token refresh calls (ms). */

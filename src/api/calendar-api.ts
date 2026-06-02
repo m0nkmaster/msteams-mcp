@@ -199,6 +199,30 @@ export interface GetScheduleResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Graph `Prefer` header that asks for all event times to be returned in UTC.
+ * Combined with {@link toUtcIso}, this guarantees unambiguous ISO 8601 output.
+ */
+const GRAPH_UTC_PREFER = 'outlook.timezone="UTC"';
+
+/**
+ * Normalises a Graph `dateTimeTimeZone` value to an unambiguous ISO 8601 string.
+ *
+ * Graph returns `dateTime` without any timezone marker (e.g.
+ * "2026-06-05T10:00:00.0000000") alongside a separate `timeZone` field. When the
+ * times are UTC (which we force via the `Prefer: outlook.timezone="UTC"` header),
+ * we append a `Z` so consumers don't misread them as local time.
+ */
+export function toUtcIso(dt?: { dateTime?: string; timeZone?: string }): string {
+  const raw = dt?.dateTime;
+  if (!raw) return '';
+  // Already carries an offset or Z.
+  if (/([zZ]|[+-]\d{2}:?\d{2})$/.test(raw)) return raw;
+  // Mark UTC times as such; leave non-UTC values untouched.
+  if (!dt?.timeZone || dt.timeZone.toUpperCase() === 'UTC') return `${raw}Z`;
+  return raw;
+}
+
+/**
  * Parses a raw API meeting response into our Meeting type.
  */
 function parseMeeting(raw: Record<string, unknown>): Meeting {
@@ -269,8 +293,8 @@ function parseGraphEvent(raw: Record<string, unknown>): Meeting {
   const organizer = raw.organizer as { emailAddress?: { name?: string; address?: string } } | undefined;
   const location = raw.location as { displayName?: string } | undefined;
   const onlineMeeting = raw.onlineMeeting as { joinUrl?: string } | undefined;
-  const start = raw.start as { dateTime?: string } | undefined;
-  const end = raw.end as { dateTime?: string } | undefined;
+  const start = raw.start as { dateTime?: string; timeZone?: string } | undefined;
+  const end = raw.end as { dateTime?: string; timeZone?: string } | undefined;
   const responseStatus = raw.responseStatus as { response?: string } | undefined;
 
   // Map Graph responseStatus to our enum
@@ -299,8 +323,8 @@ function parseGraphEvent(raw: Record<string, unknown>): Meeting {
   return {
     id: raw.id as string,
     subject: (raw.subject as string) || '(No subject)',
-    startTime: start?.dateTime ?? '',
-    endTime: end?.dateTime ?? '',
+    startTime: toUtcIso(start),
+    endTime: toUtcIso(end),
     organizer: {
       name: organizer?.emailAddress?.name ?? 'Unknown',
       email: organizer?.emailAddress?.address ?? '',
@@ -491,7 +515,7 @@ export async function createMeeting(
     GRAPH_CALENDAR_API.events(),
     {
       method: 'POST',
-      headers: getGraphHeaders(graphToken),
+      headers: { ...getGraphHeaders(graphToken), 'Prefer': GRAPH_UTC_PREFER },
       body: JSON.stringify(body),
     }
   );
@@ -507,8 +531,8 @@ export async function createMeeting(
   return ok({
     id: data.id as string,
     subject: (data.subject as string) ?? options.subject,
-    startTime: (data.start as Record<string, string>)?.dateTime ?? options.startTime,
-    endTime: (data.end as Record<string, string>)?.dateTime ?? options.endTime,
+    startTime: toUtcIso(data.start as { dateTime?: string; timeZone?: string }) || options.startTime,
+    endTime: toUtcIso(data.end as { dateTime?: string; timeZone?: string }) || options.endTime,
     joinUrl,
   });
 }
@@ -531,7 +555,7 @@ export async function getMeeting(eventId: string): Promise<Result<Meeting>> {
     GRAPH_CALENDAR_API.event(eventId),
     {
       method: 'GET',
-      headers: getGraphHeaders(graphToken),
+      headers: { ...getGraphHeaders(graphToken), 'Prefer': GRAPH_UTC_PREFER },
     }
   );
 
@@ -567,7 +591,7 @@ export async function updateMeeting(
     GRAPH_CALENDAR_API.event(eventId),
     {
       method: 'PATCH',
-      headers: getGraphHeaders(graphToken),
+      headers: { ...getGraphHeaders(graphToken), 'Prefer': GRAPH_UTC_PREFER },
       body: JSON.stringify(body),
     }
   );
@@ -634,7 +658,8 @@ export async function respondToMeeting(
     body.comment = options.comment;
   }
 
-  if (options.response === 'decline' && options.proposedNewTime) {
+  // Graph accepts a proposed new time on decline and tentativelyAccept, but not accept.
+  if (options.proposedNewTime && options.response !== 'accept') {
     body.proposedNewTime = {
       start: { dateTime: options.proposedNewTime.start, timeZone: 'UTC' },
       end: { dateTime: options.proposedNewTime.end, timeZone: 'UTC' },
@@ -683,7 +708,7 @@ export async function getSchedule(
     GRAPH_CALENDAR_API.getSchedule(),
     {
       method: 'POST',
-      headers: getGraphHeaders(graphToken),
+      headers: { ...getGraphHeaders(graphToken), 'Prefer': GRAPH_UTC_PREFER },
       body: JSON.stringify(body),
     }
   );
@@ -699,8 +724,8 @@ export async function getSchedule(
       scheduleId: raw.scheduleId as string,
       availabilityView: (raw.availabilityView as string) ?? '',
       scheduleItems: rawItems.map((item) => ({
-        start: ((item.start as Record<string, string>)?.dateTime) ?? '',
-        end: ((item.end as Record<string, string>)?.dateTime) ?? '',
+        start: toUtcIso(item.start as { dateTime?: string; timeZone?: string }),
+        end: toUtcIso(item.end as { dateTime?: string; timeZone?: string }),
         status: (item.status as ScheduleItem['status']) ?? 'unknown',
         subject: item.subject as string | undefined,
         isPrivate: item.isPrivate as boolean | undefined,

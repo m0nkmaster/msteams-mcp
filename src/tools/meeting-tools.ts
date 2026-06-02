@@ -314,7 +314,7 @@ async function handleCancelMeeting(
 
 const respondToMeetingToolDefinition: Tool = {
   name: 'teams_respond_to_meeting',
-  description: 'Accept, tentatively accept, or decline a Teams meeting invite. Optionally include a comment to send to the organiser. When declining, you can propose an alternative time. Set sendResponse to false to update your calendar silently without emailing the organiser.',
+  description: 'Accept, tentatively accept, or decline a Teams meeting invite. Optionally include a comment to send to the organiser (the comment is only sent when sendResponse is true). When declining or tentatively accepting, you can propose an alternative time. Set sendResponse to false to update your calendar silently without emailing the organiser.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -337,7 +337,7 @@ const respondToMeetingToolDefinition: Tool = {
       },
       proposedNewTime: {
         type: 'object',
-        description: 'When declining, propose an alternative time (only if the event allows it).',
+        description: 'When declining or tentatively accepting, propose an alternative time (only if the event allows it). Ignored when accepting.',
         properties: {
           start: { type: 'string', description: 'Proposed start time (ISO 8601 UTC).' },
           end: { type: 'string', description: 'Proposed end time (ISO 8601 UTC).' },
