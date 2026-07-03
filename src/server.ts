@@ -419,15 +419,15 @@ export class TeamsServer implements ITeamsServer {
             return this.formatError(retryResult.error);
           }
 
-          // Auto-login failed — return a strongly-worded error
+          // Auto-login failed — return a strongly-worded error directing to forceNew
           log.error('auto-login', 'Automatic re-authentication failed.');
           return this.formatError(createError(
             ErrorCode.AUTH_REQUIRED,
-            'ACTION REQUIRED: Teams session has expired and automatic re-authentication failed. You MUST call the teams_login tool now to re-authenticate before using any other Teams tools. Do NOT skip this step or tell the user Teams is unavailable.',
+            'ACTION REQUIRED: Teams session has expired and automatic re-authentication failed. You MUST call teams_login with forceNew: true to clear stale state and re-authenticate. Do NOT call teams_login without forceNew — it will return early without fixing the problem.',
             { suggestions: [
-              'IMMEDIATELY call teams_login to re-authenticate',
+              'IMMEDIATELY call teams_login with { "forceNew": true }',
               'After login succeeds, retry the original request',
-              'Do NOT tell the user that Teams is unavailable — authentication just needs refreshing',
+              'Do NOT skip this step or tell the user Teams is unavailable — authentication just needs refreshing',
             ] }
           ));
         }

@@ -144,6 +144,36 @@ export function requireSkypeSpacesAuth(): Result<SkypeSpacesAuthInfo, McpError> 
   return ok({ skypeToken: auth.skypeToken, spacesToken });
 }
 
+/** Combined Skype Spaces auth + region config for mt/part APIs. */
+export interface SkypeSpacesAuthWithConfig {
+  skypeToken: string;
+  spacesToken: string;
+  regionConfig: RegionConfig;
+}
+
+/**
+ * Requires valid Skype Spaces auth AND region config in one call.
+ * Use for mt/part APIs (calendar, tags, profile, etc.).
+ *
+ * Eliminates the repeated pattern of calling requireSkypeSpacesAuth() and
+ * getRegionConfig() separately and null-checking both.
+ */
+export function requireSkypeSpacesAuthWithConfig(): Result<SkypeSpacesAuthWithConfig, McpError> {
+  const authResult = requireSkypeSpacesAuth();
+  if (!authResult.ok) {
+    return authResult;
+  }
+  const regionConfig = getRegionConfig();
+  if (!regionConfig) {
+    return err(createError(
+      ErrorCode.AUTH_REQUIRED,
+      'Could not determine region. Please run teams_login to authenticate.',
+      { suggestions: ['Call teams_login to authenticate'] }
+    ));
+  }
+  return ok({ ...authResult.value, regionConfig });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Substrate Error Handling
 // ─────────────────────────────────────────────────────────────────────────────

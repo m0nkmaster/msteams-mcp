@@ -33,6 +33,7 @@ import {
   parseTeamsList,
   parseVirtualConversationMessage,
   hasMarkdownFormatting,
+  parseReactions,
 } from './parsers.js';
 import {
   searchResultItem,
@@ -1358,5 +1359,127 @@ describe('parseEmailSearchResults', () => {
   it('handles malformed EntitySets gracefully', () => {
     const { results } = parseEmailSearchResults([{ ResultSets: [{ Results: [{}] }] }]);
     expect(results).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseReactions
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseReactions', () => {
+  type RawMsg = Parameters<typeof parseReactions>[0];
+
+  it('returns empty when no reaction data', () => {
+    const result = parseReactions({ content: 'hi' });
+    expect(result.reactions).toBeUndefined();
+    expect(result.reactionSummary).toBeUndefined();
+  });
+
+  it('parses annotationsSummary.emotions into reactionSummary', () => {
+    const msg = {
+      annotationsSummary: { emotions: { heart: 2, like: 1 } },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactionSummary).toEqual({ heart: 2, like: 1 });
+  });
+
+  it('ignores zero-count entries in summary', () => {
+    const msg = {
+      annotationsSummary: { emotions: { heart: 0, like: 1 } },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactionSummary).toEqual({ like: 1 });
+  });
+
+  it('parses properties.emotions array (grouped shape)', () => {
+    const msg = {
+      properties: {
+        emotions: [
+          {
+            key: 'heart',
+            users: [
+              { mri: '8:orgid:user1', time: 1770000000000 },
+              { mri: '8:orgid:user2', value: 1770000001000 },
+            ],
+          },
+          {
+            key: 'like',
+            users: [{ mri: '8:orgid:user3' }],
+          },
+        ],
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions).toHaveLength(3);
+    expect(result.reactions![0]).toEqual({
+      key: 'heart',
+      user: { mri: '8:orgid:user1', displayName: undefined },
+      time: 1770000000000,
+    });
+    expect(result.reactions![1].time).toBe(1770000001000);
+    expect(result.reactions![2].key).toBe('like');
+  });
+
+  it('parses properties.emotions as JSON string', () => {
+    const msg = {
+      properties: {
+        emotions: JSON.stringify([
+          { key: 'laugh', users: [{ mri: '8:orgid:user1', time: 123 }] },
+        ]),
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions).toHaveLength(1);
+    expect(result.reactions![0].key).toBe('laugh');
+  });
+
+  it('parses flat emotion entries (no users array)', () => {
+    const msg = {
+      properties: {
+        emotions: [
+          { key: 'like', mri: '8:orgid:user1', value: 1770000000000 },
+        ],
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions).toHaveLength(1);
+    expect(result.reactions![0]).toEqual({
+      key: 'like',
+      user: { mri: '8:orgid:user1', displayName: undefined },
+      time: 1770000000000,
+    });
+  });
+
+  it('handles custom emoji keys (name;storage-id)', () => {
+    const msg = {
+      properties: {
+        emotions: [
+          { key: 'partyparrot;abc-123', users: [{ mri: '8:orgid:user1' }] },
+        ],
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions![0].key).toBe('partyparrot;abc-123');
+  });
+
+  it('combines both reactions and summary', () => {
+    const msg = {
+      annotationsSummary: { emotions: { heart: 1 } },
+      properties: {
+        emotions: [
+          { key: 'heart', users: [{ mri: '8:orgid:user1', time: 100 }] },
+        ],
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions).toHaveLength(1);
+    expect(result.reactionSummary).toEqual({ heart: 1 });
+  });
+
+  it('handles malformed emotions gracefully', () => {
+    expect(parseReactions({ properties: { emotions: 'not-json{' } } as unknown as RawMsg).reactions).toBeUndefined();
+    expect(parseReactions({ properties: { emotions: 42 } } as unknown as RawMsg).reactions).toBeUndefined();
+    expect(parseReactions({ properties: { emotions: [null, undefined, 'string'] } } as unknown as RawMsg).reactions).toBeUndefined();
+    expect(parseReactions({ properties: { emotions: [{ noKey: true }] } } as unknown as RawMsg).reactions).toBeUndefined();
   });
 });

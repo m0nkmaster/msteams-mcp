@@ -430,8 +430,7 @@ async function checkBrowserTokenExpiry(page: Page): Promise<number> {
         try {
           const entry = JSON.parse(value);
           const target = entry.target as string | undefined;
-          if (!target?.includes('substrate.office.com')) continue;
-          if (!target.includes('SubstrateSearch')) continue;
+          if (!target?.includes('SubstrateSearch')) continue;
 
           const secret = entry.secret as string | undefined;
           if (!secret?.startsWith('ey')) continue;

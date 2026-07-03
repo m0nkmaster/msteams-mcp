@@ -2,9 +2,13 @@
  * Authentication-related tool handlers.
  */
 
+import { createRequire } from 'module';
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+
+const require = createRequire(import.meta.url);
+const pkg = require('../../package.json') as { version: string };
 import {
   hasSessionState,
   isSessionLikelyExpired,
@@ -198,6 +202,7 @@ async function handleStatus(
   return {
     success: true,
     data: {
+      version: pkg.version,
       directApi: {
         available: tokenStatus.hasToken,
         expiresAt: tokenStatus.expiresAt,
