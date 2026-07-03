@@ -18,6 +18,7 @@ import {
   clampWaitParams,
   selectNewMessages,
   resolveWaitBaseline,
+  generateClientMessageId,
 } from './chatsvc-messaging.js';
 import { MAX_WAIT_SECONDS } from '../constants.js';
 
@@ -358,6 +359,21 @@ describe('selectNewMessages', () => {
 
   it('returns empty when nothing is newer than afterId', () => {
     expect(selectNewMessages(msgs, 110, true)).toEqual([]);
+  });
+});
+
+describe('generateClientMessageId', () => {
+  it('returns a numeric string (Teams rejects non-numeric client message IDs)', () => {
+    // Regression: a UUID (crypto.randomUUID) is rejected by Teams with
+    // "StoreInvalidInput - ClientMessageId must be a number in string format".
+    const id = generateClientMessageId();
+    expect(id).toMatch(/^\d+$/);
+    expect(id.length).toBeGreaterThan(0);
+  });
+
+  it('produces distinct IDs across rapid calls', () => {
+    const ids = new Set(Array.from({ length: 50 }, () => generateClientMessageId()));
+    expect(ids.size).toBeGreaterThan(1);
   });
 });
 
