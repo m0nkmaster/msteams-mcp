@@ -1868,19 +1868,3 @@ The `TranscriptJson` field is a JSON string containing the full transcript:
 9. **Activity feed content is often empty** - The `48:notifications` endpoint returns stub records with empty `content` fields for many activity types. Use `48:mentions` for @mentions and `48:annotations` for reactions to get full message content.
 
 10. **Sender names not always included** - Activity items may only include the MRI (`8:orgid:...`) without `imdisplayname`. Use the `fetchShortProfile` API to batch-resolve MRIs to display names.
-
----
-
-## Conducting API Research
-
-To discover new endpoints:
-
-1. Run: `npm run research`
-2. Log in to Teams when prompted (uses system Chrome/Edge, reuses existing encrypted session)
-3. Navigate to features you want to investigate
-4. Press Ctrl+C to stop — findings are saved to `research-findings.json`
-5. Analyse the JSON file for request/response patterns
-
-The research script monitors network requests matching interesting patterns (search, messaging, calendar, transcript, etc.) and captures both request headers and response bodies.
-
-For a clean session, clear: `rm -rf ~/.teams-mcp-server/` (or `%APPDATA%\teams-mcp-server\` on Windows).

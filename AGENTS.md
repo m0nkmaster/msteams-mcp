@@ -242,7 +242,6 @@ When a roadmap item is completed, **remove it entirely** from `ROADMAP.md`. Do n
 ### Commands
 
 ```bash
-npm run research      # Explore Teams APIs (visible browser, logs network calls)
 npm run dev           # Run MCP server in development mode
 npm run build         # Compile TypeScript
 npm run lint          # Run ESLint (also lint:fix to auto-fix)
@@ -314,7 +313,6 @@ npm run typecheck     # TypeScript type checking only
 
 For testing against the live Teams APIs:
 - Use `npm run cli -- search "query"` to test via the full MCP protocol layer
-- Use `npm run research` to explore new API patterns (logs all network traffic)
 
 The MCP test harness (`test:mcp`) uses the SDK's `InMemoryTransport` to connect a test client to the server in-process, verifying that tool definitions, input validation, and response formatting all work correctly through the protocol layer.
 
@@ -348,10 +346,6 @@ See `.github/workflows/ci.yml` and `.github/workflows/doc-reviewer.yml` for work
 2. Create a function in the appropriate `src/api/*.ts` module
 3. Use `httpRequest()` from `src/utils/http.ts` for automatic retry and timeout handling
 4. Return `Result<T, McpError>` for type-safe error handling
-
-#### Capturing New API Endpoints
-
-Run `npm run research`, perform actions in Teams, and check the terminal output for captured requests.
 
 ## Troubleshooting
 
