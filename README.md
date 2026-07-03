@@ -76,8 +76,9 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 |------|-------------|
 | `teams_search` | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.) |
 | `teams_search_email` | Search emails in your mailbox (same auth as Teams — no extra login) |
+| `teams_list_chats` | List recent conversations (1:1, group, meeting, channel) with a last-message preview |
 | `teams_get_message` | Get a single message by ID with full content (any age); includes reactions |
-| `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread |
+| `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread; `fromUrl` accepts a Teams message deep link |
 | `teams_find_channel` | Find channels by name (your teams + org-wide discovery) |
 | `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications) |
 
@@ -85,8 +86,9 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 
 | Tool | Description |
 |------|-------------|
-| `teams_send_message` | Send a message (default: self-chat/notes). Use `replyToMessageId` for thread replies |
-| `teams_edit_message` | Edit one of your own messages |
+| `teams_send_message` | Send a message (default: self-chat/notes). `replyToMessageId` for thread replies, `subject` for a new channel thread, `scheduleAt` to schedule, `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
+| `teams_wait_for_reply` | Block until a new message arrives (server-side poll, capped ~110s); idempotent `after`/`nextAfter` cursor — pair with `teams_send_message` |
+| `teams_edit_message` | Edit one of your own messages (`contentType` supported) |
 | `teams_delete_message` | Delete one of your own messages (soft delete) |
 
 ### People & Contacts

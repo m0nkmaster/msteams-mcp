@@ -13,11 +13,12 @@
  * - parsers-reactions: Emoji reaction parsing from raw messages
  */
 
-export { extractLinks, stripHtml, escapeHtmlChars, type ExtractedLink } from './parsers-html.js';
+export { extractLinks, stripHtml, escapeHtmlChars, sanitizeLinkUrl, type ExtractedLink } from './parsers-html.js';
 export { markdownToTeamsHtml, hasMarkdownFormatting } from './parsers-markdown.js';
 export {
   getConversationType,
   buildMessageLink,
+  parseTeamsMessageUrl,
   extractMessageTimestamp,
   extractActivityTimestamp,
   decodeBase64Guid,
@@ -25,6 +26,7 @@ export {
   buildOneOnOneConversationId,
   type MessageLinkOptions,
   type LinkContext,
+  type ParsedMessageUrl,
 } from './parsers-identifiers.js';
 export {
   parseV2Result,
