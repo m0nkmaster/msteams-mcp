@@ -149,6 +149,20 @@ export interface CreateGroupChatResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Generates a Teams client message ID.
+ *
+ * Teams requires this to be "a number in string format" — a UUID is rejected
+ * with `StoreInvalidInput - ClientMessageId must be a number in string format`.
+ * This mirrors the Teams web client's large random integer: current time in
+ * milliseconds plus 6 random digits, keeping IDs numeric and unique even for
+ * rapid successive sends.
+ */
+export function generateClientMessageId(): string {
+  const random = Math.floor(Math.random() * 1_000_000).toString().padStart(6, '0');
+  return `${Date.now()}${random}`;
+}
+
+/**
  * Sends a message to a Teams conversation.
  * 
  * For channels, you can either:
@@ -172,7 +186,7 @@ export async function sendMessage(
   const { replyToMessageId, contentType = 'markdown', subject, scheduleAt } = options;
   const displayName = getUserDisplayName() || 'User';
 
-  const clientMessageId = crypto.randomUUID();
+  const clientMessageId = generateClientMessageId();
 
   // Resolve content per the requested content type (markdown by default).
   const resolved = resolveMessageContent(content, contentType);
