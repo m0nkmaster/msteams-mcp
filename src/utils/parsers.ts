@@ -10,6 +10,7 @@
  * - parsers-people: People search, JWT profiles, token status
  * - parsers-channels: Channel and team list parsing
  * - parsers-virtual: Virtual conversation messages and transcript formatting
+ * - parsers-reactions: Emoji reaction parsing from raw messages
  */
 
 export { extractLinks, stripHtml, escapeHtmlChars, type ExtractedLink } from './parsers-html.js';
@@ -54,3 +55,9 @@ export {
   type VirtualConversationItem,
   type TranscriptEntry,
 } from './parsers-virtual.js';
+export {
+  parseReactions,
+  type Reaction,
+  type ReactionSummary,
+  type ParsedReactions,
+} from './parsers-reactions.js';

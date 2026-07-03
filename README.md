@@ -76,8 +76,8 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 |------|-------------|
 | `teams_search` | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.) |
 | `teams_search_email` | Search emails in your mailbox (same auth as Teams — no extra login) |
-| `teams_get_message` | Get a single message by ID with full content (any age) |
-| `teams_get_thread` | Get messages from a conversation/thread |
+| `teams_get_message` | Get a single message by ID with full content (any age); includes reactions |
+| `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread |
 | `teams_find_channel` | Find channels by name (your teams + org-wide discovery) |
 | `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications) |
 
@@ -96,6 +96,7 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 | `teams_get_me` | Get current user profile (email, name, ID) |
 | `teams_search_people` | Search for people by name or email |
 | `teams_get_frequent_contacts` | Get frequently contacted people (useful for name resolution) |
+| `teams_get_person` | Resolve one or more MRIs to full profiles (name, email, job title, department) |
 | `teams_get_chat` | Get conversation ID for 1:1 chat with a person |
 | `teams_create_group_chat` | Create a new group chat with multiple people (2+ others) |
 

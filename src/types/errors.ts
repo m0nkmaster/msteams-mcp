@@ -73,13 +73,13 @@ function getDefaultSuggestions(code: ErrorCode): string[] {
   switch (code) {
     case ErrorCode.AUTH_REQUIRED:
       return [
-        'IMMEDIATELY call teams_login to authenticate',
+        'IMMEDIATELY call teams_login with { "forceNew": true } to authenticate',
         'Do NOT skip this step or tell the user Teams is unavailable',
         'After login succeeds, retry the original request',
       ];
     case ErrorCode.AUTH_EXPIRED:
       return [
-        'IMMEDIATELY call teams_login to refresh authentication',
+        'IMMEDIATELY call teams_login with { "forceNew": true } to refresh authentication',
         'Do NOT skip this step or tell the user Teams is unavailable',
         'After login succeeds, retry the original request',
       ];

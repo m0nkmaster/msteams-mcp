@@ -8,7 +8,6 @@ import { httpRequest } from '../utils/http.js';
 import { CHATSVC_API, getSkypeAuthHeaders } from '../utils/api-config.js';
 import { type Result, ok } from '../types/result.js';
 import { requireMessageAuthWithConfig } from '../utils/auth-guards.js';
-import { getThreadMessages } from './chatsvc-messaging.js';
 import type { RawConsumptionHorizonsResponse } from '../types/api-responses.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,6 +140,10 @@ export async function markAsRead(
  * Gets unread count for a conversation by comparing consumption horizon
  * with recent messages.
  *
+ * Uses a lightweight raw message fetch (just IDs and senders) to avoid the
+ * full getThreadMessages pipeline (HTML parsing, link extraction, reaction
+ * enrichment via batch profile API, deep link building, etc.).
+ *
  * If the consumption horizon endpoint fails, falls back to message-only
  * checking (reports recent messages from others without precise read position).
  */
@@ -152,40 +155,62 @@ export async function getUnreadStatus(
   lastReadMessageId?: string;
   latestMessageId?: string;
 }>> {
-  // Get consumption horizon — non-fatal if it fails
-  const horizonResult = await getConsumptionHorizon(conversationId);
+  const authResult = requireMessageAuthWithConfig();
+  if (!authResult.ok) {
+    return authResult;
+  }
+  const { auth, region, baseUrl } = authResult.value;
+
+  // Fetch consumption horizon and raw messages in parallel
+  const [horizonResult, messagesResponse] = await Promise.all([
+    getConsumptionHorizon(conversationId),
+    httpRequest<{ messages?: Array<{ id?: string; from?: string; messagetype?: string; properties?: Record<string, unknown> }> }>(
+      CHATSVC_API.messages(region, conversationId, undefined, baseUrl)
+        + '?view=msnp24Equivalent&pageSize=50',
+      {
+        method: 'GET',
+        headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
+      }
+    ),
+  ]);
+
   const lastReadId = horizonResult.ok ? horizonResult.value.lastReadMessageId : undefined;
 
-  // Get recent messages
-  const messagesResult = await getThreadMessages(conversationId, { limit: 50 });
-  if (!messagesResult.ok) {
-    return messagesResult;
+  if (!messagesResponse.ok) {
+    return messagesResponse;
   }
 
-  const messages = messagesResult.value.messages;
+  const rawMessages = messagesResponse.value.data.messages || [];
 
-  // Count messages after the last read position
+  // Count messages after the last read position.
+  // Raw messages are newest-first — iterate from newest to oldest.
   let unreadCount = 0;
   let latestMessageId: string | undefined;
 
-  // Messages from getThreadMessages are newest-first by default (desc order).
-  // Iterate from newest to oldest to count unread messages after lastReadId.
-  for (const msg of messages) {
-    if (!latestMessageId && !msg.isFromMe) {
-      latestMessageId = msg.id;
+  for (const msg of rawMessages) {
+    const msgType = msg.messagetype;
+    if (!msgType || msgType.startsWith('Control/') || msgType === 'ThreadActivity/AddMember') {
+      continue;
+    }
+    if (msg.properties?.deletetime) continue;
+
+    const id = msg.id;
+    if (!id) continue;
+
+    const isFromMe = msg.from === auth.userMri || (msg.from?.includes(auth.userMri) ?? false);
+
+    if (!latestMessageId && !isFromMe) {
+      latestMessageId = id;
     }
 
-    if (lastReadId && msg.id === lastReadId) {
+    if (lastReadId && id === lastReadId) {
       break;
     }
 
-    // Count messages not from the current user
-    if (!msg.isFromMe) {
+    if (!isFromMe) {
       unreadCount++;
     }
   }
-
-  // If last read message wasn't in our window, count is a lower bound
 
   return ok({
     conversationId,

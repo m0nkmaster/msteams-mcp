@@ -11,7 +11,8 @@ import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import { getUserDisplayName } from '../auth/token-extractor.js';
 import { requireMessageAuth, requireMessageAuthWithConfig, getTeamsBaseUrl, getTenantId } from '../utils/auth-guards.js';
-import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, markdownToTeamsHtml, escapeHtmlChars, type ExtractedLink } from '../utils/parsers.js';
+import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, markdownToTeamsHtml, escapeHtmlChars, parseReactions, type ExtractedLink, type Reaction, type ReactionSummary } from '../utils/parsers.js';
+import { resolveNames } from './profile-api.js';
 import { SELF_CHAT_ID, MRI_ORGID_PREFIX } from '../constants.js';
 import { formatHumanReadableDate } from './chatsvc-common.js';
 import type { RawChatsvcMessage, RawConversationResponse, RawCreateThreadResponse } from '../types/api-responses.js';
@@ -47,6 +48,10 @@ export interface ThreadMessage {
   threadRootId?: string;
   /** True if this message is a reply within a channel thread (not a top-level post) */
   isThreadReply?: boolean;
+  /** Emoji reactions on this message, with reactor identity (names resolved where possible). */
+  reactions?: Reaction[];
+  /** Reaction counts keyed by emoji (e.g. { like: 3, heart: 1 }). */
+  reactionSummary?: ReactionSummary;
 }
 
 /** Result of getting thread messages. */
@@ -270,6 +275,11 @@ export async function getMessage(
   const links = extractLinks(content);
   const when = formatHumanReadableDate(timestamp);
 
+  const { reactions, reactionSummary } = parseReactions(msg);
+
+  // Enrich reactor names via fetchShortProfile batch API
+  await enrichReactionNamesFromProfiles(reactions);
+
   return ok({
     id,
     content: stripHtml(content),
@@ -287,6 +297,8 @@ export async function getMessage(
     links: links.length > 0 ? links : undefined,
     threadRootId: isThreadReply ? rootMessageId : undefined,
     isThreadReply: isThreadReply || undefined,
+    reactions,
+    reactionSummary,
   });
 }
 
@@ -301,10 +313,11 @@ export async function getMessage(
  * @param options.limit - Maximum messages to return (default 50)
  * @param options.startTime - Fetch messages from this timestamp onwards
  * @param options.order - Sort order: 'desc' (newest-first, default) or 'asc' (oldest-first)
+ * @param options.replyToMessageId - For channels: scope to replies of a specific top-level post
  */
 export async function getThreadMessages(
   conversationId: string,
-  options: { limit?: number; startTime?: number; order?: 'asc' | 'desc' } = {}
+  options: { limit?: number; startTime?: number; order?: 'asc' | 'desc'; replyToMessageId?: string } = {}
 ): Promise<Result<GetThreadResult>> {
   const authResult = requireMessageAuthWithConfig();
   if (!authResult.ok) {
@@ -313,8 +326,8 @@ export async function getThreadMessages(
   const { auth, region, baseUrl } = authResult.value;
   const limit = options.limit ?? 50;
 
-  let url = CHATSVC_API.messages(region, conversationId, undefined, baseUrl);
-  url += `?view=msnp24Equivalent&pageSize=${limit}`;
+  let url = CHATSVC_API.messages(region, conversationId, options.replyToMessageId, baseUrl);
+  url += `?view=msnp24Equivalent|supportsMessageProperties&pageSize=${limit}`;
 
   if (options.startTime) {
     url += `&startTime=${options.startTime}`;
@@ -391,6 +404,8 @@ export async function getThreadMessages(
     // Format human-readable date with day of week to help LLMs
     const when = formatHumanReadableDate(timestamp);
 
+    const { reactions, reactionSummary } = parseReactions(msg);
+
     messages.push({
       id,
       content: stripHtml(content),
@@ -408,8 +423,16 @@ export async function getThreadMessages(
       links: links.length > 0 ? links : undefined,
       threadRootId: isThreadReply ? rootMessageId : undefined,
       isThreadReply: isThreadReply || undefined,
+      reactions,
+      reactionSummary,
     });
   }
+
+  // Enrich reactor names via fetchShortProfile batch API.
+  // Collects all unresolved reactor MRIs across all messages and resolves
+  // them in a single batch call.
+  const allReactions = messages.flatMap(m => m.reactions ?? []);
+  await enrichReactionNamesFromProfiles(allReactions);
 
   // Sort by timestamp - default to newest-first (desc) for "what's latest" use cases
   const order = options.order ?? 'desc';
@@ -1023,4 +1046,37 @@ export function parseContentWithMentionsAndLinks(content: string): { html: strin
   }
   
   return { html: result, mentions };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal Helpers (reaction name enrichment)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Enriches reaction display names via the fetchShortProfile batch API.
+ *
+ * Collects MRIs missing display names from the given reactions, resolves
+ * them in a single batch call, then updates the reaction objects in-place.
+ */
+async function enrichReactionNamesFromProfiles(reactions?: Reaction[]): Promise<void> {
+  if (!reactions || reactions.length === 0) return;
+
+  const unresolvedMris = reactions
+    .filter(r => !r.user.displayName && r.user.mri)
+    .map(r => r.user.mri);
+
+  if (unresolvedMris.length === 0) return;
+
+  // Deduplicate MRIs for the batch call
+  const uniqueMris = [...new Set(unresolvedMris)];
+  const nameMap = await resolveNames(uniqueMris);
+
+  if (nameMap.size === 0) return;
+
+  for (const reaction of reactions) {
+    if (!reaction.user.displayName) {
+      const name = nameMap.get(reaction.user.mri);
+      if (name) reaction.user.displayName = name;
+    }
+  }
 }

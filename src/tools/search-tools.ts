@@ -31,6 +31,7 @@ export const SearchInputSchema = z.object({
 
 export const GetThreadInputSchema = z.object({
   conversationId: z.string().min(1, 'Conversation ID cannot be empty'),
+  threadRootId: z.string().optional(),
   limit: z.number().min(1).max(MAX_THREAD_LIMIT).optional().default(DEFAULT_THREAD_LIMIT),
   markRead: z.boolean().optional().default(false),
   order: z.enum(['asc', 'desc']).optional().default('desc'),
@@ -82,13 +83,17 @@ const searchToolDefinition: Tool = {
 
 const getThreadToolDefinition: Tool = {
   name: 'teams_get_thread',
-  description: 'Get messages from a Teams conversation/thread. Default: newest-first (latest messages at top). For channels: messages include isThreadReply (true for replies) and threadRootId (ID of the post being replied to). Messages without threadRootId are top-level posts. Use threadRootId to group related messages. Each message includes a "when" field with the day of week (e.g., "Friday, January 30, 2026, 10:45 AM UTC"). Returns unread count and can optionally mark as read.',
+  description: 'Get messages from a Teams conversation/thread. Default: newest-first (latest messages at top). For channels: messages include isThreadReply (true for replies) and threadRootId (ID of the post being replied to). Messages without threadRootId are top-level posts. Use threadRootId to group related messages. Messages include reactions (individual reactors, names resolved where possible) and reactionSummary (counts per emoji) when present. Each message includes a "when" field with the day of week (e.g., "Friday, January 30, 2026, 10:45 AM UTC"). Returns unread count and can optionally mark as read.',
   inputSchema: {
     type: 'object',
     properties: {
       conversationId: {
         type: 'string',
         description: 'The conversation ID to get messages from (e.g., "19:abc@thread.tacv2" from search results)',
+      },
+      threadRootId: {
+        type: 'string',
+        description: 'For channels: the message ID of a top-level post. When provided, returns only the replies to that specific thread instead of all channel messages.',
       },
       limit: {
         type: 'number',
@@ -220,6 +225,7 @@ async function handleGetThread(
     limit: input.limit,
     order: input.order,
     startTime,
+    replyToMessageId: input.threadRootId,
   });
 
   if (!result.ok) {

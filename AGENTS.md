@@ -49,12 +49,14 @@ src/
 │   ├── csa-api.ts        # Favorites API (CSA)
 │   ├── calendar-api.ts   # Calendar/meetings API
 │   ├── transcript-api.ts # Meeting transcripts (Substrate WorkingSetFiles)
-│   └── files-api.ts      # Shared files (Substrate AllFiles)
+│   ├── files-api.ts      # Shared files (Substrate AllFiles)
+│   └── profile-api.ts    # Resolve MRIs to profiles (middleTier fetchShortProfile)
 ├── browser/              # Playwright browser automation (login only)
 │   ├── context.ts        # Persistent browser profile management
 │   └── auth.ts           # Authentication detection and manual login handling
 ├── utils/
-│   ├── parsers.ts        # Pure parsing functions (testable)
+│   ├── parsers.ts        # Pure parsing functions (barrel; testable submodules)
+│   ├── parsers-reactions.ts # Emoji reaction parsing from raw messages
 │   ├── parsers.test.ts   # Unit tests for parsers
 │   ├── http.ts           # HTTP client with retry, timeout, error handling
 │   ├── api-config.ts     # API endpoints and header configuration
@@ -156,6 +158,7 @@ Different Teams APIs use different authentication mechanisms:
 | **Calendar** (mt/part/calendarView) | Skype Spaces token (`api.spaces.skype.com` scope) + `skypetoken_asm` | `auth/token-extractor` | `extractSkypeSpacesToken()` |
 | **Transcripts** (Substrate WorkingSetFiles) | Same JWT as Search (Substrate scope) + `Prefer` header | `auth/token-extractor` | `getValidSubstrateToken()` |
 | **Files** (Substrate AllFiles) | Same JWT as Search (Substrate scope) + message auth for user MRI | `auth/token-extractor` | `getValidSubstrateToken()` + `extractMessageAuth()` |
+| **Profiles** (mt/part fetchShortProfile) | Skype Spaces token (`api.spaces.skype.com` scope) + `skypetoken_asm` | `auth/token-extractor` | `requireSkypeSpacesAuthWithConfig()` |
 
 **Important**: The CSA API (for favorites) requires a GET request to retrieve data, POST only for modifications. The Substrate suggestions API requires `cvid` and `logicalId` correlation IDs in the request body.
 
@@ -186,8 +189,9 @@ Session state and token cache files are protected by:
 | `teams_get_me` | Get current user profile (email, name, ID) |
 | `teams_get_frequent_contacts` | Get frequently contacted people (for name resolution) |
 | `teams_search_people` | Search for people by name or email |
+| `teams_get_person` | Resolve one or more MRIs to full profiles (name, email, job title, department) via batch `fetchShortProfile` |
 | `teams_login` | Trigger manual login (visible browser) |
-| `teams_status` | Check auth status (search, messaging, favorites tokens) |
+| `teams_status` | Check auth status (search, messaging, favorites tokens) and server version |
 | `teams_get_favorites` | Get pinned/favourite conversations |
 | `teams_add_favorite` | Pin a conversation to favourites |
 | `teams_remove_favorite` | Unpin a conversation from favourites |
@@ -195,8 +199,8 @@ Session state and token cache files are protected by:
 | `teams_unsave_message` | Remove bookmark from a message |
 | `teams_get_saved_messages` | Get list of saved/bookmarked messages with source references |
 | `teams_get_followed_threads` | Get list of followed threads with source references |
-| `teams_get_message` | Get a single message by ID with full content (any age) |
-| `teams_get_thread` | Get messages from a conversation/thread; optional `since` (ISO 8601) for messages after a time |
+| `teams_get_message` | Get a single message by ID with full content (any age); includes reactions and reaction summary |
+| `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread's replies; optional `since` (ISO 8601) for messages after a time |
 | `teams_find_channel` | Find channels by name (your teams + org-wide), shows membership |
 | `teams_get_tags` | List channel tags for a team (`teamId` from `teams_find_channel`) for tag @mentions |
 | `teams_get_chat` | Get conversation ID for 1:1 chat with a person |

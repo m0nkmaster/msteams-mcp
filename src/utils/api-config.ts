@@ -145,6 +145,24 @@ export const CALENDAR_API = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MiddleTier (MT) API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * MiddleTier API endpoints (mt/part pattern).
+ *
+ * Uses the same partitioned region pattern as Calendar and Tags APIs.
+ * The correct URL format is extracted from DISCOVER-REGION-GTM in session config.
+ */
+export const MT_API = {
+  /** Batch resolve MRIs to user profiles (fetchShortProfile). */
+  fetchShortProfile: (regionPartition: string, hasPartition: boolean, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    hasPartition
+      ? `${baseUrl}/api/mt/part/${regionPartition}/beta/users/fetchShortProfile?isMailAddress=false&enableGuest=true&skypeTeamsInfo=true`
+      : `${baseUrl}/api/mt/${regionPartition}/beta/users/fetchShortProfile?isMailAddress=false&enableGuest=true&skypeTeamsInfo=true`,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tags API
 // ─────────────────────────────────────────────────────────────────────────────
 

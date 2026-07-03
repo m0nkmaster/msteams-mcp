@@ -124,12 +124,14 @@ export function extractSubstrateToken(state?: SessionState): SubstrateTokenInfo 
       try {
         const entry = JSON.parse(item.value);
         
-        // Look for Substrate search tokens by target scope
-        // Match both old format (substrate.office.com/search/SubstrateSearch)
-        // and new format (substrate.office.com/SubstrateSearch-Internal.ReadWrite)
+        // Look for Substrate search tokens by target scope.
+        // The token scope containing 'SubstrateSearch' is the primary identifier.
+        // Matches all known formats:
+        //   - substrate.office.com/search/SubstrateSearch (old)
+        //   - substrate.office.com/SubstrateSearch-Internal.ReadWrite (new)
+        //   - outlook.office.com/search/SubstrateSearch-Internal.ReadWrite (some Enterprise tenants)
         const target = entry.target as string | undefined;
-        if (!target?.includes('substrate.office.com')) continue;
-        if (!target.includes('SubstrateSearch')) continue;
+        if (!target?.includes('SubstrateSearch')) continue;
 
         if (!isJwtToken(entry.secret)) continue;
 
