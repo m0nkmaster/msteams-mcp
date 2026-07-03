@@ -22,9 +22,13 @@ import {
   removeReaction,
   getSavedMessages,
   getFollowedThreads,
+  getConversations,
+  waitForReply,
 } from '../api/chatsvc-api.js';
 import { getFavorites, addFavorite, removeFavorite, getCustomEmojis } from '../api/csa-api.js';
-import { SELF_CHAT_ID, MAX_THREAD_LIMIT, STANDARD_EMOJIS } from '../constants.js';
+import { parseTeamsMessageUrl } from '../utils/parsers.js';
+import { ErrorCode, createError } from '../types/errors.js';
+import { SELF_CHAT_ID, MAX_THREAD_LIMIT, DEFAULT_THREAD_LIMIT, MAX_WAIT_SECONDS, STANDARD_EMOJIS } from '../constants.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -34,6 +38,9 @@ export const SendMessageInputSchema = z.object({
   content: z.string().min(1, 'Message content cannot be empty'),
   conversationId: z.string().optional().default(SELF_CHAT_ID),
   replyToMessageId: z.string().optional(),
+  contentType: z.enum(['auto', 'text', 'html', 'markdown']).optional(),
+  subject: z.string().optional(),
+  scheduleAt: z.string().optional(),
 });
 
 export const FavoriteInputSchema = z.object({
@@ -59,6 +66,7 @@ export const EditMessageInputSchema = z.object({
   conversationId: z.string().min(1, 'Conversation ID cannot be empty'),
   messageId: z.string().min(1, 'Message ID cannot be empty'),
   content: z.string().min(1, 'Content cannot be empty'),
+  contentType: z.enum(['auto', 'text', 'html', 'markdown']).optional(),
 });
 
 export const DeleteMessageInputSchema = z.object({
@@ -109,19 +117,34 @@ export const GetMessageInputSchema = z.object({
   messageId: z.string().min(1, 'Message ID cannot be empty'),
 });
 
+export const ListChatsInputSchema = z.object({
+  limit: z.number().min(1).max(MAX_THREAD_LIMIT).optional().default(DEFAULT_THREAD_LIMIT),
+});
+
+export const WaitForReplyInputSchema = z.object({
+  conversationId: z.string().min(1).optional(),
+  fromUrl: z.string().min(1).optional(),
+  after: z.string().optional(),
+  maxWaitSeconds: z.number().min(1).max(MAX_WAIT_SECONDS).optional(),
+  intervalSeconds: z.number().min(1).optional(),
+  includeSelf: z.boolean().optional().default(false),
+}).refine(d => d.conversationId || d.fromUrl, {
+  message: 'Provide either conversationId or fromUrl',
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tool Definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
 const sendMessageToolDefinition: Tool = {
   name: 'teams_send_message',
-  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId.',
+  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation.',
   inputSchema: {
     type: 'object',
     properties: {
       content: {
         type: 'string',
-        description: 'The message content in markdown (not HTML). Supports: **bold**, *italic*, ~~strikethrough~~, `inline code`, ```code blocks```, bullet lists (- item), numbered lists (1. item), and newlines. Do NOT send raw HTML tags. For people @mentions use @[DisplayName](mri) (MRI from teams_search_people). For channel tag @mentions use @[DisplayName](tag:tagId) (tag IDs from teams_get_tags). Markdown links [text](url) are supported.',
+        description: 'The message content in markdown (not HTML). Supports: **bold**, *italic*, ~~strikethrough~~, `inline code`, ```code blocks```, bullet lists (- item), numbered lists (1. item), and newlines. Do NOT send raw HTML tags (unless contentType is "html"). For people @mentions use @[DisplayName](mri) (MRI from teams_search_people). For channel tag @mentions use @[DisplayName](tag:tagId) (tag IDs from teams_get_tags). Markdown links [text](url) are supported (http/https/mailto).',
       },
       conversationId: {
         type: 'string',
@@ -130,6 +153,19 @@ const sendMessageToolDefinition: Tool = {
       replyToMessageId: {
         type: 'string',
         description: 'For channel thread replies: the message ID of the thread root. Use serverMessageId from teams_send_message, id from teams_get_thread, or messageId from teams_search.',
+      },
+      contentType: {
+        type: 'string',
+        enum: ['auto', 'text', 'html', 'markdown'],
+        description: 'How to interpret content. "markdown" (default): convert markdown + @mentions + links. "text": send verbatim with no interpretation (use for content with literal * _ ` that should not be formatted). "html": caller-supplied Teams HTML. "auto": convert only when markdown/mention syntax is present.',
+      },
+      subject: {
+        type: 'string',
+        description: 'For channel posts only: a thread subject/title. Starts a new titled thread. Ignored for 1:1/group chats.',
+      },
+      scheduleAt: {
+        type: 'string',
+        description: 'Schedule the message for future delivery. ISO 8601 (e.g. "2026-04-11T09:00:00Z"); a timezone-less value is treated as UTC. Cannot be combined with @mentions or replyToMessageId.',
       },
     },
     required: ['content'],
@@ -274,6 +310,11 @@ const editMessageToolDefinition: Tool = {
       content: {
         type: 'string',
         description: 'New content in markdown (not raw HTML): **bold**, *italic*, lists, code, @[Person](mri), @[Tag](tag:id), [text](url) — same as teams_send_message.',
+      },
+      contentType: {
+        type: 'string',
+        enum: ['auto', 'text', 'html', 'markdown'],
+        description: 'How to interpret content (default "markdown"). "text" sends verbatim without markdown interpretation; "html" is caller-supplied Teams HTML; "auto" converts only when markdown/mention syntax is present.',
       },
     },
     required: ['conversationId', 'messageId', 'content'],
@@ -458,6 +499,54 @@ const getMessageToolDefinition: Tool = {
   },
 };
 
+const listChatsToolDefinition: Tool = {
+  name: 'teams_list_chats',
+  description: 'List the user\'s recent conversations (1:1 chats, group chats, meetings and channels), newest activity first. Returns conversationId, chatType (oneOnOne/group/meeting/channel), topic, and a preview of the last message (sender, time, text). Use the returned conversationId with teams_get_thread to read messages or teams_send_message to reply. This is the fastest way to discover active chat IDs without a search.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      limit: {
+        type: 'number',
+        description: 'Maximum number of conversations to return (default: 50, max: 200).',
+      },
+    },
+  },
+};
+
+const waitForReplyToolDefinition: Tool = {
+  name: 'teams_wait_for_reply',
+  description: 'Block until a new message arrives in a conversation, then return only the new messages. Polls server-side so you make one tool call instead of repeatedly reading the thread. Read-only and idempotent: it never posts (pair it with teams_send_message), and re-running with after=nextAfter resumes from the same point. The block is capped (~110s) to stay under client timeouts; on timeout it returns timedOut=true with nextAfter — just call again to keep waiting. By default the baseline is your most recent message, so after a teams_send_message you can call this with no "after" to wait for the reply.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      conversationId: {
+        type: 'string',
+        description: 'The conversation ID to watch. Either this or fromUrl is required.',
+      },
+      fromUrl: {
+        type: 'string',
+        description: 'A Teams message deep link (https://teams.microsoft.com/l/message/...) to watch, parsed into the conversation ID. Use instead of conversationId.',
+      },
+      after: {
+        type: 'string',
+        description: 'Only return messages newer than this message ID (the resume cursor). Defaults to your most recent message in the thread. Pass the nextAfter value from a previous timed-out response to continue waiting.',
+      },
+      maxWaitSeconds: {
+        type: 'number',
+        description: 'Maximum seconds to block before returning a timed-out result (default 60, max 110).',
+      },
+      intervalSeconds: {
+        type: 'number',
+        description: 'Seconds between polls (default 5).',
+      },
+      includeSelf: {
+        type: 'boolean',
+        description: 'Include your own messages in the result (default false, since you are usually waiting for someone else\'s reply).',
+      },
+    },
+  },
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -468,10 +557,26 @@ async function handleSendMessage(
 ): Promise<ToolResult> {
   const result = await sendMessage(input.conversationId, input.content, {
     replyToMessageId: input.replyToMessageId,
+    contentType: input.contentType,
+    subject: input.subject,
+    scheduleAt: input.scheduleAt,
   });
 
   if (!result.ok) {
     return { success: false, error: result.error };
+  }
+
+  // Scheduled messages return a draft confirmation, not a sent message.
+  if (result.value.scheduledFor) {
+    return {
+      success: true,
+      data: {
+        messageId: result.value.messageId,
+        conversationId: input.conversationId,
+        scheduledFor: result.value.scheduledFor,
+        note: `Message scheduled for ${result.value.scheduledFor}. It appears as a scheduled draft in Teams until sent.`,
+      },
+    };
   }
 
   // The timestamp is the server-assigned ID - use this for reactions, threading, edits, etc.
@@ -643,7 +748,8 @@ async function handleEditMessage(
   const result = await editMessage(
     input.conversationId,
     input.messageId,
-    input.content
+    input.content,
+    input.contentType
   );
 
   if (!result.ok) {
@@ -964,6 +1070,81 @@ async function handleGetMessage(
   };
 }
 
+async function handleListChats(
+  input: z.infer<typeof ListChatsInputSchema>,
+  _ctx: ToolContext
+): Promise<ToolResult> {
+  const result = await getConversations({ limit: input.limit });
+
+  if (!result.ok) {
+    return { success: false, error: result.error };
+  }
+
+  return {
+    success: true,
+    data: {
+      count: result.value.conversations.length,
+      conversations: result.value.conversations,
+    },
+  };
+}
+
+async function handleWaitForReply(
+  input: z.infer<typeof WaitForReplyInputSchema>,
+  _ctx: ToolContext
+): Promise<ToolResult> {
+  let conversationId = input.conversationId;
+  if (input.fromUrl) {
+    const parsed = parseTeamsMessageUrl(input.fromUrl);
+    if (!parsed) {
+      return {
+        success: false,
+        error: createError(
+          ErrorCode.INVALID_INPUT,
+          `Could not parse a Teams message deep link from fromUrl: "${input.fromUrl}".`
+        ),
+      };
+    }
+    conversationId = parsed.conversationId;
+  }
+
+  if (!conversationId) {
+    return {
+      success: false,
+      error: createError(ErrorCode.INVALID_INPUT, 'Provide either conversationId or fromUrl.'),
+    };
+  }
+
+  const result = await waitForReply(conversationId, {
+    after: input.after,
+    maxWaitSeconds: input.maxWaitSeconds,
+    intervalSeconds: input.intervalSeconds,
+    includeSelf: input.includeSelf,
+  });
+
+  if (!result.ok) {
+    return { success: false, error: result.error };
+  }
+
+  const value = result.value;
+  return {
+    success: true,
+    data: {
+      timedOut: value.timedOut,
+      conversationId,
+      after: value.after,
+      nextAfter: value.nextAfter,
+      count: value.newMessages.length,
+      newMessages: value.newMessages,
+      polls: value.polls,
+      waitedSeconds: value.waitedSeconds,
+      note: value.timedOut
+        ? 'No new messages yet. Call teams_wait_for_reply again with after set to nextAfter to keep waiting.'
+        : undefined,
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Exports
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1082,6 +1263,18 @@ export const getMessageTool: RegisteredTool<typeof GetMessageInputSchema> = {
   handler: handleGetMessage,
 };
 
+export const listChatsTool: RegisteredTool<typeof ListChatsInputSchema> = {
+  definition: listChatsToolDefinition,
+  schema: ListChatsInputSchema,
+  handler: handleListChats,
+};
+
+export const waitForReplyTool: RegisteredTool<typeof WaitForReplyInputSchema> = {
+  definition: waitForReplyToolDefinition,
+  schema: WaitForReplyInputSchema,
+  handler: handleWaitForReply,
+};
+
 /** All message-related tools. */
 export const messageTools = [
   sendMessageTool,
@@ -1103,4 +1296,6 @@ export const messageTools = [
   getSavedMessagesTool,
   getFollowedThreadsTool,
   getMessageTool,
+  listChatsTool,
+  waitForReplyTool,
 ];

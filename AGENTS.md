@@ -185,7 +185,9 @@ Session state and token cache files are protected by:
 |------|---------|
 | `teams_search` | Search Teams messages with query operators, supports pagination |
 | `teams_search_email` | Search emails in user's mailbox (same Substrate token as Teams search) |
-| `teams_send_message` | Send a message (markdown); person `@[Name](mri)` or channel tag `@[Tag](tag:id)` via `teams_get_tags`; `replyToMessageId` for channel thread replies |
+| `teams_list_chats` | List recent conversations (1:1, group, meeting, channel) with last-message preview - fastest way to discover active chat IDs |
+| `teams_send_message` | Send a message (markdown); person `@[Name](mri)` or channel tag `@[Tag](tag:id)` via `teams_get_tags`; `replyToMessageId` for channel thread replies; `subject` for a new channel thread; `scheduleAt` (ISO 8601) to schedule; `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
+| `teams_wait_for_reply` | Block (server-side poll, capped ~110s) until a new message arrives; idempotent `after`/`nextAfter` cursor; pair with `teams_send_message` |
 | `teams_get_me` | Get current user profile (email, name, ID) |
 | `teams_get_frequent_contacts` | Get frequently contacted people (for name resolution) |
 | `teams_search_people` | Search for people by name or email |
@@ -200,7 +202,7 @@ Session state and token cache files are protected by:
 | `teams_get_saved_messages` | Get list of saved/bookmarked messages with source references |
 | `teams_get_followed_threads` | Get list of followed threads with source references |
 | `teams_get_message` | Get a single message by ID with full content (any age); includes reactions and reaction summary |
-| `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread's replies; optional `since` (ISO 8601) for messages after a time |
+| `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread's replies; optional `since` (ISO 8601) for messages after a time; `fromUrl` to paste a Teams message deep link instead of a conversation ID |
 | `teams_find_channel` | Find channels by name (your teams + org-wide), shows membership |
 | `teams_get_tags` | List channel tags for a team (`teamId` from `teams_find_channel`) for tag @mentions |
 | `teams_get_chat` | Get conversation ID for 1:1 chat with a person |

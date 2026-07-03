@@ -34,6 +34,8 @@ import {
   parseVirtualConversationMessage,
   hasMarkdownFormatting,
   parseReactions,
+  sanitizeLinkUrl,
+  parseTeamsMessageUrl,
 } from './parsers.js';
 import {
   searchResultItem,
@@ -1481,5 +1483,72 @@ describe('parseReactions', () => {
     expect(parseReactions({ properties: { emotions: 42 } } as unknown as RawMsg).reactions).toBeUndefined();
     expect(parseReactions({ properties: { emotions: [null, undefined, 'string'] } } as unknown as RawMsg).reactions).toBeUndefined();
     expect(parseReactions({ properties: { emotions: [{ noKey: true }] } } as unknown as RawMsg).reactions).toBeUndefined();
+  });
+});
+
+describe('sanitizeLinkUrl', () => {
+  it('keeps http, https and mailto URLs unchanged (case-insensitive)', () => {
+    expect(sanitizeLinkUrl('http://example.com')).toBe('http://example.com');
+    expect(sanitizeLinkUrl('https://example.com/path?q=1')).toBe('https://example.com/path?q=1');
+    expect(sanitizeLinkUrl('mailto:someone@example.com')).toBe('mailto:someone@example.com');
+    expect(sanitizeLinkUrl('HTTPS://Example.com')).toBe('HTTPS://Example.com');
+  });
+
+  it('neutralises dangerous schemes to #', () => {
+    expect(sanitizeLinkUrl('javascript:alert(1)')).toBe('#');
+    expect(sanitizeLinkUrl('JavaScript:alert(1)')).toBe('#');
+    expect(sanitizeLinkUrl('data:text/html,<script>')).toBe('#');
+    expect(sanitizeLinkUrl('vbscript:msgbox')).toBe('#');
+    expect(sanitizeLinkUrl('file:///etc/passwd')).toBe('#');
+  });
+
+  it('leaves scheme-less relative and fragment URLs unchanged', () => {
+    expect(sanitizeLinkUrl('/relative/path')).toBe('/relative/path');
+    expect(sanitizeLinkUrl('page.html')).toBe('page.html');
+    expect(sanitizeLinkUrl('#section')).toBe('#section');
+    // A colon after a path/query delimiter is not a scheme (RFC 3986).
+    expect(sanitizeLinkUrl('path/to:thing')).toBe('path/to:thing');
+  });
+});
+
+describe('parseTeamsMessageUrl', () => {
+  it('parses a channel thread deep link, preferring parentMessageId as the thread root', () => {
+    const url =
+      'https://teams.microsoft.com/l/message/19%3Axxx%40thread.tacv2/170?tenantId=t&parentMessageId=169';
+    const result = parseTeamsMessageUrl(url);
+    expect(result).toEqual({
+      conversationId: '19:xxx@thread.tacv2',
+      messageId: '170',
+      threadRootId: '169',
+    });
+  });
+
+  it('parses a link without parentMessageId (top-level post has no thread root)', () => {
+    const url = 'https://teams.microsoft.com/l/message/19%3Axxx%40thread.tacv2/170';
+    const result = parseTeamsMessageUrl(url);
+    expect(result).toEqual({
+      conversationId: '19:xxx@thread.tacv2',
+      messageId: '170',
+      threadRootId: undefined,
+    });
+  });
+
+  it('parses a 1:1 chat message link with a context query param', () => {
+    const url =
+      'https://teams.microsoft.com/l/message/19%3Aabc_def%40unq.gbl.spaces/1700000000000?context=%7B%22contextType%22%3A%22chat%22%7D';
+    const result = parseTeamsMessageUrl(url);
+    expect(result?.conversationId).toBe('19:abc_def@unq.gbl.spaces');
+    expect(result?.messageId).toBe('1700000000000');
+    expect(result?.threadRootId).toBeUndefined();
+  });
+
+  it('returns null for URLs that are not message deep links', () => {
+    expect(parseTeamsMessageUrl('https://teams.microsoft.com/l/channel/19%3Axxx/General')).toBeNull();
+    expect(parseTeamsMessageUrl('https://example.com/foo')).toBeNull();
+    expect(parseTeamsMessageUrl('not a url')).toBeNull();
+  });
+
+  it('returns null when the channel id segment is empty', () => {
+    expect(parseTeamsMessageUrl('https://teams.microsoft.com/l/message//170')).toBeNull();
   });
 });

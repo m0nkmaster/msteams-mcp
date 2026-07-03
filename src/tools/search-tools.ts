@@ -8,6 +8,7 @@ import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchMessages, searchEmails, searchChannels } from '../api/substrate-api.js';
 import { getThreadMessages, getConsumptionHorizon, markAsRead } from '../api/chatsvc-api.js';
+import { parseTeamsMessageUrl } from '../utils/parsers.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import {
   DEFAULT_PAGE_SIZE,
@@ -30,12 +31,15 @@ export const SearchInputSchema = z.object({
 });
 
 export const GetThreadInputSchema = z.object({
-  conversationId: z.string().min(1, 'Conversation ID cannot be empty'),
+  conversationId: z.string().min(1, 'Conversation ID cannot be empty').optional(),
+  fromUrl: z.string().min(1).optional(),
   threadRootId: z.string().optional(),
   limit: z.number().min(1).max(MAX_THREAD_LIMIT).optional().default(DEFAULT_THREAD_LIMIT),
   markRead: z.boolean().optional().default(false),
   order: z.enum(['asc', 'desc']).optional().default('desc'),
   since: z.string().optional(),
+}).refine(d => d.conversationId || d.fromUrl, {
+  message: 'Provide either conversationId or fromUrl',
 });
 
 export const FindChannelInputSchema = z.object({
@@ -89,7 +93,11 @@ const getThreadToolDefinition: Tool = {
     properties: {
       conversationId: {
         type: 'string',
-        description: 'The conversation ID to get messages from (e.g., "19:abc@thread.tacv2" from search results)',
+        description: 'The conversation ID to get messages from (e.g., "19:abc@thread.tacv2" from search results). Either this or fromUrl is required.',
+      },
+      fromUrl: {
+        type: 'string',
+        description: 'A Teams message deep link (https://teams.microsoft.com/l/message/...). Parsed into the conversation ID automatically, so you can paste a link directly. If it points to a channel thread reply, the thread is scoped automatically. Use instead of conversationId.',
       },
       threadRootId: {
         type: 'string',
@@ -113,7 +121,6 @@ const getThreadToolDefinition: Tool = {
         description: 'ISO 8601 timestamp (e.g., "2026-02-26T00:00:00Z"). When provided, only returns messages after this time.',
       },
     },
-    required: ['conversationId'],
   },
 };
 
@@ -205,6 +212,32 @@ async function handleGetThread(
   input: z.infer<typeof GetThreadInputSchema>,
   _ctx: ToolContext
 ): Promise<ToolResult> {
+  // Resolve conversation and thread root from a deep link when fromUrl is given.
+  let conversationId = input.conversationId;
+  let threadRootId = input.threadRootId;
+  if (input.fromUrl) {
+    const parsed = parseTeamsMessageUrl(input.fromUrl);
+    if (!parsed) {
+      return {
+        success: false,
+        error: createError(
+          ErrorCode.INVALID_INPUT,
+          `Could not parse a Teams message deep link from fromUrl: "${input.fromUrl}". Expected a "/l/message/..." link.`
+        ),
+      };
+    }
+    conversationId = parsed.conversationId;
+    // A link into a channel thread reply carries the thread root as parentMessageId.
+    threadRootId = threadRootId ?? parsed.threadRootId;
+  }
+
+  if (!conversationId) {
+    return {
+      success: false,
+      error: createError(ErrorCode.INVALID_INPUT, 'Provide either conversationId or fromUrl.'),
+    };
+  }
+
   // Validate since parameter if provided
   let startTime: number | undefined;
   if (input.since) {
@@ -221,11 +254,11 @@ async function handleGetThread(
     startTime = parsed;
   }
 
-  const result = await getThreadMessages(input.conversationId, { 
+  const result = await getThreadMessages(conversationId, { 
     limit: input.limit,
     order: input.order,
     startTime,
-    replyToMessageId: input.threadRootId,
+    replyToMessageId: threadRootId,
   });
 
   if (!result.ok) {
@@ -236,7 +269,7 @@ async function handleGetThread(
   let unreadCount: number | undefined;
   let lastReadMessageId: string | undefined;
   
-  const horizonResult = await getConsumptionHorizon(input.conversationId);
+  const horizonResult = await getConsumptionHorizon(conversationId);
   if (horizonResult.ok) {
     lastReadMessageId = horizonResult.value.lastReadMessageId;
     
@@ -269,7 +302,7 @@ async function handleGetThread(
       ? result.value.messages[result.value.messages.length - 1]
       : result.value.messages[0];
     if (latestMessage) {
-      const markResult = await markAsRead(input.conversationId, latestMessage.id);
+      const markResult = await markAsRead(conversationId, latestMessage.id);
       markedAsRead = markResult.ok;
     }
   }

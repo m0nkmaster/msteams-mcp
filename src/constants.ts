@@ -120,6 +120,23 @@ export const DEFAULT_ACTIVITY_LIMIT = 50;
 export const MAX_ACTIVITY_LIMIT = 200;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Wait for reply
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Default seconds to block in teams_wait_for_reply before timing out. */
+export const DEFAULT_WAIT_SECONDS = 60;
+
+/**
+ * Maximum seconds teams_wait_for_reply will block. Kept under common MCP client
+ * request timeouts (~2 minutes) so the tool returns a resumable timeout rather
+ * than having the whole call killed by the client.
+ */
+export const MAX_WAIT_SECONDS = 110;
+
+/** Default seconds between polls while waiting for a reply. */
+export const DEFAULT_WAIT_INTERVAL_SECONDS = 5;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Calendar/Meetings
 // ─────────────────────────────────────────────────────────────────────────────
 

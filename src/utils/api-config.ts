@@ -115,6 +115,10 @@ export const CHATSVC_API = {
   /** List all recent conversations with inline properties. */
   conversations: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=200`,
+
+  /** Create a scheduled draft (future-dated message). */
+  drafts: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/api/chatsvc/${region}/v1/users/ME/drafts`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -11,9 +11,9 @@ import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import { getUserDisplayName } from '../auth/token-extractor.js';
 import { requireMessageAuth, requireMessageAuthWithConfig, getTeamsBaseUrl, getTenantId } from '../utils/auth-guards.js';
-import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, markdownToTeamsHtml, escapeHtmlChars, parseReactions, type ExtractedLink, type Reaction, type ReactionSummary } from '../utils/parsers.js';
+import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId, extractObjectId, markdownToTeamsHtml, hasMarkdownFormatting, escapeHtmlChars, sanitizeLinkUrl, parseReactions, type ExtractedLink, type Reaction, type ReactionSummary } from '../utils/parsers.js';
 import { resolveNames } from './profile-api.js';
-import { SELF_CHAT_ID, MRI_ORGID_PREFIX } from '../constants.js';
+import { SELF_CHAT_ID, MRI_ORGID_PREFIX, DEFAULT_WAIT_SECONDS, DEFAULT_WAIT_INTERVAL_SECONDS, MAX_WAIT_SECONDS } from '../constants.js';
 import { formatHumanReadableDate } from './chatsvc-common.js';
 import type { RawChatsvcMessage, RawConversationResponse, RawCreateThreadResponse } from '../types/api-responses.js';
 
@@ -25,6 +25,8 @@ import type { RawChatsvcMessage, RawConversationResponse, RawCreateThreadRespons
 export interface SendMessageResult {
   messageId: string;
   timestamp?: number;
+  /** For scheduled messages: the ISO 8601 UTC time the message will be sent. */
+  scheduledFor?: string;
 }
 
 /** A message from a thread/conversation. */
@@ -103,6 +105,24 @@ export interface SendMessageOptions {
    * are part of the same flat conversation.
    */
   replyToMessageId?: string;
+  /**
+   * How to interpret the content. Defaults to `markdown` (convert markdown +
+   * @mentions + links to Teams HTML — the historical behaviour). Use `text` to
+   * send verbatim with no reinterpretation, `html` for caller-supplied Teams
+   * HTML, or `auto` to convert only when markdown/mention syntax is present.
+   */
+  contentType?: ContentType;
+  /**
+   * For channel posts: a thread subject/title. Starts a new titled thread.
+   * Ignored for 1:1/group chats (they have no per-message subject).
+   */
+  subject?: string;
+  /**
+   * Schedule the message for future delivery. ISO 8601 (e.g.
+   * "2026-04-11T09:00:00Z"); a timezone-less value is treated as UTC. Cannot be
+   * combined with mentions or a thread reply.
+   */
+  scheduleAt?: string;
 }
 
 /** Result of getting a 1:1 conversation. */
@@ -149,44 +169,93 @@ export async function sendMessage(
   }
   const { auth, region, baseUrl } = authResult.value;
 
-  const { replyToMessageId } = options;
+  const { replyToMessageId, contentType = 'markdown', subject, scheduleAt } = options;
   const displayName = getUserDisplayName() || 'User';
 
   const clientMessageId = crypto.randomUUID();
 
-  // Process content: handle mentions, links, and markdown formatting.
-  // Always convert through markdown→HTML pipeline (never pass user content through
-  // without sanitization, as Teams requires proper block-level wrapping like <p> tags)
-  const parsed = parseContentWithMentionsAndLinks(content);
-  const htmlContent = parsed.html;
-  const mentionsToSend = parsed.mentions;
+  // Resolve content per the requested content type (markdown by default).
+  const resolved = resolveMessageContent(content, contentType);
+
+  // Scheduled send goes through the chatsvc drafts API (same as the Teams web
+  // client). Drafts do not support mentions or thread replies.
+  if (scheduleAt) {
+    if (resolved.mentions.length > 0 || replyToMessageId) {
+      return err(createError(
+        ErrorCode.INVALID_INPUT,
+        'Scheduled messages cannot include @mentions or be thread replies. Remove scheduleAt, or the mention/replyToMessageId.'
+      ));
+    }
+    const parsedTime = parseScheduleTime(scheduleAt);
+    if (!parsedTime.ok) {
+      return parsedTime;
+    }
+    const draftBody = buildScheduledDraftBody({
+      conversationId,
+      content: resolved.content,
+      messagetype: resolved.messagetype,
+      epochMs: parsedTime.value.epochMs,
+      userMri: auth.userMri,
+      isoNow: new Date().toISOString(),
+      conversationLink: CHATSVC_API.conversation(region, conversationId, baseUrl),
+      clientMessageId,
+    });
+    const draftResponse = await httpRequest<unknown>(
+      CHATSVC_API.drafts(region, baseUrl),
+      {
+        method: 'POST',
+        headers: getMessagingHeaders(auth.skypeToken, auth.authToken, baseUrl),
+        body: JSON.stringify(draftBody),
+      }
+    );
+    if (!draftResponse.ok) {
+      return draftResponse;
+    }
+    return ok({ messageId: clientMessageId, scheduledFor: parsedTime.value.iso });
+  }
 
   // Build the message body
   const body: Record<string, unknown> = {
-    content: htmlContent,
-    messagetype: 'RichText/Html',
+    content: resolved.content,
+    messagetype: resolved.messagetype,
     contenttype: 'text',
     imdisplayname: displayName,
     clientmessageid: clientMessageId,
   };
 
-  // Add mentions property if mentions were found
-  if (mentionsToSend.length > 0) {
-    body.properties = {
-      mentions: buildMentionsProperty(mentionsToSend),
-    };
+  // Message properties: mentions and/or a channel thread subject.
+  const properties: Record<string, unknown> = {};
+  if (resolved.mentions.length > 0) {
+    properties.mentions = buildMentionsProperty(resolved.mentions);
+  }
+  if (subject && subject.trim()) {
+    properties.subject = subject.trim();
+  }
+  if (Object.keys(properties).length > 0) {
+    body.properties = properties;
   }
 
   const url = CHATSVC_API.messages(region, conversationId, replyToMessageId, baseUrl);
+  const requestInit = {
+    method: 'POST' as const,
+    headers: getMessagingHeaders(auth.skypeToken, auth.authToken, baseUrl),
+    body: JSON.stringify(body),
+  };
 
-  const response = await httpRequest<{ OriginalArrivalTime?: number }>(
-    url,
-    {
-      method: 'POST',
-      headers: getMessagingHeaders(auth.skypeToken, auth.authToken, baseUrl),
-      body: JSON.stringify(body),
+  let response = await httpRequest<{ OriginalArrivalTime?: number }>(url, requestInit);
+
+  // A 1:1 chat that has never been messaged has no chatsvc thread yet, so the
+  // deterministic @unq.gbl.spaces id 404s. Create the unique-roster thread (what
+  // the Teams client does when starting a new chat) and retry once.
+  if (!response.ok && response.error.code === ErrorCode.NOT_FOUND) {
+    const memberIds = extractOneOnOneMemberIds(conversationId);
+    if (memberIds) {
+      const created = await createOneOnOneThread(region, baseUrl, auth.skypeToken, auth.authToken, memberIds);
+      if (created.ok) {
+        response = await httpRequest<{ OriginalArrivalTime?: number }>(url, requestInit);
+      }
     }
-  );
+  }
 
   if (!response.ok) {
     return response;
@@ -196,6 +265,34 @@ export async function sendMessage(
     messageId: clientMessageId,
     timestamp: response.value.data.OriginalArrivalTime,
   });
+}
+
+/**
+ * Creates the unique-roster 1:1 thread for a `19:<a>_<b>@unq.gbl.spaces`
+ * conversation so the first message to a never-used 1:1 chat can be delivered.
+ */
+async function createOneOnOneThread(
+  region: string,
+  baseUrl: string,
+  skypeToken: string,
+  authToken: string,
+  memberIds: string[]
+): Promise<Result<void>> {
+  const response = await httpRequest<unknown>(
+    CHATSVC_API.createThread(region, baseUrl),
+    {
+      method: 'POST',
+      headers: {
+        ...getMessagingHeaders(skypeToken, authToken, baseUrl),
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(buildOneOnOneThreadBody(memberIds)),
+    }
+  );
+  if (!response.ok) {
+    return response;
+  }
+  return ok(undefined);
 }
 
 /**
@@ -464,12 +561,14 @@ export async function getThreadMessages(
  *
  * @param conversationId - The conversation containing the message
  * @param messageId - The ID of the message to edit
- * @param newContent - New content (markdown; supports mentions like sendMessage)
+ * @param newContent - New content (markdown by default; supports mentions like sendMessage)
+ * @param contentType - How to interpret the content (default `markdown`)
  */
 export async function editMessage(
   conversationId: string,
   messageId: string,
-  newContent: string
+  newContent: string,
+  contentType: ContentType = 'markdown'
 ): Promise<Result<EditMessageResult>> {
   const authResult = requireMessageAuthWithConfig();
   if (!authResult.ok) {
@@ -478,24 +577,22 @@ export async function editMessage(
   const { auth, region, baseUrl } = authResult.value;
   const displayName = getUserDisplayName() || 'User';
 
-  // Same pipeline as sendMessage: markdown, @[mentions](mri), links, then mentions property.
-  const parsed = parseContentWithMentionsAndLinks(newContent);
-  const htmlContent = parsed.html;
-  const mentionsToSend = parsed.mentions;
+  // Same pipeline as sendMessage: resolve content per the requested type.
+  const resolved = resolveMessageContent(newContent, contentType);
 
   const body: Record<string, unknown> = {
     id: messageId,
     type: 'Message',
     conversationid: conversationId,
-    content: htmlContent,
-    messagetype: 'RichText/Html',
+    content: resolved.content,
+    messagetype: resolved.messagetype,
     contenttype: 'text',
     imdisplayname: displayName,
   };
 
-  if (mentionsToSend.length > 0) {
+  if (resolved.mentions.length > 0) {
     body.properties = {
-      mentions: buildMentionsProperty(mentionsToSend),
+      mentions: buildMentionsProperty(resolved.mentions),
     };
   }
 
@@ -966,7 +1063,7 @@ export function parseContentWithMentionsAndLinks(content: string): { html: strin
   // Patterns for mentions and links
   // Note: Link pattern uses [^)\s] to reject URLs with spaces
   const mentionPattern = /@\[([^\]]+)\]\(([^)]+)\)/g;
-  const linkPattern = /(?<!@)\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  const linkPattern = /(?<!@)\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g;
   
   // Match type for tracking positions
   interface Match {
@@ -1026,7 +1123,7 @@ export function parseContentWithMentionsAndLinks(content: string): { html: strin
       mentionId++;
     } else {
       const safeText = escapeHtmlChars(m.text);
-      const safeUrl = m.target.replace(/"/g, '&quot;');
+      const safeUrl = sanitizeLinkUrl(m.target).replace(/"/g, '&quot;');
       html = `<a href="${safeUrl}">${safeText}</a>`;
     }
     placeholders.set(placeholder, html);
@@ -1046,6 +1143,347 @@ export function parseContentWithMentionsAndLinks(content: string): { html: strin
   }
   
   return { html: result, mentions };
+}
+
+/** How message content should be interpreted before sending. */
+export type ContentType = 'auto' | 'text' | 'html' | 'markdown';
+
+/** Content resolved into the shape the chatsvc/Graph message body expects. */
+export interface ResolvedContent {
+  /** The body content to send. */
+  content: string;
+  /** The wire message type: plain `Text` or `RichText/Html`. */
+  messagetype: 'Text' | 'RichText/Html';
+  /** Any @mentions extracted from the content (empty for text/html modes). */
+  mentions: Mention[];
+}
+
+/** Detects whether content contains @[mention](mri) or [text](url) markdown syntax. */
+function hasMentionOrLink(content: string): boolean {
+  return (
+    /@\[[^\]]+\]\([^)]+\)/.test(content) ||
+    /(?<!@)\[[^\]]+\]\((?:https?:\/\/|mailto:)[^)\s]+\)/.test(content)
+  );
+}
+
+/**
+ * Resolves outbound message content according to the requested content type.
+ *
+ * - `markdown` (default): convert markdown + @mentions + links to Teams HTML.
+ *   This preserves the historical behaviour where all content was converted.
+ * - `text`: send verbatim as plain text — no markdown, mention or link
+ *   processing. The escape hatch for content that should not be reinterpreted
+ *   (e.g. `5*3*2`, `a_b_c`).
+ * - `html`: caller-supplied Teams HTML, sent as `RichText/Html` unchanged.
+ * - `auto`: convert only when the content actually contains markdown formatting
+ *   or mention/link syntax; otherwise send plain text.
+ */
+export function resolveMessageContent(
+  content: string,
+  contentType: ContentType = 'markdown'
+): ResolvedContent {
+  switch (contentType) {
+    case 'text':
+      return { content, messagetype: 'Text', mentions: [] };
+    case 'html':
+      return { content, messagetype: 'RichText/Html', mentions: [] };
+    case 'auto':
+      if (!hasMarkdownFormatting(content) && !hasMentionOrLink(content)) {
+        return { content, messagetype: 'Text', mentions: [] };
+      }
+    // falls through to markdown conversion when formatting is detected
+    // eslint-disable-next-line no-fallthrough
+    case 'markdown':
+    default: {
+      const parsed = parseContentWithMentionsAndLinks(content);
+      return { content: parsed.html, messagetype: 'RichText/Html', mentions: parsed.mentions };
+    }
+  }
+}
+
+/**
+ * Parses and validates a schedule datetime for a scheduled message.
+ *
+ * Accepts ISO 8601 (with or without a timezone) and a space-separated
+ * `YYYY-MM-DD HH:mm[:ss]` form. A timezone-less value is treated as UTC (so
+ * results are deterministic regardless of the host clock). Rejects unparseable
+ * or past times. `now` is injectable for testing.
+ */
+export function parseScheduleTime(
+  input: string,
+  now: number = Date.now()
+): Result<{ iso: string; epochMs: number }> {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return err(createError(
+      ErrorCode.INVALID_INPUT,
+      'Schedule time cannot be empty. Use ISO 8601, e.g. "2026-04-11T09:00:00Z".'
+    ));
+  }
+  // Allow a space separator and treat a timezone-less datetime as UTC.
+  let normalized = trimmed.replace(' ', 'T');
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(normalized);
+  if (!hasTimezone) normalized += 'Z';
+
+  const epochMs = Date.parse(normalized);
+  if (Number.isNaN(epochMs)) {
+    return err(createError(
+      ErrorCode.INVALID_INPUT,
+      `Invalid schedule time: "${input}". Use ISO 8601, e.g. "2026-04-11T09:00:00Z".`
+    ));
+  }
+  if (epochMs <= now) {
+    return err(createError(
+      ErrorCode.INVALID_INPUT,
+      `Schedule time "${input}" is in the past.`
+    ));
+  }
+  return ok({ iso: new Date(epochMs).toISOString(), epochMs });
+}
+
+/**
+ * Builds the chatsvc `/drafts` request body for a scheduled message — the same
+ * mechanism the Teams web client uses. `sendAt` must be epoch milliseconds.
+ */
+export function buildScheduledDraftBody(opts: {
+  conversationId: string;
+  content: string;
+  messagetype: 'Text' | 'RichText/Html';
+  epochMs: number;
+  userMri: string;
+  isoNow: string;
+  conversationLink: string;
+  clientMessageId: string;
+}): Record<string, unknown> {
+  return {
+    draftDetails: { sendAt: opts.epochMs },
+    draftType: 'ScheduledDraft',
+    innerThreadId: opts.conversationId,
+    message: {
+      id: '-1',
+      type: 'Message',
+      conversationid: opts.conversationId,
+      conversationLink: opts.conversationLink,
+      from: opts.userMri,
+      fromUserId: opts.userMri,
+      composetime: opts.isoNow,
+      originalarrivaltime: opts.isoNow,
+      content: opts.content,
+      messagetype: opts.messagetype,
+      contenttype: 'Text',
+      imdisplayname: '',
+      clientmessageid: opts.clientMessageId,
+      properties: {
+        importance: '',
+        subject: '',
+        title: '',
+        cards: '[]',
+        links: '[]',
+        mentions: '[]',
+        onbehalfof: null,
+        files: '[]',
+        policyViolation: null,
+        draftId: opts.clientMessageId,
+      },
+      draftDetails: { sendAt: opts.epochMs },
+      threadtype: 'streamofdrafts',
+      innerThreadId: opts.conversationId,
+    },
+  };
+}
+
+/**
+ * Extracts the two member object IDs from a 1:1 conversation ID of the form
+ * `19:<a>_<b>@unq.gbl.spaces`. Returns null for any other conversation type or
+ * a malformed ID (so the caller only attempts thread creation for real 1:1s).
+ */
+export function extractOneOnOneMemberIds(conversationId: string): string[] | null {
+  const match = /^19:(.+)@unq\.gbl\.spaces$/.exec(conversationId);
+  if (!match) return null;
+  const parts = match[1].split('_');
+  if (parts.length !== 2 || parts.some(p => p.length === 0)) return null;
+  return parts;
+}
+
+/**
+ * Builds the `/v1/threads` body that creates the unique-roster 1:1 thread — what
+ * the Teams client does the first time you message someone. Both members are
+ * added as Admins with the fixed unique-roster properties.
+ */
+export function buildOneOnOneThreadBody(memberIds: string[]): Record<string, unknown> {
+  return {
+    members: memberIds.map(id => ({ id: `${MRI_ORGID_PREFIX}${id}`, role: 'Admin' })),
+    properties: {
+      threadType: 'chat',
+      fixedRoster: 'true',
+      uniquerosterthread: 'true',
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wait for reply
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Result of waiting for a new message in a conversation. */
+export interface WaitForReplyResult {
+  /** True if the wait timed out before any new message arrived. */
+  timedOut: boolean;
+  /** The baseline message ID the wait started from. */
+  after: string;
+  /** Resume cursor: pass as `after` to a follow-up wait to continue from here. */
+  nextAfter: string;
+  /** The new messages that arrived (oldest first), or empty on timeout. */
+  newMessages: ThreadMessage[];
+  /** How many poll iterations ran. */
+  polls: number;
+  /** How many seconds the wait blocked for. */
+  waitedSeconds: number;
+}
+
+/** Options for {@link waitForReply}. */
+export interface WaitForReplyOptions {
+  /** Only return messages newer than this message ID. Defaults to the caller's most recent message. */
+  after?: string;
+  /** Maximum seconds to block (clamped to MAX_WAIT_SECONDS). */
+  maxWaitSeconds?: number;
+  /** Seconds between polls. */
+  intervalSeconds?: number;
+  /** Include the caller's own messages in the result (default false). */
+  includeSelf?: boolean;
+  /** Messages fetched per poll (default 50). */
+  limit?: number;
+}
+
+/** Clamps the wait timing knobs into their sane range (pure, for testability). */
+export function clampWaitParams(
+  maxWaitSeconds: number,
+  intervalSeconds: number
+): { maxWait: number; interval: number } {
+  const maxWait = Math.min(Math.max(Math.floor(maxWaitSeconds), 1), MAX_WAIT_SECONDS);
+  const interval = Math.min(Math.max(Math.floor(intervalSeconds), 1), maxWait);
+  return { maxWait, interval };
+}
+
+/** Parses a numeric Teams message ID, or null if it is not a positive integer string. */
+function parseMessageId(id: string): number | null {
+  const n = Number(id);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Selects the messages strictly newer than `afterId`, oldest first. Excludes the
+ * caller's own messages unless `includeSelf` is set; ignores non-numeric IDs.
+ * Pure so the filter/sort semantics are unit-testable.
+ */
+export function selectNewMessages<T extends { id: string; isFromMe?: boolean }>(
+  messages: readonly T[],
+  afterId: number,
+  includeSelf: boolean
+): T[] {
+  return messages
+    .filter(m => {
+      const id = parseMessageId(m.id);
+      if (id === null || id <= afterId) return false;
+      if (!includeSelf && m.isFromMe) return false;
+      return true;
+    })
+    .sort((a, b) => (parseMessageId(a.id) ?? 0) - (parseMessageId(b.id) ?? 0));
+}
+
+/**
+ * Resolves the baseline message ID for a wait with no explicit `after`: the
+ * caller's own most recent message, else the most recent message overall, else
+ * 0 for an empty thread. Anchoring to the caller's own last message makes a wait
+ * restarted after a send idempotent without remembering the sent ID. Pure.
+ */
+export function resolveWaitBaseline(
+  messages: readonly { id: string; isFromMe?: boolean }[]
+): number {
+  let ownMax = 0;
+  let anyMax = 0;
+  for (const m of messages) {
+    const id = parseMessageId(m.id);
+    if (id === null) continue;
+    anyMax = Math.max(anyMax, id);
+    if (m.isFromMe) ownMax = Math.max(ownMax, id);
+  }
+  return ownMax > 0 ? ownMax : anyMax;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Blocks until a new message appears in a conversation, then returns only the
+ * new messages. Polls inside the call so a waiting agent makes a single tool
+ * call instead of a poll loop. Read-only and idempotent: it never posts, and the
+ * `after` baseline makes a restart resume from the same point without replaying.
+ *
+ * The block is capped at MAX_WAIT_SECONDS so an MCP client timeout never kills
+ * the call; on timeout it returns `timedOut: true` with `nextAfter` so the
+ * caller can simply call again to keep waiting.
+ */
+export async function waitForReply(
+  conversationId: string,
+  options: WaitForReplyOptions = {}
+): Promise<Result<WaitForReplyResult>> {
+  const { after, includeSelf = false, limit = 50 } = options;
+  const { maxWait, interval } = clampWaitParams(
+    options.maxWaitSeconds ?? DEFAULT_WAIT_SECONDS,
+    options.intervalSeconds ?? DEFAULT_WAIT_INTERVAL_SECONDS
+  );
+
+  // Resolve the idempotent baseline: an explicit `after` wins, otherwise anchor
+  // to the caller's own last message (fetched once).
+  let afterId: number;
+  if (after !== undefined) {
+    const parsed = parseMessageId(after);
+    if (parsed === null) {
+      return err(createError(
+        ErrorCode.INVALID_INPUT,
+        `'after' must be a numeric Teams message ID (got "${after}"). Use the id of a message from teams_get_thread.`
+      ));
+    }
+    afterId = parsed;
+  } else {
+    const initial = await getThreadMessages(conversationId, { limit, order: 'desc' });
+    if (!initial.ok) return initial;
+    afterId = resolveWaitBaseline(initial.value.messages);
+  }
+
+  const start = Date.now();
+  const deadline = start + maxWait * 1000;
+  let polls = 0;
+  let newMessages: ThreadMessage[] = [];
+
+  for (;;) {
+    polls++;
+    const page = await getThreadMessages(conversationId, { limit, order: 'asc' });
+    if (!page.ok) return page;
+    newMessages = selectNewMessages(page.value.messages, afterId, includeSelf);
+    if (newMessages.length > 0) break;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(interval * 1000, remaining));
+  }
+
+  // ponytail: advance the cursor to the last returned id. If more than `limit`
+  // messages arrive between two polls the surplus is re-fetched next call by id;
+  // a burst larger than `limit` could strand the oldest — upgrade to a
+  // backfill scan (like the Rust CLI) only if that proves to matter.
+  const nextAfter = newMessages.length > 0
+    ? newMessages[newMessages.length - 1].id
+    : String(afterId);
+  const waitedSeconds = Math.round((Date.now() - start) / 1000);
+
+  return ok({
+    timedOut: newMessages.length === 0,
+    after: String(afterId),
+    nextAfter,
+    newMessages,
+    polls,
+    waitedSeconds,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
