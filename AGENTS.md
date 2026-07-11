@@ -18,6 +18,7 @@ This is an MCP (Model Context Protocol) server that enables AI assistants to int
 ```
 src/
 ├── index.ts              # Entry point, runs the MCP server
+├── cli.ts                # Standalone CLI (msteams bin) - full tool parity via in-memory MCP transport
 ├── server.ts             # MCP server (TeamsServer class) - delegates to tool registry
 ├── constants.ts          # Shared constants (page sizes, timeouts, thresholds)
 ├── tools/                # Tool handlers (modular design)
@@ -252,11 +253,11 @@ npm start             # Run compiled MCP server
 
 ### Testing
 
-#### CLI / MCP Test Harness
+#### CLI (msteams)
 
-The CLI (`npm run cli`) tests the server through the actual MCP protocol using in-memory transports. This verifies the full MCP layer works correctly, not just the underlying functions.
+`src/cli.ts` is a first-class, installable CLI (`msteams` bin) with **full tool parity** to the MCP server. It runs the same server in-process over an in-memory MCP transport, so every call goes through the real MCP protocol layer - which also makes it the test harness for that layer. Use `npm run cli` from a repo clone (runs via `tsx`, no build needed) or the installed `msteams` binary.
 
-The harness can call **any tool** generically. Unrecognised commands are treated as tool names (with `teams_` prefix added if missing). Use `--key value` for parameters.
+The CLI can call **any tool** generically. Unrecognised commands are treated as tool names (with `teams_` prefix added if missing). Use `--key value` for parameters.
 
 ```bash
 # List available MCP tools and shortcuts
@@ -316,7 +317,7 @@ npm run typecheck     # TypeScript type checking only
 For testing against the live Teams APIs:
 - Use `npm run cli -- search "query"` to test via the full MCP protocol layer
 
-The MCP test harness (`test:mcp`) uses the SDK's `InMemoryTransport` to connect a test client to the server in-process, verifying that tool definitions, input validation, and response formatting all work correctly through the protocol layer.
+The CLI itself (`src/cli.ts`, run via `npm run cli` or the `msteams` bin) doubles as the MCP protocol test harness: it uses the SDK's `InMemoryTransport` to connect a client to the server in-process, so exercising a tool through the CLI verifies that tool definitions, input validation, and response formatting all work correctly through the protocol layer.
 
 #### CI/CD
 

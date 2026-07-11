@@ -68,6 +68,24 @@ Then configure your MCP client:
 
 The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authentication.
 
+### CLI (alternative to the MCP server)
+
+The same functionality is also available as a standalone command-line tool, `msteams`. This is useful when you want Teams from a shell or script instead of an MCP client (for example, if an MCP integration is unreliable in your environment).
+
+Install it globally from npm:
+
+```bash
+npm install -g msteams-mcp
+```
+
+This installs two binaries: `msteams-mcp` (the MCP server) and `msteams` (the CLI). Or run it without installing:
+
+```bash
+npx -y msteams-mcp msteams status
+```
+
+See [CLI Usage](#cli-usage) for commands.
+
 ## Available Tools
 
 ### Search & Discovery
@@ -180,48 +198,59 @@ The server also exposes passive resources for context discovery:
 | `teams://me/favorites` | Pinned conversations |
 | `teams://status` | Authentication status |
 
-## CLI Tools (Development)
+## CLI Usage
 
-For local development, CLI tools are available for testing and debugging:
+`msteams` exposes every tool the MCP server does - full parity, same authentication, same session files. Run with no arguments to list all tools and shortcuts.
+
+If you installed globally (`npm install -g msteams-mcp`), invoke it directly:
 
 ```bash
+# List available tools and shortcuts
+msteams
+
 # Check authentication status
-npm run cli -- status
+msteams status
+
+# Log in (opens a browser; tries silent SSO first)
+msteams login
+msteams login --force        # clear session and re-login
 
 # Search messages
-npm run cli -- search "meeting notes"
-npm run cli -- search "project" --from 0 --size 50
+msteams search "meeting notes"
+msteams search "project" --from 0 --size 50
 
 # Search emails
-npm run cli -- teams_search_email --query "from:sarah@company.com"
+msteams teams_search_email --query "from:sarah@company.com"
 
-# Send messages (default: your own notes/self-chat)
-npm run cli -- send "Hello from Teams MCP!"
-npm run cli -- send "Message" --to "conversation-id"
+# Send a message (default: your own notes/self-chat)
+msteams send "Hello from Teams MCP!"
+msteams send "Message" --to "conversation-id"
 
-# Force login
-npm run cli -- login --force
+# People, contacts, favourites, activity, unread
+msteams people "john smith"
+msteams favorites
+msteams activity
+msteams unread
 
-# Output as JSON
-npm run cli -- search "query" --json
+# Any tool by name (the teams_ prefix is optional)
+msteams teams_search_emoji --query "heart"
+msteams find_channel --query "support"
+
+# Machine-readable output
+msteams search "query" --json
 ```
 
-### MCP Test Harness
+**Command form:** `msteams <command> [primaryArg] [--key value ...]`. Any unrecognised command is treated as a tool name (`teams_` is added automatically). Common flags like `--to`, `--from`, `--size`, `--query`, `--force` map to the matching tool parameters; run `msteams` with no arguments to see the full list.
 
-Test the server through the actual MCP protocol:
+### From a repo clone
+
+If you're working from source, the same CLI is wired to `npm run cli` (runs via `tsx`, no build needed):
 
 ```bash
-# List available tools
-npm run cli
-
-# Call any tool
+npm run cli                          # list tools
 npm run cli -- search "your query"
 npm run cli -- status
-npm run cli -- people "john smith"
-npm run cli -- favorites
-npm run cli -- activity              # Get activity feed
-npm run cli -- unread                # Check unread counts
-npm run cli -- teams_search_emoji --query "heart"  # Search emojis
+npm run cli -- send "Hi" --to "conversation-id"
 ```
 
 ## Limitations

@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "msteams-mcp": "dist/index.js"
+    "msteams-mcp": "dist/index.js",
+    "msteams": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -29,7 +30,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "cli": "tsx src/test/mcp-harness.ts",
+    "cli": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"

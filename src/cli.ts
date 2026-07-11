@@ -1,23 +1,26 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env node
 /**
- * MCP Protocol Test Harness
- * 
- * Tests the MCP server by connecting a client through the actual MCP protocol,
- * rather than calling underlying functions directly. This ensures the full
- * protocol layer works correctly.
- * 
- * Usage:
- *   npm run test:mcp                              # List tools and check status
- *   npm run test:mcp -- search "query"            # Search for messages (shortcut)
- *   npm run test:mcp -- teams_search --query "q"  # Generic tool call
- *   npm run test:mcp -- --json                    # Output as JSON
- * 
+ * Teams MCP CLI
+ *
+ * A standalone command-line interface with full parity to the MCP server.
+ * It runs the same in-process server over an in-memory transport and speaks
+ * to it through the real MCP protocol, so every registered tool is callable.
+ *
+ * Usage (installed):
+ *   msteams                               # List tools and check status
+ *   msteams search "query"                # Search for messages (shortcut)
+ *   msteams teams_search --query "q"      # Generic tool call
+ *   msteams --json                        # Output as JSON
+ *
+ * Usage (from the repo):
+ *   npm run cli -- search "query"
+ *
  * Any unrecognised command is treated as a tool name. Use --key value for parameters.
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer } from '../server.js';
+import { createServer } from './server.js';
 
 // Shortcuts map command names to tool names and parameter mappings
 const SHORTCUTS: Record<string, { tool: string; primaryArg?: string }> = {
@@ -187,7 +190,7 @@ async function createTestClient(): Promise<{ client: Client; cleanup: () => Prom
   
   // Create and connect the client
   const client = new Client(
-    { name: 'mcp-test-harness', version: '1.0.0' },
+    { name: 'msteams', version: '1.0.0' },
     { capabilities: {} }
   );
   
@@ -481,8 +484,8 @@ async function main(): Promise<void> {
   const parsed = parseArgs();
   
   if (!parsed.json) {
-    console.log('\n🧪 MCP Protocol Test Harness');
-    console.log('============================');
+    console.log('\n💬 Teams MCP CLI');
+    console.log('================');
   }
   
   let cleanup: (() => Promise<void>) | null = null;
@@ -503,7 +506,7 @@ async function main(): Promise<void> {
     
     if (!parsed.json) {
       logSection('Complete');
-      log('MCP protocol test finished successfully.');
+      log('Done.');
     }
     
   } catch (error) {
