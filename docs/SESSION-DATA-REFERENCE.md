@@ -384,21 +384,28 @@ const teamsBaseUrl = `${url.protocol}//${url.host}`; // "https://teams.microsoft
 
 ### Finding the Right Origin
 
+Sessions may include both `teams.microsoft.com` and `teams.cloud.microsoft`.
+SubstrateSearch tokens (email/search) are often only on the cloud host after
+the New Teams migration — prefer that origin when a SubstrateSearch token is present.
+
 ```typescript
 const TEAMS_ORIGINS = [
+  'https://teams.cloud.microsoft',
   'https://teams.microsoft.com',
   'https://teams.microsoft.us',
   'https://dod.teams.microsoft.us',
-  'https://teams.cloud.microsoft',
 ];
 
 function getTeamsOrigin(state: SessionState) {
+  // Prefer origin with SubstrateSearch token, then TEAMS_ORIGINS order
+  const withSubstrate = state.origins.find(/* has SubstrateSearch MSAL entry */);
+  if (withSubstrate) return withSubstrate;
+
   for (const knownOrigin of TEAMS_ORIGINS) {
     const origin = state.origins.find(o => o.origin === knownOrigin);
     if (origin) return origin;
   }
-  // Fallback: find any origin containing 'teams.microsoft'
-  return state.origins.find(o => 
+  return state.origins.find(o =>
     o.origin.includes('teams.microsoft') || o.origin.includes('teams.cloud')
   ) ?? null;
 }

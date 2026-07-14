@@ -258,27 +258,58 @@ export function clearTokenCache(): void {
  * Used to find the correct origin in session state.
  */
 const TEAMS_ORIGINS = [
-  'https://teams.microsoft.com',   // Commercial
+  'https://teams.cloud.microsoft', // New Teams URL (often holds SubstrateSearch tokens)
+  'https://teams.microsoft.com',   // Commercial legacy
   'https://teams.microsoft.us',    // GCC-High
   'https://dod.teams.microsoft.us', // DoD
-  'https://teams.cloud.microsoft', // New Teams URL
 ];
+
+/**
+ * Returns true if localStorage has a SubstrateSearch MSAL token entry.
+ */
+function hasSubstrateSearchToken(
+  localStorage: SessionState['origins'][number]['localStorage'] | undefined
+): boolean {
+  for (const item of localStorage ?? []) {
+    try {
+      const entry = JSON.parse(item.value) as { target?: string; secret?: string };
+      if (
+        entry.target?.includes('SubstrateSearch') &&
+        typeof entry.secret === 'string' &&
+        entry.secret.startsWith('ey')
+      ) {
+        return true;
+      }
+    } catch {
+      // ignore non-JSON localStorage values
+    }
+  }
+  return false;
+}
 
 /**
  * Gets the Teams origin from session state.
  * Checks multiple known Teams domains to support government clouds.
+ *
+ * Prefers an origin that has a SubstrateSearch token so Outlook/email and
+ * Substrate search keep working when both teams.cloud.microsoft and
+ * teams.microsoft.com are present in the saved session (common after the
+ * New Teams host migration).
  */
 export function getTeamsOrigin(state: SessionState): SessionState['origins'][number] | null {
   if (!state.origins) return null;
-  
+
+  const withSubstrate = state.origins.find(o => hasSubstrateSearchToken(o.localStorage));
+  if (withSubstrate) return withSubstrate;
+
   // Try known Teams origins in priority order
   for (const knownOrigin of TEAMS_ORIGINS) {
     const origin = state.origins.find(o => o.origin === knownOrigin);
     if (origin) return origin;
   }
-  
+
   // Fallback: find any origin containing 'teams.microsoft'
-  return state.origins.find(o => 
+  return state.origins.find(o =>
     o.origin.includes('teams.microsoft') || o.origin.includes('teams.cloud')
   ) ?? null;
 }
