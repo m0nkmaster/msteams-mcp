@@ -322,6 +322,55 @@ export function extractSkypeSpacesToken(state?: SessionState): string | null {
   });
 }
 
+/**
+ * Extracts the Microsoft Graph API token from session state.
+ *
+ * This token is required for file upload operations (SharePoint/OneDrive).
+ * It has scope: https://graph.microsoft.com/Files.ReadWrite.All (or similar).
+ * The Teams web client's MSAL cache includes this token with broad delegated
+ * permissions including Files.ReadWrite.All.
+ */
+export function extractGraphToken(state?: SessionState): string | null {
+  return withLocalStorage(state, (localStorage) => {
+    let bestCandidate: { token: string; expiry: Date } | null = null;
+
+    for (const item of localStorage) {
+      try {
+        const entry = JSON.parse(item.value);
+        if (!entry.target || !isJwtToken(entry.secret)) continue;
+
+        // Look for graph.microsoft.com token
+        if (!entry.target.includes('graph.microsoft.com')) continue;
+
+        const payload = decodeJwtPayload(entry.secret);
+        if (!payload?.exp || typeof payload.exp !== 'number') continue;
+
+        const expiry = new Date(payload.exp * 1000);
+
+        // Skip expired tokens
+        if (expiry.getTime() <= Date.now()) continue;
+
+        // Keep the one with the latest expiry
+        if (!bestCandidate || expiry > bestCandidate.expiry) {
+          bestCandidate = { token: entry.secret, expiry };
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return bestCandidate?.token ?? null;
+  });
+}
+
+/**
+ * Gets a valid Graph token, extracting from session state if needed.
+ * Returns null if no valid token is available.
+ */
+export function getValidGraphToken(): string | null {
+  return extractGraphToken();
+}
+
 /** Region configuration from Teams discovery. */
 export interface RegionConfig {
   /** Base region (e.g., "amer", "emea", "apac") - used by chatsvc, csa APIs. */

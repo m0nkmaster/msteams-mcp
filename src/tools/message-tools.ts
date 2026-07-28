@@ -26,6 +26,7 @@ import {
   waitForReply,
 } from '../api/chatsvc-api.js';
 import { getFavorites, addFavorite, removeFavorite, getCustomEmojis } from '../api/csa-api.js';
+import { uploadFiles } from '../api/sharepoint-api.js';
 import { parseTeamsMessageUrl } from '../utils/parsers.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { SELF_CHAT_ID, MAX_THREAD_LIMIT, DEFAULT_THREAD_LIMIT, MAX_WAIT_SECONDS, STANDARD_EMOJIS } from '../constants.js';
@@ -41,6 +42,9 @@ export const SendMessageInputSchema = z.object({
   contentType: z.enum(['auto', 'text', 'html', 'markdown']).optional(),
   subject: z.string().optional(),
   scheduleAt: z.string().optional(),
+  attachments: z.array(z.object({
+    filePath: z.string().min(1, 'File path cannot be empty'),
+  })).optional().describe('Local file paths to upload and attach to the message'),
 });
 
 export const FavoriteInputSchema = z.object({
@@ -138,7 +142,7 @@ export const WaitForReplyInputSchema = z.object({
 
 const sendMessageToolDefinition: Tool = {
   name: 'teams_send_message',
-  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation.',
+  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation. To attach files, provide attachments with local file paths — files are uploaded to OneDrive and referenced in the message. Cannot combine attachments with scheduleAt.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -166,6 +170,20 @@ const sendMessageToolDefinition: Tool = {
       scheduleAt: {
         type: 'string',
         description: 'Schedule the message for future delivery. ISO 8601 (e.g. "2026-04-11T09:00:00Z"); a timezone-less value is treated as UTC. Cannot be combined with @mentions or replyToMessageId.',
+      },
+      attachments: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            filePath: {
+              type: 'string',
+              description: 'Absolute or relative path to the local file to upload and attach (e.g., "/path/to/document.pdf"). Max 4 MB per file.',
+            },
+          },
+          required: ['filePath'],
+        },
+        description: 'Files to upload and attach to the message. Each file is uploaded to the user\'s OneDrive "Microsoft Teams Chat Files" folder and referenced in the message. Cannot be combined with scheduleAt. Max 4 MB per file. To upload a file without sending a message, use teams_upload_file.',
       },
     },
     required: ['content'],
@@ -555,11 +573,34 @@ async function handleSendMessage(
   input: z.infer<typeof SendMessageInputSchema>,
   _ctx: ToolContext
 ): Promise<ToolResult> {
+  // Upload attachments (if any) before sending the message
+  let filesProperty: string | undefined;
+  if (input.attachments && input.attachments.length > 0) {
+    if (input.scheduleAt) {
+      return {
+        success: false,
+        error: createError(
+          ErrorCode.INVALID_INPUT,
+          'Attachments cannot be combined with scheduleAt (scheduled messages). Remove scheduleAt or attachments.',
+          { retryable: false }
+        ),
+      };
+    }
+
+    const filePaths = input.attachments.map(a => a.filePath);
+    const uploadResult = await uploadFiles(filePaths);
+    if (!uploadResult.ok) {
+      return { success: false, error: uploadResult.error };
+    }
+    filesProperty = uploadResult.value.filesProperty;
+  }
+
   const result = await sendMessage(input.conversationId, input.content, {
     replyToMessageId: input.replyToMessageId,
     contentType: input.contentType,
     subject: input.subject,
     scheduleAt: input.scheduleAt,
+    files: filesProperty,
   });
 
   if (!result.ok) {
@@ -599,6 +640,12 @@ async function handleSendMessage(
     response.note = 'Message posted as a reply to the thread. Use serverMessageId (not messageId) for reactions, edits, or threading.';
   } else if (serverMessageId) {
     response.note = 'Use serverMessageId (not messageId) for reactions, edits, or threading.';
+  }
+
+  // Include attachment info if files were uploaded
+  if (input.attachments && input.attachments.length > 0) {
+    response.attachments = input.attachments.map(a => ({ filePath: a.filePath }));
+    response.note = `Message sent with ${input.attachments.length} file attachment(s). Files are uploaded to OneDrive "Microsoft Teams Chat Files" folder.`;
   }
 
   return { success: true, data: response };
