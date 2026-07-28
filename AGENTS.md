@@ -159,6 +159,7 @@ Different Teams APIs use different authentication mechanisms:
 | **Calendar** (mt/part/calendarView) | Skype Spaces token (`api.spaces.skype.com` scope) + `skypetoken_asm` | `auth/token-extractor` | `extractSkypeSpacesToken()` |
 | **Transcripts** (Substrate WorkingSetFiles) | Same JWT as Search (Substrate scope) + `Prefer` header | `auth/token-extractor` | `getValidSubstrateToken()` |
 | **Files** (Substrate AllFiles) | Same JWT as Search (Substrate scope) + message auth for user MRI | `auth/token-extractor` | `getValidSubstrateToken()` + `extractMessageAuth()` |
+| **File Upload** (Microsoft Graph) | Graph API token (`graph.microsoft.com` scope, Files.ReadWrite.All) | `auth/token-extractor` | `getValidGraphToken()` |
 | **Profiles** (mt/part fetchShortProfile) | Skype Spaces token (`api.spaces.skype.com` scope) + `skypetoken_asm` | `auth/token-extractor` | `requireSkypeSpacesAuthWithConfig()` |
 
 **Important**: The CSA API (for favorites) requires a GET request to retrieve data, POST only for modifications. The Substrate suggestions API requires `cvid` and `logicalId` correlation IDs in the request body.
@@ -187,7 +188,7 @@ Session state and token cache files are protected by:
 | `teams_search` | Search Teams messages with query operators, supports pagination |
 | `teams_search_email` | Search emails in user's mailbox (same Substrate token as Teams search) |
 | `teams_list_chats` | List recent conversations (1:1, group, meeting, channel) with last-message preview - fastest way to discover active chat IDs |
-| `teams_send_message` | Send a message (markdown); person `@[Name](mri)` or channel tag `@[Tag](tag:id)` via `teams_get_tags`; `replyToMessageId` for channel thread replies; `subject` for a new channel thread; `scheduleAt` (ISO 8601) to schedule; `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
+| `teams_send_message` | Send a message (markdown); person `@[Name](mri)` or channel tag `@[Tag](tag:id)` via `teams_get_tags`; `replyToMessageId` for channel thread replies; `subject` for a new channel thread; `scheduleAt` (ISO 8601) to schedule; `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting; `attachments` (array of `{ filePath }`) to upload and attach local files |
 | `teams_wait_for_reply` | Block (server-side poll, capped ~110s) until a new message arrives; idempotent `after`/`nextAfter` cursor; pair with `teams_send_message` |
 | `teams_get_me` | Get current user profile (email, name, ID) |
 | `teams_get_frequent_contacts` | Get frequently contacted people (for name resolution) |
@@ -219,6 +220,7 @@ Session state and token cache files are protected by:
 | `teams_get_meetings` | Get meetings from calendar (upcoming/past by date range) |
 | `teams_get_transcript` | Get meeting transcript (requires threadId from teams_get_meetings) |
 | `teams_get_shared_files` | Get files and links shared in a conversation |
+| `teams_upload_file` | Upload a local file to OneDrive "Microsoft Teams Chat Files" folder; returns metadata + `filesProperty` for use with `teams_send_message` attachments |
 
 ### Design Philosophy
 

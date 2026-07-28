@@ -123,6 +123,14 @@ export interface SendMessageOptions {
    * combined with mentions or a thread reply.
    */
   scheduleAt?: string;
+  /**
+   * JSON-encoded `files` array string for file attachments.
+   *
+   * When provided, the message includes file attachment metadata in its
+   * `properties.files` field. Use `uploadFile()` or `uploadFiles()` from
+   * `sharepoint-api.ts` to upload files and generate this string.
+   */
+  files?: string;
 }
 
 /** Result of getting a 1:1 conversation. */
@@ -183,7 +191,7 @@ export async function sendMessage(
   }
   const { auth, region, baseUrl } = authResult.value;
 
-  const { replyToMessageId, contentType = 'markdown', subject, scheduleAt } = options;
+  const { replyToMessageId, contentType = 'markdown', subject, scheduleAt, files } = options;
   const displayName = getUserDisplayName() || 'User';
 
   const clientMessageId = generateClientMessageId();
@@ -244,6 +252,9 @@ export async function sendMessage(
   }
   if (subject && subject.trim()) {
     properties.subject = subject.trim();
+  }
+  if (files) {
+    properties.files = files;
   }
   if (Object.keys(properties).length > 0) {
     body.properties = properties;

@@ -7,6 +7,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { getSharedFiles } from '../api/files-api.js';
+import { uploadFile } from '../api/sharepoint-api.js';
 import {
   DEFAULT_FILES_PAGE_SIZE,
   MAX_FILES_PAGE_SIZE,
@@ -20,6 +21,10 @@ export const GetSharedFilesInputSchema = z.object({
   conversationId: z.string().min(1),
   pageSize: z.number().min(1).max(MAX_FILES_PAGE_SIZE).optional().default(DEFAULT_FILES_PAGE_SIZE),
   skipToken: z.string().optional(),
+});
+
+export const UploadFileInputSchema = z.object({
+  filePath: z.string().min(1, 'File path cannot be empty'),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,6 +54,21 @@ const getSharedFilesToolDefinition: Tool = {
   },
 };
 
+const uploadFileToolDefinition: Tool = {
+  name: 'teams_upload_file',
+  description: 'Upload a local file to the user\'s OneDrive "Microsoft Teams Chat Files" folder via the Microsoft Graph API. Returns the uploaded file\'s metadata including itemId, fileName, SharePoint URLs, and a filesProperty string. The filesProperty can be passed to teams_send_message as the attachments parameter to send the file as an attachment in a chat message. Maximum file size is 4 MB. The file path refers to the local filesystem of the machine running the MCP server.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      filePath: {
+        type: 'string',
+        description: 'Absolute or relative path to the local file to upload (e.g., "/path/to/document.pdf").',
+      },
+    },
+    required: ['filePath'],
+  },
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +90,32 @@ async function handleGetSharedFiles(
   }));
 }
 
+async function handleUploadFile(
+  input: z.infer<typeof UploadFileInputSchema>,
+  _ctx: ToolContext
+): Promise<ToolResult> {
+  const result = await uploadFile(input.filePath);
+
+  if (!result.ok) {
+    return { success: false, error: result.error };
+  }
+
+  return {
+    success: true,
+    data: {
+      itemId: result.value.itemId,
+      fileName: result.value.fileName,
+      fileType: result.value.fileType,
+      fileSize: result.value.fileSize,
+      baseUrl: result.value.baseUrl,
+      objectUrl: result.value.objectUrl,
+      listItemUniqueId: result.value.listItemUniqueId,
+      filesProperty: result.value.filesProperty,
+      note: 'File uploaded to OneDrive. Pass the filesProperty to teams_send_message attachments to share it in a chat, or use teams_send_message with attachments parameter directly.',
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Exports
 // ─────────────────────────────────────────────────────────────────────────────
@@ -80,5 +126,11 @@ export const getSharedFilesTool: RegisteredTool<typeof GetSharedFilesInputSchema
   handler: handleGetSharedFiles,
 };
 
+export const uploadFileTool: RegisteredTool<typeof UploadFileInputSchema> = {
+  definition: uploadFileToolDefinition,
+  schema: UploadFileInputSchema,
+  handler: handleUploadFile,
+};
+
 /** All file-related tools. */
-export const fileTools = [getSharedFilesTool];
+export const fileTools = [getSharedFilesTool, uploadFileTool];

@@ -158,6 +158,7 @@ See [CLI Usage](#cli-usage) for commands.
 | Tool | Description |
 |------|-------------|
 | `teams_get_shared_files` | Get files and links shared in a conversation (supports pagination) |
+| `teams_upload_file` | Upload a local file to OneDrive and attach to messages |
 
 Returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
 
