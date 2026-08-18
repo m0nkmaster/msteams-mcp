@@ -1,12 +1,16 @@
 # Microsoft Teams MCP Server & CLI
 
-[![CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
-[![npm downloads](https://img.shields.io/npm/dm/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
+[CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
+[npm version](https://www.npmjs.com/package/msteams-mcp)
+[npm downloads](https://www.npmjs.com/package/msteams-mcp)
+[License: MIT](https://opensource.org/licenses/MIT)
+[Node.js](https://nodejs.org/)
 
-Give AI access to Microsoft Teams with your standard Teams login - no Azure setup, app registration, Graph permissions or IT support required.
+Give AI access to Microsoft Teams with your standard Teams login.
+
+> [!IMPORTANT]
+>
+> ## No Azure setup, app registration, Graph permissions or IT support required.
 
 Search messages and email, catch up on unread chats, read threads, send replies, retrieve meeting transcripts and more.
 
@@ -84,7 +88,7 @@ Then configure your MCP client:
 
 The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authentication.
 
-### CLI (alternative to the MCP server)
+### CLI
 
 The same functionality is also available as a standalone command-line tool, `msteams`. This is useful when you want Teams from a shell or script instead of an MCP client.
 
@@ -94,7 +98,7 @@ Install it globally from npm:
 npm install -g msteams-mcp
 ```
 
-This installs two binaries: `msteams-mcp` (the MCP server) and `msteams` (the CLI). Or run it without installing:
+This installs two binaries: `msteams-mcp` (the MCP server) and `msteams` (the CLI wrapper). Or run it without installing:
 
 ```bash
 npx -y msteams-mcp msteams status
@@ -309,8 +313,7 @@ npm run cli -- send "Hi" --to "conversation-id"
 - **Login required** - Run `teams_login` to authenticate (opens browser)
 - **Token expiry** - Tokens expire after ~1 hour; headless refresh is attempted or run `teams_login` again when needed
 - **Undocumented APIs** - Uses Microsoft's internal APIs which may change without notice
-- **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (use `teams_get_thread` for full context)
-- **Own messages only** - Edit/delete only works on your own messages
+- **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (but LLM will likely use `teams_get_thread` for full context)
 
 
 
@@ -363,8 +366,3 @@ See [AGENTS.md](AGENTS.md) for detailed architecture and contribution guidelines
 
 ---
 
-
-
-## Teams Chat Export Bookmarklet
-
-This repo also includes a standalone bookmarklet for exporting Teams chat messages to Markdown. See [teams-bookmarklet/README.md](teams-bookmarklet/README.md).
