@@ -1,10 +1,10 @@
 # Microsoft Teams MCP Server & CLI
 
-[CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
-[npm version](https://www.npmjs.com/package/msteams-mcp)
-[npm downloads](https://www.npmjs.com/package/msteams-mcp)
-[License: MIT](https://opensource.org/licenses/MIT)
-[Node.js](https://nodejs.org/)
+[![CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
 
 Give AI access to Microsoft Teams with your standard Teams login - no Azure setup, app registration, Graph permissions or IT support required.
 
