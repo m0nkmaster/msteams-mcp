@@ -1,19 +1,17 @@
 # Agent Guidelines for Teams MCP
 
-This document captures project knowledge to help AI agents work effectively with this codebase.
+Non-obvious project knowledge for AI agents. This is not a tool reference: tool parameters and usage live in the tool definitions (`src/tools/*.ts`), which are the source of truth and are sent to AI assistants via MCP.
 
 ## Repository
 
 - **Repository**: https://github.com/m0nkmaster/msteams-mcp
-- **Install**: `npx -y msteams-mcp@latest` or clone the repo, `npm install && npm run build`, then point your MCP client to `dist/index.js`
+- **Install**: `npx -y msteams-mcp@latest`, or clone, `npm install && npm run build`, then point your MCP client at `dist/index.js`
 
 ## Project Overview
 
-This is an MCP (Model Context Protocol) server that enables AI assistants to interact with Microsoft Teams. Rather than using the complex Microsoft Graph API, it uses Teams APIs (Substrate, chatsvc, CSA) with authentication tokens extracted from a browser session. The browser is only used for initial login - all operations use direct API calls.
+An MCP (Model Context Protocol) server that lets AI assistants interact with Microsoft Teams. Instead of the Microsoft Graph API, it calls Teams' own APIs (Substrate, chatsvc, CSA) using tokens extracted from a browser session. The browser is only used for initial login; all operations are direct API calls.
 
-## Architecture
-
-### Directory Structure
+## Directory Structure
 
 ```
 src/
@@ -71,391 +69,184 @@ src/
 │   └── api-responses.ts  # Mock API responses for testing
 ```
 
-### Implementation Patterns
+## Implementation Patterns
 
-1. **Credential Encryption**: Session state and token cache are encrypted at rest using AES-256-GCM with a machine-specific key derived from hostname and username. Files have restrictive permissions (0o600).
+- **Result types**: API functions return `Result<T, McpError>` for explicit success/failure handling.
+- **Error taxonomy**: Errors use machine-readable codes (`ErrorCode` enum), `retryable` flags, and `suggestions` arrays so LLMs can understand failures and recover.
+- **HTTP utilities**: A centralised client (`utils/http.ts`) provides retry with exponential backoff, timeouts, and rate-limit tracking. Use `httpRequest()` for all new API calls.
+- **Server class**: `TeamsServer` encapsulates all state (browser manager, init flag), allowing multiple instances and simpler testing.
+- **Tool registry**: Tools are grouped by category (`search-tools.ts`, `message-tools.ts`, etc.) and wired through `tools/registry.ts`.
+- **Auth guards**: `utils/auth-guards.ts` provides reusable, `Result`-returning auth checks plus cached `getTenantId()`, `getRegion()`, and `getTeamsBaseUrl()` helpers.
+- **Shared constants**: Magic numbers (page sizes, timeouts, thresholds) live in `constants.ts`.
+- **MCP resources**: Passive resources (`teams://me/profile`, `teams://me/favorites`, `teams://status`) provide context discovery without tool calls.
+- **Markdown to Teams HTML**: `markdownToTeamsHtml()` in `utils/parsers.ts` converts markdown (bold, italic, code, code blocks, strikethrough, lists, newlines) to the `RichText/Html` Teams expects. Used by `sendMessage()` and `editMessage()`. When messages contain @mentions or links, `parseContentWithMentionsAndLinks()` applies the same conversion to text between inline elements.
+- **Auto-login on auth failure**: The `CallToolRequestSchema` handler in `server.ts` retries tool calls that fail with `AUTH_REQUIRED`/`AUTH_EXPIRED`, first attempting headless re-auth (token refresh, then full headless login). Auth tools (`teams_login`, `teams_status`) are excluded to avoid loops. Concurrent failures are deduplicated via a Promise-based mutex so only one auto-login runs at a time.
 
-2. **Server Class Pattern**: `TeamsServer` class encapsulates all state (browser manager, initialisation flag), allowing multiple server instances and simpler testing.
+### Dynamic Configuration from Session
 
-3. **Error Taxonomy**: Errors use machine-readable codes (`ErrorCode` enum), `retryable` flags, and `suggestions` arrays to help LLMs understand failures and recover appropriately.
+All tenant-specific config is extracted from the user's session localStorage, so the server works across Teams environments (commercial, GCC, GCC-High, DoD):
 
-4. **Result Types**: API functions return `Result<T, McpError>` for type-safe error handling with explicit success/failure discrimination.
+- **Region & partition**: From `DISCOVER-REGION-GTM` (e.g. region `amer`, partition `02`), via cached `getRegion()`.
+- **Teams base URL**: From the `chatServiceAfd` URL in `DISCOVER-REGION-GTM` (e.g. `https://teams.microsoft.com`, or `https://teams.microsoft.us` for government clouds), via cached `getTeamsBaseUrl()`.
+- **User details**: From `DISCOVER-USER-DETAILS`, including user MRI, licence info, and user/tenant partitions.
+- **Service URLs**: Full chatsvc, CSA, and mt/part URLs are in the config and passed to endpoint builders.
 
-5. **HTTP Utilities**: Centralised HTTP client (`utils/http.ts`) provides automatic retry with exponential backoff, request timeouts, and rate limit tracking.
+**Note**: The Substrate search URL (`substrate.office.com`) is hardcoded, as no config source has been found for it. This may need to become configurable if GCC users report issues.
 
-6. **Dynamic Configuration from Session**: All tenant-specific configuration is extracted from the user's session localStorage, ensuring compatibility across different Teams environments (commercial, GCC, GCC-High, DoD):
+## Authentication
 
-   - **Region & Partition**: Extracted from `DISCOVER-REGION-GTM` (e.g., region `amer`, partition `02`). The `getRegion()` and `getTeamsBaseUrl()` helpers in `auth-guards.ts` provide cached access.
-   - **Teams Base URL**: Extracted from the `chatServiceAfd` URL in `DISCOVER-REGION-GTM` (e.g., `https://teams.microsoft.com` or `https://teams.microsoft.us` for government clouds). API endpoints use this dynamically.
-   - **User Details**: Extracted from `DISCOVER-USER-DETAILS` including user MRI, license info (Copilot, transcription, etc.), and user/tenant partitions.
-   - **Service URLs**: Full URLs for chatsvc, CSA, and mt/part APIs are available in the config and passed to API endpoint builders.
+### Login flow
 
-   **Note**: The Substrate search URL (`substrate.office.com`) is currently hardcoded as we haven't found a config source for it. If GCC users report issues, this may need to be configurable.
+All operations use direct API calls. A persistent browser profile (`~/.teams-mcp-server/browser-profile/`) stores Microsoft session cookies and MSAL tokens, enabling silent re-authentication.
 
-7. **MCP Resources**: Passive resources (`teams://me/profile`, `teams://me/favorites`, `teams://status`) provide context discovery without tool calls.
+1. **First login**: Visible browser opens, user authenticates, session state is saved, browser closes.
+2. **Token expiry**: Headless browser (persistent profile) refreshes tokens via silent SSO, no interaction.
+3. **Session fully expired**: Falls back to a visible browser for manual re-login (with extensions and saved form data available).
+4. **All API operations**: Use cached tokens, no browser.
 
-8. **Tool Registry Pattern**: Tools are organised into logical groups (`search-tools.ts`, `message-tools.ts`, etc.) with a central registry (`tools/registry.ts`). This enables:
-   - Better separation of concerns
-   - Easier testing of individual tools
-   - Simpler addition of new tools
+`teams_login` always tries headless SSO before showing a visible browser. Long-lived Microsoft session cookies (days/weeks) mean users rarely re-authenticate manually, even though MSAL tokens expire after ~1 hour.
 
-9. **Auth Guards**: Reusable authentication check utilities in `utils/auth-guards.ts` return `Result` types for consistent error handling across API modules. Also provides `getTenantId()` (cached) for deep link construction.
+The server uses the system browser via Playwright's `launchPersistentContext()` (Edge on Windows, Chrome on macOS/Linux; ~180MB saved vs bundled Chromium). Only one process can use the profile at a time (Chromium lock); the token-refresh module uses a module-level flag to prevent concurrent access. If no system browser is found, the error suggests installing Chrome or running `npx playwright install chromium`.
 
-10. **Shared Constants**: Magic numbers are centralised in `constants.ts` for maintainability (page sizes, timeouts, thresholds).
+### Token refresh
 
-11. **Markdown to Teams HTML**: Outgoing messages support markdown formatting via `markdownToTeamsHtml()` in `utils/parsers.ts`. This converts markdown (`**bold**`, `*italic*`, `` `code` ``, ` ```code blocks``` `, `~~strikethrough~~`, lists, newlines) to the HTML that Teams expects for `RichText/Html` messages. The converter is used by `sendMessage()` and `editMessage()` in `chatsvc-api.ts`. When messages contain @mentions or links, `parseContentWithMentionsAndLinks()` applies the same conversion to text segments between inline elements.
+Refresh uses an HTTP-first strategy in `token-refresh-http.ts`:
 
-12. **Auto-Login on Auth Failure**: The `CallToolRequestSchema` handler in `server.ts` automatically retries tool calls that fail with `AUTH_REQUIRED` or `AUTH_EXPIRED` errors. Before returning the error to the LLM, it attempts headless re-authentication (token refresh → full headless login). If auto-login succeeds, the original tool call is retried transparently. If it fails, a strongly-worded error directs the LLM to call `teams_login` explicitly. Auth tools (`teams_login`, `teams_status`) are excluded from auto-retry to avoid loops. Concurrent auth failures are deduplicated via a Promise-based mutex — only one auto-login runs at a time, and parallel callers await the same result.
+1. **HTTP (~1s)**: Extract the MSAL refresh token from session state and POST to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, chatsvcagg). Exchange the Skype Spaces token for the `skypetoken_asm` cookie via `authsvc.teams.microsoft.com/v1.0/authz`. Write updated tokens back to session state in MSAL cache format so `token-extractor.ts` finds them. The `Origin: https://teams.microsoft.com` header is required (the Teams client ID is a SPA; without it Azure AD returns AADSTS9002327).
+2. **Browser fallback (~8s)**: If HTTP fails (e.g. refresh token expired, Conditional Access), a headless browser uses the persistent profile's session cookies for silent SSO.
 
-13. **Browserless Token Refresh**: Token refresh uses an HTTP-first strategy (`token-refresh-http.ts`). The MSAL refresh token is extracted from session state localStorage and exchanged for new access tokens via Azure AD's OAuth2 token endpoint — no browser needed (~1s vs ~8s). The `skypetoken_asm` cookie is obtained by exchanging the Skype Spaces access token via `authsvc.teams.microsoft.com/v1.0/authz`. Updated tokens are written back to session state in MSAL cache format so `token-extractor.ts` can find them. The `Origin: https://teams.microsoft.com` header is required because the Teams client ID is registered as a SPA (Azure AD error AADSTS9002327 without it). Falls back to headless browser refresh if HTTP fails (e.g., refresh token expired, Conditional Access). First login always requires a browser — no refresh token exists yet. Works identically for standard MS login and corporate SSO (ADFS/Okta federation).
+Both are seamless (no window, no interaction). If both fail, the user must re-authenticate via `teams_login`. First login always needs a browser (no refresh token yet). Works identically for standard MS login and corporate SSO (ADFS/Okta federation). Test with `npm run cli -- login`.
 
-## How It Works
+### Auth per API
 
-### Authentication Flow
+Different Teams APIs use different auth mechanisms:
 
-All operations use direct API calls to Teams APIs. A persistent browser profile (`~/.teams-mcp-server/browser-profile/`) stores Microsoft session cookies and MSAL tokens, enabling silent re-authentication without user interaction.
+| API | Auth Method | Helper Function |
+|-----|-------------|-----------------|
+| **Search / Email / People** (Substrate) | JWT Bearer from MSAL (People also needs `cvid`/`logicalId`) | `getValidSubstrateToken()` |
+| **Messaging / Threads** (chatsvc) | `skypetoken_asm` cookie | `extractMessageAuth()` |
+| **Favorites** (csa/conversationFolders) | CSA token from MSAL + `skypetoken_asm` | `extractCsaToken()` + `extractMessageAuth()` |
+| **Calendar** (mt/part/calendarView) | Skype Spaces token + `skypetoken_asm` | `extractSkypeSpacesToken()` |
+| **Transcripts** (Substrate WorkingSetFiles) | Substrate JWT + `Prefer` header | `getValidSubstrateToken()` |
+| **Files** (Substrate AllFiles) | Substrate JWT + message auth for user MRI | `getValidSubstrateToken()` + `extractMessageAuth()` |
+| **Profiles** (mt/part fetchShortProfile) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuthWithConfig()` |
 
-1. **First login**: Opens visible browser → user authenticates → session state saved → browser closed
-2. **Token expiry**: Headless browser opens with persistent profile → Microsoft session cookies enable silent SSO → tokens refreshed → no user interaction needed
-3. **Session fully expired**: Falls back to visible browser for manual re-login (with extensions like Bitwarden and saved form data available)
-4. **All API operations**: Use cached tokens for direct API calls (no browser)
+All helpers live in `auth/token-extractor`. Notes:
+- The CSA API (favorites) needs GET to read; POST is only for modifications.
+- The Substrate suggestions API requires `cvid` and `logicalId` correlation IDs in the body.
+- Regional APIs (chatsvc, csa, mt/part) resolve their region via `getRegion()`; partitioned endpoints (mt/part Calendar) also use the partition suffix from `DISCOVER-REGION-GTM`.
 
-The **headless-first strategy** means `teams_login` always tries headless SSO before showing a visible browser. The persistent profile's long-lived Microsoft session cookies (lasting days/weeks) mean users rarely need to manually re-authenticate, even though MSAL tokens expire after ~1 hour.
+### Session persistence and encryption
 
-The server uses the system's installed browser via Playwright's `launchPersistentContext()` (~180MB savings vs bundled Chromium):
+Two layers work together:
 
-- **Windows**: Uses Microsoft Edge (always pre-installed on Windows 10+)
-- **macOS/Linux**: Uses Google Chrome
+1. **Persistent browser profile** (`browser-profile/`): retains Microsoft session cookies, extensions, and autofill across launches; enables silent headless re-auth.
+2. **Encrypted session state** (`session-state.json`): Playwright `storageState()` output from which tokens are extracted for browserless API calls.
 
-The persistent profile is shared between headless and visible modes. Only one process can use it at a time (Chromium profile lock). The token-refresh module uses a module-level flag to prevent concurrent access.
-
-If the system browser isn't available, a helpful error message suggests installing Chrome or running `npx playwright install chromium` as a fallback.
-
-### Token Management
-
-- Tokens are extracted from browser localStorage after login
-- The Substrate search token (`SubstrateSearch-Internal.ReadWrite` scope) is required for search
-- Tokens typically expire after ~1 hour
-- **Proactive token refresh** uses an HTTP-first strategy:
-  1. **HTTP refresh (~1s)**: Extracts the MSAL refresh token from session state and POSTs to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, chatsvcagg). Then exchanges the Skype Spaces token for `skypetoken_asm` via `authsvc.teams.microsoft.com`. Updated tokens are written back to session state.
-  2. **Browser fallback (~8s)**: If HTTP refresh fails (e.g., refresh token expired), opens a headless browser with the persistent profile. Microsoft's session cookies enable silent SSO.
-- This is seamless to the user — no browser window shown, no interaction needed
-- If both methods fail (e.g., Microsoft session fully expired), user must re-authenticate via `teams_login`
-
-**Testing token refresh:** Use `npm run cli -- login` which will attempt headless SSO first, only showing a browser if user interaction is actually required.
-
-### API Authentication
-
-Different Teams APIs use different authentication mechanisms:
-
-| API | Auth Method | Module | Helper Function |
-|-----|-------------|--------|-----------------|
-| **Search** (Substrate v2/query) | JWT Bearer token from MSAL | `auth/token-extractor` | `getValidSubstrateToken()` |
-| **Email Search** (Substrate v2/query) | Same JWT as Search (contentSources: Exchange) | `auth/token-extractor` | `getValidSubstrateToken()` |
-| **People/Suggestions** (Substrate v1/suggestions) | Same JWT + `cvid`/`logicalId` fields | `auth/token-extractor` | `getValidSubstrateToken()` |
-| **Messaging** (chatsvc) | `skypetoken_asm` cookie | `auth/token-extractor` | `extractMessageAuth()` |
-| **Favorites** (csa/conversationFolders) | CSA token from MSAL + `skypetoken_asm` | `auth/token-extractor` | `extractCsaToken()` + `extractMessageAuth()` |
-| **Threads** (chatsvc) | `skypetoken_asm` cookie | `auth/token-extractor` | `extractMessageAuth()` |
-| **Calendar** (mt/part/calendarView) | Skype Spaces token (`api.spaces.skype.com` scope) + `skypetoken_asm` | `auth/token-extractor` | `extractSkypeSpacesToken()` |
-| **Transcripts** (Substrate WorkingSetFiles) | Same JWT as Search (Substrate scope) + `Prefer` header | `auth/token-extractor` | `getValidSubstrateToken()` |
-| **Files** (Substrate AllFiles) | Same JWT as Search (Substrate scope) + message auth for user MRI | `auth/token-extractor` | `getValidSubstrateToken()` + `extractMessageAuth()` |
-| **Profiles** (mt/part fetchShortProfile) | Skype Spaces token (`api.spaces.skype.com` scope) + `skypetoken_asm` | `auth/token-extractor` | `requireSkypeSpacesAuthWithConfig()` |
-
-**Important**: The CSA API (for favorites) requires a GET request to retrieve data, POST only for modifications. The Substrate suggestions API requires `cvid` and `logicalId` correlation IDs in the request body.
-
-**Region Discovery**: All regional APIs (chatsvc, csa, mt/part) use the region from the user's session via `getRegion()` in `auth-guards.ts`. This extracts the region from `DISCOVER-REGION-GTM` in localStorage (e.g., `amer`, `emea`, `apac`). For partitioned endpoints like mt/part (Calendar), the partition suffix (e.g., `02`) is also extracted from the same config.
-
-### Session Persistence
-
-Two layers of session persistence work together:
-
-1. **Persistent browser profile** (`~/.teams-mcp-server/browser-profile/`): A dedicated Chrome/Edge profile that retains Microsoft session cookies, extensions (e.g. Bitwarden), and form autofill data across launches. This is what enables silent headless re-authentication.
-
-2. **Encrypted session state** (`session-state.json`): Playwright's `storageState()` extracts cookies and localStorage from the browser context. Tokens are then extracted from this for direct API use without a browser.
-
-Session state and token cache files are protected by:
-1. **Encryption at rest**: AES-256-GCM encryption using a key derived from machine-specific values (hostname + username)
-2. **File permissions**: Restrictive 0o600 permissions (owner read/write only)
-3. **Automatic migration**: Existing plaintext files are automatically encrypted on first read
+Session state and token cache files are encrypted at rest with AES-256-GCM using a key derived from machine-specific values (hostname + username), stored with 0o600 permissions. Existing plaintext files are migrated to encrypted form on first read.
 
 ## MCP Tools
 
-### Overview
+Tool definitions in `src/tools/*.ts` are the source of truth. Their `description` fields are sent to AI assistants via MCP, so keep them comprehensive: what the tool does, key parameters, common gotchas, and related tools. Do not maintain a duplicate tool list here.
 
-| Tool | Purpose |
-|------|---------|
-| `teams_search` | Search Teams messages with query operators, supports pagination |
-| `teams_search_email` | Search emails in user's mailbox (same Substrate token as Teams search) |
-| `teams_list_chats` | List recent conversations (1:1, group, meeting, channel) with last-message preview - fastest way to discover active chat IDs |
-| `teams_send_message` | Send a message (markdown); person `@[Name](mri)` or channel tag `@[Tag](tag:id)` via `teams_get_tags`; `replyToMessageId` for channel thread replies; `subject` for a new channel thread; `scheduleAt` (ISO 8601) to schedule; `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
-| `teams_wait_for_reply` | Block (server-side poll, capped ~110s) until a new message arrives; idempotent `after`/`nextAfter` cursor; pair with `teams_send_message` |
-| `teams_get_me` | Get current user profile (email, name, ID) |
-| `teams_get_frequent_contacts` | Get frequently contacted people (for name resolution) |
-| `teams_search_people` | Search for people by name or email |
-| `teams_get_person` | Resolve one or more MRIs to full profiles (name, email, job title, department) via batch `fetchShortProfile` |
-| `teams_login` | Trigger manual login (visible browser) |
-| `teams_status` | Check auth status (search, messaging, favorites tokens) and server version |
-| `teams_get_favorites` | Get pinned/favourite conversations |
-| `teams_add_favorite` | Pin a conversation to favourites |
-| `teams_remove_favorite` | Unpin a conversation from favourites |
-| `teams_save_message` | Bookmark a message |
-| `teams_unsave_message` | Remove bookmark from a message |
-| `teams_get_saved_messages` | Get list of saved/bookmarked messages with source references |
-| `teams_get_followed_threads` | Get list of followed threads with source references |
-| `teams_get_message` | Get a single message by ID with full content (any age); includes reactions and reaction summary |
-| `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread's replies; optional `since` (ISO 8601) for messages after a time; `fromUrl` to paste a Teams message deep link instead of a conversation ID |
-| `teams_find_channel` | Find channels by name (your teams + org-wide), shows membership |
-| `teams_get_tags` | List channel tags for a team (`teamId` from `teams_find_channel`) for tag @mentions |
-| `teams_get_chat` | Get conversation ID for 1:1 chat with a person |
-| `teams_create_group_chat` | Create a new group chat with multiple people |
-| `teams_edit_message` | Edit one of your own messages (same markdown and @mentions as send) |
-| `teams_delete_message` | Delete one of your own messages (soft delete) |
-| `teams_get_unread` | Without `conversationId`: bulk unread across recent conversations (up to 200); with `conversationId`: unread count for that chat/channel |
-| `teams_mark_read` | Mark a conversation as read up to a specific message |
-| `teams_get_activity` | Activity feed (mentions, reactions, replies, notifications); pass `syncState` from a prior response for newer items only |
-| `teams_search_emoji` | Search for emojis by name (standard + custom org emojis) |
-| `teams_add_reaction` | Add an emoji reaction to a message |
-| `teams_remove_reaction` | Remove an emoji reaction from a message |
-| `teams_get_meetings` | Get meetings from calendar (upcoming/past by date range) |
-| `teams_get_transcript` | Get meeting transcript (requires threadId from teams_get_meetings) |
-| `teams_get_shared_files` | Get files and links shared in a conversation |
-
-### Design Philosophy
-
-The toolset follows a **minimal tool philosophy**: fewer, more powerful tools that AI can compose together. Rather than convenience wrappers for common patterns, the AI builds queries using search operators.
-
-### Tool Documentation
-
-**Source of truth**: Tool parameters, descriptions, and usage guidance are defined in the tool definitions themselves (`src/tools/*.ts`). These descriptions are sent to AI assistants via MCP and should be comprehensive.
-
-When adding or modifying tools, ensure the `description` field in the tool definition includes:
-- What the tool does
-- Key parameters and their meaning
-- Common pitfalls or gotchas
-- Related tools to use together
+**Design philosophy**: a minimal toolset - fewer, more powerful, composable tools rather than convenience wrappers. The AI builds queries using search operators.
 
 For manual testing of all tools, see `docs/MANUAL-TEST-SCRIPT.md`.
 
-## Roadmap Management
-
-When a roadmap item is completed, **remove it entirely** from `ROADMAP.md`. Do not cross it out or mark it as done — just delete the row.
-
 ## Development
-
-### Commands
 
 ```bash
 npm run dev           # Run MCP server in development mode
 npm run build         # Compile TypeScript
-npm run lint          # Run ESLint (also lint:fix to auto-fix)
+npm run lint          # Run ESLint (lint:fix to auto-fix)
 npm start             # Run compiled MCP server
+npm test              # Run unit tests
+npm run test:watch    # Unit tests in watch mode
+npm run test:coverage # Coverage report
+npm run typecheck     # Type checking only
 ```
 
-### Testing
+CI (GitHub Actions) runs lint, typecheck, tests, and build on every push and PR, plus a debounced doc-accuracy review on main commits. See `.github/workflows/`.
 
-#### CLI (msteams)
+### CLI as test harness
 
-`src/cli.ts` is a first-class, installable CLI (`msteams` bin) with **full tool parity** to the MCP server. It runs the same server in-process over an in-memory MCP transport, so every call goes through the real MCP protocol layer - which also makes it the test harness for that layer. Use `npm run cli` from a repo clone (runs via `tsx`, no build needed) or the installed `msteams` binary.
+`src/cli.ts` is a first-class, installable CLI (`msteams` bin) with full tool parity to the MCP server. It runs the server in-process over the SDK's `InMemoryTransport`, so every call exercises the real MCP protocol layer (tool definitions, input validation, response formatting). This makes it both the integration-test harness and the way to test against live Teams APIs. Use `npm run cli` from a clone (via `tsx`, no build needed) or the installed binary.
 
-The CLI can call **any tool** generically. Unrecognised commands are treated as tool names (with `teams_` prefix added if missing). Use `--key value` for parameters.
+The CLI can call any tool generically; unrecognised commands are treated as tool names (auto-prefixed with `teams_`). Pass parameters as `--key value`.
 
 ```bash
-# List available MCP tools and shortcuts
-npm run cli
-
-# Generic tool call (any tool works - auto-prefixes teams_ if missing)
-npm run cli -- teams_find_channel --query "support"
-npm run cli -- find_channel --query "support"
-
-# Common shortcuts
-npm run cli -- search "your query"              # teams_search
-npm run cli -- status                           # teams_status
-npm run cli -- login                            # teams_login (tries headless SSO first)
+npm run cli                                     # List tools and shortcuts
+npm run cli -- find_channel --query "support"   # Generic tool call
+npm run cli -- search "your query"              # Shortcut for teams_search
+npm run cli -- login                            # Headless SSO first
 npm run cli -- login --force true               # Clear session and re-login
-npm run cli -- send "Hello!" --to "conv-id"     # teams_send_message
-npm run cli -- thread --to "conv-id"            # teams_get_thread
-npm run cli -- activity                         # teams_get_activity
-
-# Output raw MCP response as JSON
-npm run cli -- search "your query" --json
-
-# Pagination: get page 2 (results 25-49)
-npm run cli -- search "your query" --from 25 --size 25
+npm run cli -- search "your query" --json       # Raw MCP JSON response
+npm run cli -- search "your query" --from 25 --size 25  # Pagination
 ```
 
-#### Unit Tests
+### Unit tests
 
-The project uses Vitest for unit testing pure functions. Tests focus on outcomes, not implementations.
+Vitest, focused on pure functions and outcomes over implementation. Fixtures (`src/__fixtures__/api-responses.ts`) mirror real API shapes. Tested functions live in `src/utils/parsers.ts` and cover HTML stripping/entity decoding, deep-link generation, timestamp extraction, search/people/email result parsing, JWT profile extraction, token-status calculation, base64 GUID decoding, and user-ID extraction across formats.
 
-```bash
-npm test              # Run all tests once
-npm run test:watch    # Run tests in watch mode
-npm run test:coverage # Run tests with coverage report
-npm run typecheck     # TypeScript type checking only
-```
+### Extending
 
-**Test Structure:**
-- **`src/utils/parsers.ts`**: Pure parsing functions extracted for testability
-- **`src/utils/parsers.test.ts`**: Unit tests for all parsing functions
-- **`src/__fixtures__/api-responses.ts`**: Mock API response data based on real API structures
+**New tool**: pick the appropriate `src/tools/*.ts` file (or add a category), define a Zod input schema and the MCP tool definition, implement the handler returning `ToolResult`, export it into the module's `*Tools` array, and register a new category in `tools/registry.ts`. Back it with `Result<T, McpError>` API functions.
 
-**What's Tested:**
-- HTML stripping and entity decoding (`stripHtml`)
-- Teams deep link generation (`buildMessageLink`)
-- Message timestamp extraction (`extractMessageTimestamp`)
-- Person suggestion parsing (`parsePersonSuggestion`)
-- Search result parsing (`parseV2Result`, `parseSearchResults`)
-- JWT profile extraction (`parseJwtProfile`)
-- Token expiry calculations (`calculateTokenStatus`)
-- People results parsing (`parsePeopleResults`)
-- Email result parsing (`parseEmailResult`, `parseEmailSearchResults`)
-- Base64 GUID decoding (`decodeBase64Guid`)
-- User ID extraction from various formats (`extractObjectId`)
+**New API endpoint**: add the URL to `utils/api-config.ts`, add a function in the relevant `src/api/*.ts` using `httpRequest()`, and return `Result<T, McpError>`.
 
-#### Integration Testing
+### Roadmap
 
-For testing against the live Teams APIs:
-- Use `npm run cli -- search "query"` to test via the full MCP protocol layer
-
-The CLI itself (`src/cli.ts`, run via `npm run cli` or the `msteams` bin) doubles as the MCP protocol test harness: it uses the SDK's `InMemoryTransport` to connect a client to the server in-process, so exercising a tool through the CLI verifies that tool definitions, input validation, and response formatting all work correctly through the protocol layer.
-
-#### CI/CD
-
-GitHub Actions runs on every push and PR:
-- Linting (`npm run lint`)
-- Type checking (`npm run typecheck`)
-- Unit tests (`npm test`)
-- Build (`npm run build`)
-- Documentation review (on main commits, debounced to 2 hours) - checks README/AGENTS.md accuracy against code
-
-See `.github/workflows/ci.yml` and `.github/workflows/doc-reviewer.yml` for workflow configurations.
-
-### Extending the MCP
-
-#### Adding New Tools
-
-1. Choose the appropriate tool file in `src/tools/` (or create a new one for a new category)
-2. Define the input schema with Zod
-3. Define the tool definition (MCP Tool interface)
-4. Implement the handler function returning `ToolResult`
-5. Export the registered tool and add it to the module's `*Tools` array
-6. Add the new array to `src/tools/registry.ts` if creating a new category
-7. Use `Result<T, McpError>` return types in underlying API modules
-8. Add shared constants to `src/constants.ts` if needed
-
-#### Adding New API Endpoints
-
-1. Add endpoint URL to `src/utils/api-config.ts`
-2. Create a function in the appropriate `src/api/*.ts` module
-3. Use `httpRequest()` from `src/utils/http.ts` for automatic retry and timeout handling
-4. Return `Result<T, McpError>` for type-safe error handling
+When a roadmap item is completed, remove it entirely from `ROADMAP.md` - do not cross it out or mark it done.
 
 ## Troubleshooting
 
-### Session/Token Expired
-If API calls fail with authentication errors:
-1. Call `teams_login` with `forceNew: true`
-2. Or delete the config directory (`~/.teams-mcp-server/` on macOS/Linux, `%APPDATA%\teams-mcp-server\` on Windows) and run `npm run cli -- login`
+**Session/token expired**: call `teams_login` with `forceNew: true`, or delete the config directory and run `npm run cli -- login`.
 
-### Browser Won't Launch (for login)
-- Ensure you have Chrome (macOS/Linux) or Edge (Windows) installed
-- On Windows, Edge should be pre-installed; try updating Windows if missing
-- On macOS/Linux, install Chrome from https://www.google.com/chrome/
-- Alternatively, download Playwright's bundled browser: `npx playwright install chromium`
-- Check for existing browser processes that may be blocking
+**Browser won't launch (login)**: ensure Chrome (macOS/Linux) or Edge (Windows) is installed; as a fallback run `npx playwright install chromium`; check for browser processes holding the profile lock.
 
-### Login Timeout with MFA
-MCP clients like Cursor have request timeouts (typically 2-5 minutes). If your organisation's SSO/MFA flow takes longer than this, the MCP request may timeout.
+**Login timeout with MFA**: MCP clients have request timeouts (2-5 min). If SSO/MFA takes longer, the request times out but login continues in the background - completing MFA in the browser saves the session and later calls work. This is rare because headless SSO is tried first and a visible browser only opens when credentials are actually required.
 
-**What happens:** The AI receives a timeout error, but the login process continues in the background. Complete the MFA in the browser - the session will be saved and subsequent tool calls will work.
-
-**Why this is rare:** The server attempts headless SSO first (no user interaction needed). A visible browser only opens when credentials are actually required. Most logins complete silently via SSO without hitting any timeout.
-
-### Search Doesn't Find All Thread Replies
-The Substrate search API is a **full-text search** which only returns messages matching the search terms. If someone replied to your message but their reply doesn't contain your search keywords, it won't appear in results.
-
-**Example:** Searching for "Easter blockout" won't find a reply that says "Given World of Frozen opens the week before, I'd put a fair amount of money on 'yes'", even though it's a direct reply.
-
-**Workaround:** After finding a message of interest, use `teams_get_thread` with the `conversationId` to retrieve the full thread context including all replies.
-
-### Message Deep Links
-
-Teams requires different deep link formats depending on conversation type:
-
-| Conversation Type | Format | Notes |
-|-------------------|--------|-------|
-| **Channel (top-level)** | `/l/message/{channelId}/{msgTimestamp}` | No extra params needed |
-| **Channel (thread reply)** | `/l/message/{channelId}/{msgTimestamp}?parentMessageId={parentId}` | Parent ID from `ClientConversationId;messageid=xxx` |
-| **1:1 / Group chat** | `/l/message/{chatId}/{msgTimestamp}?context={"contextType":"chat"}` | Context param required |
-| **Meeting chat** | `/l/message/{meetingId}/{msgTimestamp}?context={"contextType":"chat"}` | Context param required |
-
-**Conversation ID patterns:**
-- Channels: `19:xxx@thread.tacv2`
-- Meetings: `19:meeting_xxx@thread.v2`
-- 1:1 chats: `19:guid_guid@unq.gbl.spaces`
-- Group chats: `19:xxx@thread.v2` (non-meeting)
-
-**Detecting thread replies:** Compare the `messageid` in `ClientConversationId` with the message's own timestamp from `DateTimeReceived`. If they differ, it's a thread reply and needs `parentMessageId`.
+**Search misses thread replies**: Substrate search is full-text and only returns messages matching the terms. A reply that does not contain the search keywords will not appear even if it is a direct reply. Workaround: after finding a message, use `teams_get_thread` with its `conversationId` for full context.
 
 ## Reference
 
-### File Locations
+### File locations
 
-Session files are stored in a user-specific config directory to ensure consistency regardless of how the server is invoked (npx, global install, local dev, etc.):
+Session files live in a per-user config directory (consistent regardless of invocation method):
 
 - **macOS/Linux**: `~/.teams-mcp-server/`
-- **Windows**: `%APPDATA%\teams-mcp-server\` (e.g., `C:\Users\name\AppData\Roaming\teams-mcp-server\`)
+- **Windows**: `%APPDATA%\teams-mcp-server\`
 
-Contents:
-- `session-state.json` (encrypted browser session)
-- `token-cache.json` (encrypted OAuth tokens)
-- `browser-profile/` (persistent Chrome/Edge profile with extensions and session cookies)
+Contents: `session-state.json` (encrypted session), `token-cache.json` (encrypted tokens), `browser-profile/` (persistent Chrome/Edge profile). Legacy files in the project root are migrated on first read. Dev-only: `./debug-output/` (gitignored screenshots/HTML). Reference docs: `docs/API-REFERENCE.md`, `docs/SESSION-DATA-REFERENCE.md`.
 
-Legacy session files from the project root (`./session-state.json`) are automatically migrated to the new location on first read.
+### Message deep links
 
-Development-only files (created in project root):
-- **Debug output**: `./debug-output/` (gitignored, screenshots and HTML dumps)
+Teams needs different deep-link formats per conversation type:
 
-Development files:
-- **API reference**: `./docs/API-REFERENCE.md`
-- **Session data reference**: `./docs/SESSION-DATA-REFERENCE.md`
+| Conversation Type | Format |
+|-------------------|--------|
+| **Channel (top-level)** | `/l/message/{channelId}/{msgTimestamp}` |
+| **Channel (thread reply)** | `/l/message/{channelId}/{msgTimestamp}?parentMessageId={parentId}` |
+| **1:1 / Group chat** | `/l/message/{chatId}/{msgTimestamp}?context={"contextType":"chat"}` |
+| **Meeting chat** | `/l/message/{meetingId}/{msgTimestamp}?context={"contextType":"chat"}` |
 
-### API Internals
+Conversation ID patterns: channels `19:xxx@thread.tacv2`; meetings `19:meeting_xxx@thread.v2`; 1:1 `19:guid_guid@unq.gbl.spaces` (GUIDs sorted lexicographically); group chats `19:xxx@thread.v2`. To detect a thread reply, compare the `messageid` in `ClientConversationId` with the message's own `DateTimeReceived` timestamp; if they differ it needs `parentMessageId`.
 
-**Conversation Types:** The chatsvc API returns `threadType` (`topic`, `space`, `meeting`, `chat`) and `productThreadType` (`TeamsStandardChannel`, `TeamsTeam`, `TeamsPrivateChannel`, `Meeting`, `Chat`, `OneOnOne`). See `docs/API-REFERENCE.md` for details.
+### API internals
 
-**Virtual Conversations:** Special IDs like `48:saved`, `48:threads`, `48:mentions`, `48:notifications`, `48:notes` aggregate data across conversations. Messages include `clumpId` for the source conversation.
+- **Conversation types**: chatsvc returns `threadType` (`topic`, `space`, `meeting`, `chat`) and `productThreadType` (`TeamsStandardChannel`, `TeamsTeam`, `TeamsPrivateChannel`, `Meeting`, `Chat`, `OneOnOne`). See `docs/API-REFERENCE.md`.
+- **Virtual conversations**: IDs like `48:saved`, `48:threads`, `48:mentions`, `48:notifications`, `48:notes` aggregate across conversations; messages include `clumpId` for the source.
+- **User ID formats**: `extractObjectId()` in `parsers.ts` handles raw GUIDs, MRIs (`8:orgid:...`), tenant-suffixed IDs, base64 GUIDs (little-endian), and Skype IDs.
+- **Deleted messages**: returned with empty `content` and a `deletetime` property; filtered out in `getThreadMessages()` to avoid phantom "empty" messages.
+- **Message ordering**: chatsvc returns newest-first by default; ascending when `startTime` is given. `getThreadMessages()` defaults to `order: 'desc'` but accepts `'asc'` for chronological reading.
 
-**User ID Formats:** The `extractObjectId()` function in `parsers.ts` handles all ID formats: raw GUIDs, MRIs (`8:orgid:...`), tenant-suffixed IDs, base64-encoded GUIDs (little-endian), and Skype IDs.
+### Known limitations
 
-**1:1 Chat ID format:** `19:{userId1}_{userId2}@unq.gbl.spaces` (GUIDs sorted lexicographically).
-
-**Deleted Messages:** The chatsvc messages API returns deleted messages with empty `content` and a `deletetime` property in `properties`. These are filtered out in `getThreadMessages()` to avoid confusing the AI with phantom "empty" messages that appear to be newer than actual content.
-
-**Message Ordering:** The chatsvc messages API returns messages in **descending order (newest first)** by default. When `startTime` is provided, messages are returned in **ascending order** from that timestamp. The `getThreadMessages()` function defaults to newest-first (`order: 'desc'`) but accepts an `order` parameter to switch to oldest-first (`'asc'`) for chronological reading.
-
-### API Endpoints
-
-See `docs/API-REFERENCE.md` for full endpoint documentation with request/response examples.
-
-Regional identifiers: `amer`, `emea`, `apac`
-
-### Possible Tools
-
-Based on API research, these tools could be implemented:
-
-| Tool | API | Difficulty |
-|------|-----|------------|
-| `teams_get_person` | Delve person API | Easy |
-
-**Known Limitations:**
-- **Chat list** - Partially addressed by `teams_get_favorites` (pinned chats) and `teams_get_frequent_contacts` (common contacts), but no full chat list API
-- **Presence/Status** - Real-time via WebSocket, not HTTP
-- **Calendar** - Outlook APIs exist but need separate research
+- **Presence/status**: real-time via WebSocket, not available over HTTP.
 
 ## Dependencies
 
 - `@modelcontextprotocol/sdk`: MCP protocol implementation
-- `playwright`: Browser automation
-- `zod`: Runtime input validation
-- `vitest`: Unit testing framework (dev)
+- `playwright`: browser automation (login only)
+- `zod`: runtime input validation
+- `vitest`: unit testing (dev)
