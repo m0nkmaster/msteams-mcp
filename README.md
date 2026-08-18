@@ -8,7 +8,6 @@
 
 Give AI access to Microsoft Teams with your standard Teams login.
 
-> [!IMPORTANT]
 > ## No Azure setup, app registration, Graph permissions or IT support required.
 
 Search messages and email, catch up on unread chats, read threads, send replies, retrieve meeting transcripts and more.
