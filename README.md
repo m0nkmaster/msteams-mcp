@@ -1,10 +1,10 @@
 # Microsoft Teams MCP Server & CLI
 
-[![CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
-[![npm downloads](https://img.shields.io/npm/dm/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
+[CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
+[npm version](https://www.npmjs.com/package/msteams-mcp)
+[npm downloads](https://www.npmjs.com/package/msteams-mcp)
+[License: MIT](https://opensource.org/licenses/MIT)
+[Node.js](https://nodejs.org/)
 
 Give AI access to Microsoft Teams with your standard Teams login - no Azure setup, app registration, Graph permissions or IT support required.
 
@@ -14,16 +14,22 @@ Search messages and email, catch up on unread chats, read threads, send replies,
 
 - **Do real work** - search, unread chats, threads, replies, people, channels, meetings, transcripts, files, reactions and more.
 - **Sign in once** - tokens refresh automatically and the browser stays out of routine operations.
-- **Keep control** - the assistant has only your existing Teams permissions, with encrypted session data stored locally.
+- **Secure** - the assistant has only your existing Teams permissions, with encrypted session data stored locally.
 - **Use it anywhere** - every capability works through both MCP clients and the included `msteams` CLI.
 
+
+
 ## Quick start
+
+
 
 ### Prerequisites
 
 - Node.js 18+
 - A Microsoft account with Teams access
 - Google Chrome, Microsoft Edge, or Chromium browser installed
+
+
 
 ### Configure your MCP client
 
@@ -98,86 +104,114 @@ See [CLI Usage](#cli-usage) for commands.
 
 ## Available Tools
 
+
+
 ### Search & Discovery
 
-| Tool | Description |
-|------|-------------|
-| `teams_search` | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.) |
-| `teams_search_email` | Search emails in your mailbox (same auth as Teams - no extra login) |
-| `teams_list_chats` | List recent conversations (1:1, group, meeting, channel) with a last-message preview |
-| `teams_get_message` | Get a single message by ID with full content (any age); includes reactions |
-| `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread; `fromUrl` accepts a Teams message deep link |
-| `teams_find_channel` | Find channels by name (your teams + org-wide discovery) |
-| `teams_get_tags` | List a team's channel tags for tag @mentions |
-| `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications) |
+
+| Tool                 | Description                                                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `teams_search`       | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.)                                                                |
+| `teams_search_email` | Search emails in your mailbox (same auth as Teams - no extra login)                                                                                   |
+| `teams_list_chats`   | List recent conversations (1:1, group, meeting, channel) with a last-message preview                                                                  |
+| `teams_get_message`  | Get a single message by ID with full content (any age); includes reactions                                                                            |
+| `teams_get_thread`   | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread; `fromUrl` accepts a Teams message deep link |
+| `teams_find_channel` | Find channels by name (your teams + org-wide discovery)                                                                                               |
+| `teams_get_tags`     | List a team's channel tags for tag @mentions                                                                                                          |
+| `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications)                                                                                       |
+
+
+
 
 ### Messaging
 
-| Tool | Description |
-|------|-------------|
-| `teams_send_message` | Send a message (default: self-chat/notes). `replyToMessageId` for thread replies, `subject` for a new channel thread, `scheduleAt` to schedule, `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
-| `teams_wait_for_reply` | Block until a new message arrives (server-side poll, capped ~110s); idempotent `after`/`nextAfter` cursor - pair with `teams_send_message` |
-| `teams_edit_message` | Edit one of your own messages (`contentType` supported) |
-| `teams_delete_message` | Delete one of your own messages (soft delete) |
+
+| Tool                   | Description                                                                                                                                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `teams_send_message`   | Send a message (default: self-chat/notes). `replyToMessageId` for thread replies, `subject` for a new channel thread, `scheduleAt` to schedule, `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
+| `teams_wait_for_reply` | Block until a new message arrives (server-side poll, capped ~110s); idempotent `after`/`nextAfter` cursor - pair with `teams_send_message`                                                                            |
+| `teams_edit_message`   | Edit one of your own messages (`contentType` supported)                                                                                                                                                               |
+| `teams_delete_message` | Delete one of your own messages (soft delete)                                                                                                                                                                         |
+
+
+
 
 ### People & Contacts
 
-| Tool | Description |
-|------|-------------|
-| `teams_get_me` | Get current user profile (email, name, ID) |
-| `teams_search_people` | Search for people by name or email |
-| `teams_get_frequent_contacts` | Get frequently contacted people (useful for name resolution) |
-| `teams_get_person` | Resolve one or more MRIs to full profiles (name, email, job title, department) |
-| `teams_get_chat` | Get conversation ID for 1:1 chat with a person |
-| `teams_create_group_chat` | Create a new group chat with multiple people (2+ others) |
+
+| Tool                          | Description                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------ |
+| `teams_get_me`                | Get current user profile (email, name, ID)                                     |
+| `teams_search_people`         | Search for people by name or email                                             |
+| `teams_get_frequent_contacts` | Get frequently contacted people (useful for name resolution)                   |
+| `teams_get_person`            | Resolve one or more MRIs to full profiles (name, email, job title, department) |
+| `teams_get_chat`              | Get conversation ID for 1:1 chat with a person                                 |
+| `teams_create_group_chat`     | Create a new group chat with multiple people (2+ others)                       |
+
+
+
 
 ### Organisation
 
-| Tool | Description |
-|------|-------------|
-| `teams_get_favorites` | Get pinned/favourite conversations |
-| `teams_add_favorite` | Pin a conversation |
-| `teams_remove_favorite` | Unpin a conversation |
-| `teams_save_message` | Bookmark a message |
-| `teams_unsave_message` | Remove bookmark from a message |
-| `teams_get_saved_messages` | Get list of saved/bookmarked messages with source references |
-| `teams_get_followed_threads` | Get list of followed threads with source references |
-| `teams_get_unread` | Get unread counts (aggregate or per-conversation) |
-| `teams_mark_read` | Mark a conversation as read up to a message |
+
+| Tool                         | Description                                                  |
+| ---------------------------- | ------------------------------------------------------------ |
+| `teams_get_favorites`        | Get pinned/favourite conversations                           |
+| `teams_add_favorite`         | Pin a conversation                                           |
+| `teams_remove_favorite`      | Unpin a conversation                                         |
+| `teams_save_message`         | Bookmark a message                                           |
+| `teams_unsave_message`       | Remove bookmark from a message                               |
+| `teams_get_saved_messages`   | Get list of saved/bookmarked messages with source references |
+| `teams_get_followed_threads` | Get list of followed threads with source references          |
+| `teams_get_unread`           | Get unread counts (aggregate or per-conversation)            |
+| `teams_mark_read`            | Mark a conversation as read up to a message                  |
+
+
+
 
 ### Reactions
 
-| Tool | Description |
-|------|-------------|
-| `teams_search_emoji` | Search for emojis by name (standard + custom org emojis) |
-| `teams_add_reaction` | Add an emoji reaction to a message |
-| `teams_remove_reaction` | Remove an emoji reaction from a message |
+
+| Tool                    | Description                                              |
+| ----------------------- | -------------------------------------------------------- |
+| `teams_search_emoji`    | Search for emojis by name (standard + custom org emojis) |
+| `teams_add_reaction`    | Add an emoji reaction to a message                       |
+| `teams_remove_reaction` | Remove an emoji reaction from a message                  |
+
 
 **Quick reactions:** `like`, `heart`, `laugh`, `surprised`, `sad`, `angry` can be used directly without searching.
 
 ### Calendar & Meetings
 
-| Tool | Description |
-|------|-------------|
-| `teams_get_meetings` | Get meetings from calendar (defaults to next 7 days) |
+
+| Tool                   | Description                                                            |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `teams_get_meetings`   | Get meetings from calendar (defaults to next 7 days)                   |
 | `teams_get_transcript` | Get meeting transcript (requires `threadId` from `teams_get_meetings`) |
+
 
 `teams_get_meetings` returns: subject, times, organiser, join URL, `threadId` for meeting chat. Use `threadId` with `teams_get_thread` to read meeting chat, or with `teams_get_transcript` to get the full transcript with speakers and timestamps.
 
 ### Files
 
-| Tool | Description |
-|------|-------------|
+
+| Tool                     | Description                                                        |
+| ------------------------ | ------------------------------------------------------------------ |
 | `teams_get_shared_files` | Get files and links shared in a conversation (supports pagination) |
+
 
 Returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
 
 ### Session
 
-| Tool | Description |
-|------|-------------|
-| `teams_login` | Trigger manual login (opens browser) |
+
+| Tool           | Description                            |
+| -------------- | -------------------------------------- |
+| `teams_login`  | Trigger manual login (opens browser)   |
 | `teams_status` | Check authentication and session state |
+
+
+
 
 ### Search Operators
 
@@ -203,11 +237,15 @@ Combine operators: `from:sarah@co.com sent:>=2026-01-18 hasattachment:true`
 
 The server also exposes passive resources for context discovery:
 
-| Resource URI | Description |
-|--------------|-------------|
-| `teams://me/profile` | Current user's profile |
-| `teams://me/favorites` | Pinned conversations |
-| `teams://status` | Authentication status |
+
+| Resource URI           | Description            |
+| ---------------------- | ---------------------- |
+| `teams://me/profile`   | Current user's profile |
+| `teams://me/favorites` | Pinned conversations   |
+| `teams://status`       | Authentication status  |
+
+
+
 
 ## CLI Usage
 
@@ -264,6 +302,8 @@ npm run cli -- status
 npm run cli -- send "Hi" --to "conversation-id"
 ```
 
+
+
 ## Limitations
 
 - **Login required** - Run `teams_login` to authenticate (opens browser)
@@ -271,6 +311,8 @@ npm run cli -- send "Hi" --to "conversation-id"
 - **Undocumented APIs** - Uses Microsoft's internal APIs which may change without notice
 - **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (use `teams_get_thread` for full context)
 - **Own messages only** - Edit/delete only works on your own messages
+
+
 
 ## Session Files
 
@@ -320,6 +362,8 @@ For development with hot reload, configure your MCP client:
 See [AGENTS.md](AGENTS.md) for detailed architecture and contribution guidelines.
 
 ---
+
+
 
 ## Teams Chat Export Bookmarklet
 
