@@ -1,24 +1,23 @@
-# Teams MCP Server & CLI
+# Microsoft Teams MCP Server & CLI
 
 [![CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
 
-An MCP (Model Context Protocol) server that enables AI assistants to interact with Microsoft Teams. Search messages, send replies, manage favourites, and more.
+Give AI access to Microsoft Teams with your standard Teams login - no Azure setup, app registration, Graph permissions or IT support required.
 
-## How It Works
+Search messages and email, catch up on unread chats, read threads, send replies, retrieve meeting transcripts and more.
 
-This server calls Microsoft's Teams APIs directly (Substrate, chatsvc, CSA)  - the same APIs the Teams web app uses. No Azure AD app registration or admin consent required.
+## Why msteams-mcp?
 
-**Authentication flow:**
-1. AI runs `teams_login` to open a browser for you to log in
-2. OAuth tokens are extracted and cached
-3. All operations use cached tokens directly (no browser needed)
-4. Automatic token refresh (~1 hour)
+- **Do real work** - search, unread chats, threads, replies, people, channels, meetings, transcripts, files, reactions and more.
+- **Sign in once** - tokens refresh automatically and the browser stays out of routine operations.
+- **Keep control** - the assistant has only your existing Teams permissions, with encrypted session data stored locally.
+- **Use it anywhere** - every capability works through both MCP clients and the included `msteams` CLI.
 
-**Security:** Uses the same authentication as the Teams web client - your access is limited to what your account can already do.
-
-## Installation
+## Quick start
 
 ### Prerequisites
 
@@ -26,7 +25,7 @@ This server calls Microsoft's Teams APIs directly (Substrate, chatsvc, CSA)  - t
 - A Microsoft account with Teams access
 - Google Chrome, Microsoft Edge, or Chromium browser installed
 
-### Configure Your MCP Client
+### Configure your MCP client
 
 Add to your MCP client configuration (e.g., Claude Desktop, Windsurf, Cursor):
 
@@ -41,7 +40,18 @@ Add to your MCP client configuration (e.g., Claude Desktop, Windsurf, Cursor):
 }
 ```
 
-That's it. `npx` will automatically download and run the latest version.
+That is it. `npx` downloads and runs the latest version. Ask your assistant to call `teams_login` once, complete the normal Microsoft sign-in in the browser, and then start using Teams.
+
+## How it works
+
+This server calls Microsoft's Teams services directly (Substrate, chatsvc, CSA), using the authenticated session created by the Teams web app.
+
+1. `teams_login` opens a browser for your normal Microsoft sign-in.
+2. The resulting OAuth tokens and session data are encrypted and cached locally.
+3. Routine operations use those tokens directly, without browser automation.
+4. Expiring tokens are refreshed automatically over HTTP, with headless browser SSO as a fallback.
+
+Your access remains limited to what your Teams account can already see and do.
 
 ### From Source (alternative)
 
@@ -70,7 +80,7 @@ The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authent
 
 ### CLI (alternative to the MCP server)
 
-The same functionality is also available as a standalone command-line tool, `msteams`. This is useful when you want Teams from a shell or script instead of an MCP client (for example, if an MCP integration is unreliable in your environment).
+The same functionality is also available as a standalone command-line tool, `msteams`. This is useful when you want Teams from a shell or script instead of an MCP client.
 
 Install it globally from npm:
 
@@ -93,11 +103,12 @@ See [CLI Usage](#cli-usage) for commands.
 | Tool | Description |
 |------|-------------|
 | `teams_search` | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.) |
-| `teams_search_email` | Search emails in your mailbox (same auth as Teams — no extra login) |
+| `teams_search_email` | Search emails in your mailbox (same auth as Teams - no extra login) |
 | `teams_list_chats` | List recent conversations (1:1, group, meeting, channel) with a last-message preview |
 | `teams_get_message` | Get a single message by ID with full content (any age); includes reactions |
 | `teams_get_thread` | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread; `fromUrl` accepts a Teams message deep link |
 | `teams_find_channel` | Find channels by name (your teams + org-wide discovery) |
+| `teams_get_tags` | List a team's channel tags for tag @mentions |
 | `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications) |
 
 ### Messaging
@@ -105,7 +116,7 @@ See [CLI Usage](#cli-usage) for commands.
 | Tool | Description |
 |------|-------------|
 | `teams_send_message` | Send a message (default: self-chat/notes). `replyToMessageId` for thread replies, `subject` for a new channel thread, `scheduleAt` to schedule, `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
-| `teams_wait_for_reply` | Block until a new message arrives (server-side poll, capped ~110s); idempotent `after`/`nextAfter` cursor — pair with `teams_send_message` |
+| `teams_wait_for_reply` | Block until a new message arrives (server-side poll, capped ~110s); idempotent `after`/`nextAfter` cursor - pair with `teams_send_message` |
 | `teams_edit_message` | Edit one of your own messages (`contentType` supported) |
 | `teams_delete_message` | Delete one of your own messages (soft delete) |
 
