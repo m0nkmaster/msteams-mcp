@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
 
-Give AI access to Microsoft Teams with your standard Teams login.
+Give AI access to Microsoft Teams easily with your standard Teams login.
 
 > [!NOTE]
 > ## No Azure setup, app registration, Graph permissions or IT support required.
