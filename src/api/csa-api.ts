@@ -45,8 +45,8 @@ export async function getFavorites(): Promise<Result<FavoritesResult>> {
   }
   const { auth, csaToken } = authResult.value;
 
-  const { region, baseUrl } = getApiConfig();
-  const url = CSA_API.conversationFolders(region, baseUrl);
+  const { csaRegion, baseUrl } = getApiConfig();
+  const url = CSA_API.conversationFolders(csaRegion, baseUrl);
 
   const response = await httpRequest<Record<string, unknown>>(
     url,
@@ -143,7 +143,7 @@ async function modifyFavorite(
   }
   const { auth, csaToken } = authResult.value;
 
-  const { region, baseUrl } = getApiConfig();
+  const { csaRegion, baseUrl } = getApiConfig();
 
   // Get current folder state
   const currentState = await getFavorites();
@@ -158,7 +158,7 @@ async function modifyFavorite(
     ));
   }
 
-  const url = CSA_API.conversationFolders(region, baseUrl);
+  const url = CSA_API.conversationFolders(csaRegion, baseUrl);
 
   const response = await httpRequest<unknown>(
     url,
@@ -203,8 +203,8 @@ export async function getMyTeamsAndChannels(): Promise<Result<TeamsListResult>> 
   }
   const { auth, csaToken } = authResult.value;
 
-  const { region, baseUrl } = getApiConfig();
-  const url = CSA_API.teamsList(region, baseUrl);
+  const { csaRegion, baseUrl } = getApiConfig();
+  const url = CSA_API.teamsList(csaRegion, baseUrl);
 
   const response = await httpRequest<Record<string, unknown>>(
     url,
@@ -254,8 +254,8 @@ export async function getCustomEmojis(): Promise<Result<CustomEmojisResult>> {
   }
   const { auth, csaToken } = authResult.value;
 
-  const { region, baseUrl } = getApiConfig();
-  const url = CSA_API.customEmojis(region, baseUrl);
+  const { csaRegion, baseUrl } = getApiConfig();
+  const url = CSA_API.customEmojis(csaRegion, baseUrl);
 
   const response = await httpRequest<Record<string, unknown>>(
     url,
