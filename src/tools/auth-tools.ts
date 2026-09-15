@@ -113,7 +113,10 @@ async function handleLogin(
     ctx.server.setBrowserManager(headlessManager);
 
     try {
-      if (input.forceNew) {
+      if (input.forceNew && headlessManager.attached) {
+        // The context belongs to the user's running browser — never wipe its cookies
+        log.warn('login:headless', 'forceNew ignored: attached over CDP, sign out in the browser instead');
+      } else if (input.forceNew) {
         // Clear persistent profile cookies to force fresh authentication
         await headlessManager.context.clearCookies();
       }
@@ -153,7 +156,7 @@ async function handleLogin(
   ctx.server.setBrowserManager(browserManager);
 
   try {
-    if (input.forceNew) {
+    if (input.forceNew && !browserManager.attached) {
       await forceNewLogin(
         browserManager.page,
         browserManager.context,

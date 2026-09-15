@@ -62,6 +62,27 @@ This server calls Microsoft's Teams services directly (Substrate, chatsvc, CSA),
 
 Your access remains limited to what your Teams account can already see and do.
 
+### Attach to a running browser (CDP)
+
+If the server cannot launch a browser itself, or you want to reuse a browser you are already signed in to, set `TEAMS_MCP_CDP_URL` to the DevTools endpoint of a running Chrome/Edge instead. Typical case: running inside WSL while your signed-in Edge lives on the Windows host.
+
+1. Start the browser with remote debugging, e.g. `msedge --remote-debugging-port=9222` (or enable it under `edge://inspect`).
+2. Add the variable to your MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "teams": {
+      "command": "npx",
+      "args": ["-y", "msteams-mcp@latest"],
+      "env": { "TEAMS_MCP_CDP_URL": "http://127.0.0.1:9222" }
+    }
+  }
+}
+```
+
+`teams_login` then opens a tab in that browser, picks up the existing Microsoft session, saves the tokens and closes only its own tab. The browser must be running whenever a login or a browser-based token refresh is needed. `forceNew` does not clear cookies in this mode; sign out in the browser instead.
+
 ### From Source (alternative)
 
 If you prefer to run from a local clone:

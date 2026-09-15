@@ -11,9 +11,13 @@
  * - Headless token refresh can silently re-authenticate using the profile's session
  * - Visible login retains extensions (e.g. Bitwarden) and form autofill data
  * - No need for storageState temp files or encrypted session restoration for browser use
+ *
+ * Alternatively, when TEAMS_MCP_CDP_URL is set, the server attaches to an
+ * already-running browser over the Chrome DevTools Protocol instead of
+ * launching one. See attachOverCdp().
  */
 
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -25,13 +29,18 @@ import { clearRegionCache } from '../utils/auth-guards.js';
 import * as log from '../utils/logger.js';
 
 export interface BrowserManager {
-  /** Always null — persistent contexts have no separate Browser object. */
-  browser: null;
+  /** Set only when attached over CDP; persistent contexts have no separate Browser object. */
+  browser: Browser | null;
   context: BrowserContext;
   page: Page;
   isNewSession: boolean;
-  /** Always true — all contexts use the persistent browser profile. */
-  persistent: true;
+  /** True when the context uses the persistent browser profile. */
+  persistent: boolean;
+  /**
+   * True when attached to an externally running browser over CDP.
+   * Callers must not clear cookies or close the context — it belongs to the user.
+   */
+  attached: boolean;
 }
 
 export interface CreateBrowserOptions {
@@ -43,6 +52,9 @@ const DEFAULT_OPTIONS: Required<CreateBrowserOptions> = {
   headless: true,
   viewport: { width: 1280, height: 800 },
 };
+
+/** Environment variable that switches from launching a browser to attaching over CDP. */
+export const CDP_URL_ENV = 'TEAMS_MCP_CDP_URL';
 
 /**
  * Directory for the persistent browser profile.
@@ -140,6 +152,34 @@ function getBrowserChannel(): 'msedge' | 'chrome' {
 }
 
 /**
+ * Attaches to an already-running browser via the Chrome DevTools Protocol.
+ *
+ * Used when the server cannot launch a browser itself (e.g. running inside WSL
+ * while the signed-in browser lives on the Windows host) or when the user
+ * wants to reuse an existing signed-in profile. The default context of the
+ * remote browser is used so its Microsoft session cookies and MSAL tokens are
+ * visible to the login flow.
+ *
+ * The headless option is ignored: the remote browser is whatever the user
+ * started. A new tab is opened for the login flow and closed by closeBrowser().
+ */
+async function attachOverCdp(cdpUrl: string): Promise<BrowserManager> {
+  log.info('browser', `Attaching to running browser over CDP: ${cdpUrl}`);
+  const browser = await chromium.connectOverCDP(cdpUrl);
+  const context = browser.contexts()[0] ?? await browser.newContext();
+  const page = await context.newPage();
+
+  return {
+    browser,
+    context,
+    page,
+    isNewSession: true,
+    persistent: false,
+    attached: true,
+  };
+}
+
+/**
  * Creates a browser context using a persistent profile.
  *
  * Uses the system's installed Chrome or Edge browser rather than downloading
@@ -155,6 +195,9 @@ function getBrowserChannel(): 'msedge' | 'chrome' {
  * The MCP server serialises tool calls, and token-refresh checks for an active
  * browser before attempting refresh to avoid lock contention.
  *
+ * When TEAMS_MCP_CDP_URL is set, no browser is launched; the server attaches
+ * to the running browser at that URL instead.
+ *
  * @param options - Browser configuration options
  * @returns Browser manager with context and page
  * @throws Error if system browser is not found (with helpful suggestions)
@@ -163,6 +206,11 @@ export async function createBrowserContext(
   options: CreateBrowserOptions = {}
 ): Promise<BrowserManager> {
   const opts = { ...DEFAULT_OPTIONS, ...options };
+
+  const cdpUrl = process.env[CDP_URL_ENV];
+  if (cdpUrl) {
+    return attachOverCdp(cdpUrl);
+  }
 
   ensureUserDataDir();
 
@@ -188,6 +236,7 @@ export async function createBrowserContext(
       page,
       isNewSession: true,
       persistent: true,
+      attached: false,
     };
   };
 
@@ -236,6 +285,9 @@ export async function saveSessionState(context: BrowserContext): Promise<void> {
 
 /**
  * Closes the browser context and optionally saves session state.
+ *
+ * When attached over CDP, only the tab opened by this server is closed and
+ * the connection is dropped; the user's browser and its context stay open.
  */
 export async function closeBrowser(
   manager: BrowserManager,
@@ -243,6 +295,11 @@ export async function closeBrowser(
 ): Promise<void> {
   if (saveSession) {
     await saveSessionState(manager.context);
+  }
+  if (manager.attached && manager.browser) {
+    await manager.page.close().catch(() => undefined);
+    await manager.browser.close();
+    return;
   }
   await manager.context.close();
 }
