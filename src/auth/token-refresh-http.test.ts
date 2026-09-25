@@ -281,6 +281,51 @@ describe('refreshTokensViaHttp', () => {
     }
   });
 
+  it.each([400, 401])('preserves core tokens when Assignments refresh returns HTTP %s', async (status) => {
+    const state = makeMockSessionState();
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+
+    vi.mocked(fetch).mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).includes('login.microsoftonline.com')) {
+        const scope = new URLSearchParams(String(init?.body)).get('scope')!;
+        if (scope.includes('8f348934-64be-4bb2-bc16-c54c96789f43')) {
+          return new Response(JSON.stringify({
+            error: 'invalid_grant',
+            error_description: 'AADSTS65001: Consent required for Assignments.',
+          }), { status });
+        }
+        return new Response(JSON.stringify(makeTokenResponse(scope)), { status: 200 });
+      }
+      if (String(url).includes('authsvc.teams.microsoft.com')) {
+        return new Response(JSON.stringify({
+          tokens: { skypeToken: 'new-skype-token', expiresIn: 86400 },
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected URL: ${String(url)}`);
+    });
+
+    const result = await refreshTokensViaHttp();
+
+    expect(result).toEqual({ ok: true, value: {
+      tokensRefreshed: 3,
+      skypeTokenRefreshed: true,
+      refreshTokenRotated: true,
+    } });
+    expect(writeSessionState).toHaveBeenCalledOnce();
+    const saved = vi.mocked(writeSessionState).mock.calls[0][0];
+    const entries = saved.origins[0].localStorage.map(item => JSON.parse(item.value));
+    const accessTokens = entries.filter(entry => entry.credentialType === 'AccessToken');
+    expect(accessTokens).toHaveLength(3);
+    for (const entry of accessTokens) {
+      expect(entry.secret).toBe(`new-access-token-for-${entry.target}`);
+    }
+    expect(entries.find(entry => entry.credentialType === 'RefreshToken').secret).toBe('new-refresh-token');
+    expect(saved.cookies.filter(cookie => cookie.name === 'skypetoken_asm')
+      .every(cookie => cookie.value === 'new-skype-token')).toBe(true);
+    expect(clearTokenCache).toHaveBeenCalledOnce();
+  });
+
   it('continues with remaining scopes if one fails with network error', async () => {
     const state = makeMockSessionState();
     vi.mocked(readSessionState).mockReturnValue(state);

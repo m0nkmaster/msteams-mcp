@@ -122,7 +122,7 @@ const AUTHSVC_ENDPOINT = 'https://authsvc.teams.microsoft.com/v1.0/authz';
  * we request. The resource identifier is used to match existing MSAL cache
  * entries so we can update them in-place.
  */
-const REFRESH_SCOPES = [
+const REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string; optional?: boolean }> = [
   {
     /** Substrate search/people APIs. */
     resource: 'substrate.office.com',
@@ -149,8 +149,10 @@ const REFRESH_SCOPES = [
      */
     resource: 'EduAssignments',
     scopes: '8f348934-64be-4bb2-bc16-c54c96789f43/.default offline_access',
+    // EDU access may be unavailable even when the core Teams session is valid.
+    optional: true,
   },
-] as const;
+];
 
 /** HTTP request timeout for token refresh calls (ms). */
 const REFRESH_TIMEOUT_MS = 10000;
@@ -675,15 +677,16 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
     );
 
     if (!result.ok) {
-      // If any refresh fails with auth error, the refresh token is likely expired
-      if (result.error.code === ErrorCode.AUTH_EXPIRED) {
+      // Core auth failures still require browser fallback. An optional resource
+      // may reject consent/access independently; preserve the successful tokens.
+      if (result.error.code === ErrorCode.AUTH_EXPIRED && !scope.optional) {
         return err(createError(
           ErrorCode.AUTH_EXPIRED,
           `HTTP token refresh failed for ${scope.resource}: ${result.error.message}. Browser login required.`,
           { suggestions: ['Call teams_login to re-authenticate via browser'] }
         ));
       }
-      // For other errors (network, timeout), log and continue with remaining scopes
+      // Log optional-resource failures and other errors, then continue.
       log.warn('token-refresh-http', `Failed to refresh ${scope.resource}: ${result.error.message}`);
       scopeErrors.push(`${scope.resource}: ${result.error.message}`);
       continue;
