@@ -244,7 +244,7 @@ Only confirm `submit`/`unsubmit` against a test assignment you own: they change 
 | Save message | Only works on root messages, not thread replies |
 | Unread on channels | May fail ACL check; works reliably for chats/meetings |
 | Token expiry | Tokens last ~1 hour; call `teams_login` to refresh |
-| Assignments | Education tenants only; failures never affect other tools. Submit/unsubmit not yet verified live |
+| Assignments | Education tenants only; failures never affect other tools. Submit/unsubmit change real schoolwork: re-submitting records a new hand-in date |
 
 ---
 

@@ -328,7 +328,7 @@ npm run cli -- send "Hi" --to "conversation-id"
 - **Token expiry** - Tokens expire after ~1 hour; headless refresh is attempted or run `teams_login` again when needed
 - **Undocumented APIs** - Uses Microsoft's internal APIs which may change without notice
 - **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (but LLM will likely use `teams_get_thread` for full context)
-- **Assignments** - Education tenants only. Turn-in and undo turn-in act on your real account and have not yet been verified against a live tenant
+- **Assignments** - Education tenants only. Turn-in and undo turn-in act on your real account; handing in again records a new hand-in date that your teacher sees
 
 
 

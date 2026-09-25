@@ -1930,10 +1930,10 @@ The response's `@microsoft.graph.downloadUrl` is a short-lived, pre-authenticate
 | Action | Method | Path | Verified |
 |--------|--------|------|----------|
 | Mark viewed | `PATCH` | `/edu/classes/{classId}/assignments/{assignmentId}/submissions/{submissionId}/view` | Captured web session |
-| Turn in | `POST` | `…/submissions/{submissionId}/submit` | Graph parity only |
-| Undo turn-in | `POST` | `…/submissions/{submissionId}/unsubmit` | Graph parity only |
+| Turn in | `POST` | `…/submissions/{submissionId}/submit` | Live (education tenant) |
+| Undo turn-in | `POST` | `…/submissions/{submissionId}/unsubmit` | Live (education tenant) |
 
-Submit and unsubmit are never replayed by HTTP retries. Success is reported only after a follow-up `GET …/submissions/{submissionId}` shows the expected status (`submitted` or `working`).
+Neither takes a request body. Undo turn-in moves the submission to `working`, clears `submittedResources` and keeps the student's working files; turning in again copies them back and sets a new `submittedDateTime`. Submit and unsubmit are never replayed by HTTP retries. Success is reported only after a follow-up `GET …/submissions/{submissionId}` shows the expected status (`submitted` or `working`).
 
 ---
 
