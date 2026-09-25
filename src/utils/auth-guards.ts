@@ -9,9 +9,11 @@ import { ErrorCode, createError, type McpError } from '../types/errors.js';
 import { type Result, err, ok } from '../types/result.js';
 import {
   getValidSubstrateToken,
+  getValidAssignmentsToken,
   extractMessageAuth,
   extractCsaToken,
   extractSubstrateToken,
+  extractAssignmentsToken,
   extractSkypeSpacesToken,
   extractRegionConfig,
   getUserProfile,
@@ -86,6 +88,50 @@ export async function requireSubstrateTokenAsync(): Promise<Result<string, McpEr
     return err(createError(
       ErrorCode.AUTH_EXPIRED,
       'ACTION REQUIRED: Teams token expired and automatic refresh failed. You MUST call teams_login to re-authenticate before retrying.',
+    ));
+  }
+
+  return ok(token);
+}
+
+/**
+ * Checks if the Assignments token needs refresh (expired or approaching expiry).
+ */
+function shouldRefreshAssignmentsToken(): boolean {
+  const assignments = extractAssignmentsToken();
+  if (!assignments) return true;
+
+  const timeRemaining = assignments.expiry.getTime() - Date.now();
+  return timeRemaining < TOKEN_REFRESH_THRESHOLD_MS;
+}
+
+/**
+ * Requires a valid EDU Assignments token with proactive refresh.
+ *
+ * Mirrors `requireSubstrateTokenAsync`: refreshes tokens if the Assignments
+ * token is missing or approaching expiry, then returns the current token. On a
+ * fresh session the token is absent until the first refresh mints it, so a
+ * missing token returning AUTH_REQUIRED/AUTH_EXPIRED lets the server's
+ * auto-login retry populate it. Use in Assignments API functions.
+ */
+export async function requireAssignmentsTokenAsync(): Promise<Result<string, McpError>> {
+  if (shouldRefreshAssignmentsToken()) {
+    const refreshResult = await refreshTokensViaBrowser();
+    if (refreshResult.ok) {
+      const token = getValidAssignmentsToken();
+      if (token) {
+        return ok(token);
+      }
+    }
+    // Refresh failed or did not yield a token — fall through to the error below.
+  }
+
+  const token = getValidAssignmentsToken();
+  if (!token) {
+    return err(createError(
+      ErrorCode.AUTH_REQUIRED,
+      'ACTION REQUIRED: No valid EDU Assignments token. You MUST call teams_login to authenticate before retrying.',
+      { suggestions: ['Call teams_login to authenticate'] }
     ));
   }
 

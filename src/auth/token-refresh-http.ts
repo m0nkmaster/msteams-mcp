@@ -138,6 +138,18 @@ const REFRESH_SCOPES = [
     resource: 'chatsvcagg.teams.microsoft.com',
     scopes: 'https://chatsvcagg.teams.microsoft.com/.default offline_access',
   },
+  {
+    /**
+     * EDU Assignments API (assignments.edu.cloud.microsoft, backed by OneNote EDU).
+     * The resource is identified by its app GUID; the granted scopes come back as
+     * bare permission names (EduAssignments.Read/ReadWrite, EduCurricula.Read), so
+     * `resource` here is the substring we match against those granted scopes to find
+     * and update the cached entry — not the value we request. `scopes` is what we
+     * actually request. See `extractAssignmentsToken()` in token-extractor.ts.
+     */
+    resource: 'EduAssignments',
+    scopes: '8f348934-64be-4bb2-bc16-c54c96789f43/.default offline_access',
+  },
 ] as const;
 
 /** HTTP request timeout for token refresh calls (ms). */

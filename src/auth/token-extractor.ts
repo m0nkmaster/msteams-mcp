@@ -218,6 +218,69 @@ export function getSubstrateTokenStatus(): {
   };
 }
 
+// ============================================================================
+// Assignments Token (EDU Assignments API)
+// ============================================================================
+
+/**
+ * Extracts the EDU Assignments API token from session state.
+ *
+ * This token authenticates calls to `assignments.edu.cloud.microsoft`. It is
+ * minted by the HTTP token refresh (see the `EduAssignments` entry in
+ * `token-refresh-http.ts`) and stored in the MSAL cache in localStorage. The
+ * granted scopes come back as bare permission names, so we match the MSAL
+ * `target` on `EduAssignments` (the read/readwrite permissions). The audience
+ * is the Assignments app GUID `8f348934-...`, which we also accept as a match
+ * in case a future token stores the resource GUID in its target.
+ */
+export function extractAssignmentsToken(state?: SessionState): SubstrateTokenInfo | null {
+  return withLocalStorage(state, (localStorage) => {
+    let bestToken: SubstrateTokenInfo | null = null;
+
+    for (const item of localStorage) {
+      try {
+        const entry = JSON.parse(item.value);
+
+        const target = entry.target as string | undefined;
+        if (!target) continue;
+        if (!target.includes('EduAssignments') && !target.includes('8f348934-64be-4bb2-bc16-c54c96789f43')) {
+          continue;
+        }
+
+        if (!isJwtToken(entry.secret)) continue;
+
+        const expiry = getJwtExpiry(entry.secret);
+        if (!expiry) continue;
+        if (expiry.getTime() <= Date.now()) continue;
+
+        // Keep the token with the longest remaining validity
+        if (!bestToken || expiry.getTime() > bestToken.expiry.getTime()) {
+          bestToken = { token: entry.secret, expiry };
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return bestToken;
+  });
+}
+
+/**
+ * Gets a valid EDU Assignments token by extracting it from the session.
+ *
+ * Unlike the Substrate token there is no dedicated on-disk cache entry for it;
+ * extraction from localStorage is cheap and the token is refreshed alongside the
+ * others by `refreshTokensViaHttp()`. Returns null if no unexpired token exists
+ * (callers surface AUTH_REQUIRED, which triggers the server's auto-login retry).
+ */
+export function getValidAssignmentsToken(): string | null {
+  const extracted = extractAssignmentsToken();
+  if (!extracted) return null;
+  if (extracted.expiry.getTime() <= Date.now()) return null;
+  return extracted.token;
+}
+
 /** Candidate token found during extraction. */
 interface TokenCandidate {
   token: string;
