@@ -13,6 +13,7 @@ import {
   extractCsaToken,
   extractSubstrateToken,
   extractAssignmentsToken,
+  extractGraphToken,
   extractSkypeSpacesToken,
   extractRegionConfig,
   getUserProfile,
@@ -21,7 +22,7 @@ import {
   type RegionConfig,
 } from '../auth/token-extractor.js';
 import { TOKEN_REFRESH_THRESHOLD_MS, ASSIGNMENTS_UNAVAILABLE_TTL_MS } from '../constants.js';
-import { refreshTokensViaBrowser, refreshAssignmentsToken } from '../auth/token-refresh.js';
+import { refreshTokensViaBrowser, refreshAssignmentsToken, refreshGraphToken } from '../auth/token-refresh.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error Messages
@@ -93,34 +94,59 @@ export async function requireSubstrateTokenAsync(): Promise<Result<string, McpEr
   return ok(token);
 }
 
-/** Briefly remember definitive access refusals; reset on explicit login. */
-let assignmentsUnavailable: { until: number; error: McpError } | undefined;
-let assignmentsRefresh: Promise<Result<string>> | undefined;
-
-export function resetAssignmentsAvailability(): void {
-  assignmentsUnavailable = undefined;
+/**
+ * Guard for an optional, on-demand token (Assignments, Graph). Returns a cached
+ * token while fresh, refreshes it at most once concurrently, and briefly
+ * remembers definitive access refusals so non-entitled accounts pay no repeat cost.
+ */
+function onDemandTokenGuard(
+  extract: () => { token: string; expiry: Date } | null,
+  refresh: () => Promise<Result<string>>,
+) {
+  let unavailable: { until: number; error: McpError } | undefined;
+  let pending: Promise<Result<string>> | undefined;
+  return {
+    reset(): void { unavailable = undefined; },
+    async require(): Promise<Result<string, McpError>> {
+      const current = extract();
+      if (current && current.expiry.getTime() - Date.now() >= TOKEN_REFRESH_THRESHOLD_MS) {
+        return ok(current.token);
+      }
+      if (unavailable && Date.now() < unavailable.until) {
+        return current ? ok(current.token) : err(unavailable.error);
+      }
+      if (!pending) {
+        pending = refresh().then(result => {
+          if (!result.ok && result.error.code === ErrorCode.ACCESS_DENIED) {
+            unavailable = { until: Date.now() + ASSIGNMENTS_UNAVAILABLE_TTL_MS, error: result.error };
+          }
+          return result;
+        }).finally(() => { pending = undefined; });
+      }
+      const result = await pending;
+      if (!result.ok && current && current.expiry.getTime() > Date.now()) return ok(current.token);
+      return result;
+    },
+  };
 }
 
-/** Require the resource's own token, preserving auth, access and transient errors. */
-export async function requireAssignmentsTokenAsync(): Promise<Result<string, McpError>> {
-  const current = extractAssignmentsToken();
-  if (current && current.expiry.getTime() - Date.now() >= TOKEN_REFRESH_THRESHOLD_MS) {
-    return ok(current.token);
-  }
-  if (assignmentsUnavailable && Date.now() < assignmentsUnavailable.until) {
-    return current ? ok(current.token) : err(assignmentsUnavailable.error);
-  }
-  if (!assignmentsRefresh) {
-    assignmentsRefresh = refreshAssignmentsToken().then(result => {
-      if (!result.ok && result.error.code === ErrorCode.ACCESS_DENIED) {
-        assignmentsUnavailable = { until: Date.now() + ASSIGNMENTS_UNAVAILABLE_TTL_MS, error: result.error };
-      }
-      return result;
-    }).finally(() => { assignmentsRefresh = undefined; });
-  }
-  const result = await assignmentsRefresh;
-  if (!result.ok && current && current.expiry.getTime() > Date.now()) return ok(current.token);
-  return result;
+const assignmentsGuard = onDemandTokenGuard(extractAssignmentsToken, refreshAssignmentsToken);
+const graphGuard = onDemandTokenGuard(extractGraphToken, refreshGraphToken);
+
+/** Forget remembered refusals for optional resources; called on explicit login. */
+export function resetAssignmentsAvailability(): void {
+  assignmentsGuard.reset();
+  graphGuard.reset();
+}
+
+/** Require the EDU Assignments token, preserving auth, access and transient errors. */
+export function requireAssignmentsTokenAsync(): Promise<Result<string, McpError>> {
+  return assignmentsGuard.require();
+}
+
+/** Require a Microsoft Graph token (optional; used for file downloads). */
+export function requireGraphTokenAsync(): Promise<Result<string, McpError>> {
+  return graphGuard.require();
 }
 
 /**

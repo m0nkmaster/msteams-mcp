@@ -80,7 +80,8 @@ This is a test script for verifying all MCP tools work correctly before release.
 | Tool | Purpose |
 |------|---------|
 | `teams_list_assignments` | List your assignments across classes (active, completed or all) |
-| `teams_get_assignment` | Get one assignment's full detail and your submission |
+| `teams_get_assignment` | Get one assignment's full detail, attachments and your submission |
+| `teams_download_assignment_file` | Download an attachment's fileUrl to a local path |
 | `teams_submission_action` | Turn in, undo turn-in, or mark viewed on your own submission |
 
 ---
@@ -221,8 +222,11 @@ Quick reactions: `like` (👍), `heart` (❤️), `laugh` (😂), `surprised` (�
 1. teams_list_assignments → active work, earliest due first
 2. teams_list_assignments nextLink="..." → next page; statusFilter comes from the link
 3. teams_get_assignment classId="..." assignmentId="..." → full detail and your submission
-4. teams_submission_action action="view" classId="..." assignmentId="..." submissionId="..." → mark viewed
+4. teams_download_assignment_file fileUrl="<an attachment's fileUrl>" outputPath="/tmp/lesson.pptx" → saved file with size and SHA-256
+5. Repeat step 4 with the same outputPath → must fail (never overwrites)
+6. teams_submission_action action="view" classId="..." assignmentId="..." submissionId="..." → mark viewed
 ```
+Forms and links have a `url` but no `fileUrl`; they cannot be downloaded.
 Only confirm `submit`/`unsubmit` against a test assignment you own: they change your real submission.
 
 ### Assignments on a non-education account
@@ -240,7 +244,7 @@ Only confirm `submit`/`unsubmit` against a test assignment you own: they change 
 | Save message | Only works on root messages, not thread replies |
 | Unread on channels | May fail ACL check; works reliably for chats/meetings |
 | Token expiry | Tokens last ~1 hour; call `teams_login` to refresh |
-| Assignments | Education tenants only; failures never affect other tools. Submit/unsubmit not yet verified live |
+| Assignments | Education tenants only; failures never affect other tools. Submit/unsubmit change real schoolwork: re-submitting records a new hand-in date |
 
 ---
 

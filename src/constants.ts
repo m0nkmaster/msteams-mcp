@@ -56,6 +56,9 @@ export const MAX_CHANNEL_LIMIT = 50;
 /** Default HTTP request timeout. */
 export const HTTP_REQUEST_TIMEOUT_MS = 30000;
 
+/** Cancel a file download after this long without receiving any data. */
+export const DOWNLOAD_INACTIVITY_TIMEOUT_MS = 30000;
+
 /** Pause after showing progress overlay step (ms). */
 export const OVERLAY_STEP_PAUSE_MS = 1500;
 
@@ -167,8 +170,8 @@ export const MAX_FILES_PAGE_SIZE = 100;
 export const TOKEN_REFRESH_THRESHOLD_MS = 10 * 60 * 1000;
 
 /**
- * How long to remember that an account can't get an EDU Assignments token
- * (e.g. non-EDU tenant) before trying to mint one again.
+ * How long to remember that an account can't get an optional token (EDU
+ * Assignments, Microsoft Graph) before trying to mint one again.
  */
 export const ASSIGNMENTS_UNAVAILABLE_TTL_MS = 30 * 60 * 1000;
 
@@ -268,3 +271,6 @@ export const STANDARD_EMOJIS: readonly StandardEmoji[] = [
 
 /** OAuth audience of the Teams EDU Assignments service. */
 export const ASSIGNMENTS_APP_ID = '8f348934-64be-4bb2-bc16-c54c96789f43';
+
+/** Microsoft Graph token audiences: MSAL caches either the URL or the app ID. */
+export const GRAPH_AUDIENCES: readonly string[] = ['https://graph.microsoft.com', '00000003-0000-0000-c000-000000000000'];
