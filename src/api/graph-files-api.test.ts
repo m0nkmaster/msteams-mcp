@@ -9,7 +9,7 @@ import { requireGraphTokenAsync } from '../utils/auth-guards.js';
 import { invalidateAccessToken } from '../auth/token-extractor.js';
 import { ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
-import { downloadDriveItem } from './graph-files-api.js';
+import { downloadFile } from './graph-files-api.js';
 
 vi.mock('../utils/http.js', () => ({ httpRequest: vi.fn() }));
 vi.mock('../utils/auth-guards.js', () => ({ requireGraphTokenAsync: vi.fn() }));
@@ -43,12 +43,12 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe('downloadDriveItem', () => {
+describe('downloadFile', () => {
   it('streams the file to disk with owner-only permissions and reports its hash', async () => {
     mockHttp.mockResolvedValue(item());
     const out = join(dir, 'lesson.pptx');
 
-    const result = await downloadDriveItem(FILE_URL, out);
+    const result = await downloadFile(FILE_URL, out);
 
     expect(result).toEqual(ok({
       name: 'Lesson.pptx', outputPath: out, size: BYTES.length, contentType: 'application/octet-stream',
@@ -66,18 +66,50 @@ describe('downloadDriveItem', () => {
     expect((dlOpts as RequestInit).headers).toBeUndefined();
   });
 
+  it('resolves a SharePoint/OneDrive web URL through the Graph shares API', async () => {
+    mockHttp.mockResolvedValue(item());
+    const webUrl = 'https://school-my.sharepoint.com/personal/pupil/Documents/Microsoft Teams Chat Files/Essay.docx';
+    const out = join(dir, 'essay.docx');
+
+    expect(await downloadFile(webUrl, out)).toMatchObject({ ok: true, value: { size: BYTES.length } });
+
+    const metaUrl = new URL(mockHttp.mock.calls[0][0] as string);
+    // The SharePoint URL only ever travels to Graph, encoded as a share ID.
+    expect(metaUrl.origin).toBe('https://graph.microsoft.com');
+    expect(metaUrl.pathname).toBe(`/v1.0/shares/u!${Buffer.from(webUrl).toString('base64url')}/driveItem`);
+    expect(await readFile(out)).toEqual(BYTES);
+  });
+
+  it('accepts Doc.aspx viewer links, which Graph resolves to the underlying file', async () => {
+    mockHttp.mockResolvedValue(item());
+    const viewer = 'https://school.sharepoint.com/sites/Class/_layouts/15/Doc.aspx?sourcedoc=%7B1D%7D&file=L4.pptx&action=edit';
+    expect(await downloadFile(viewer, join(dir, 'l4.pptx'))).toMatchObject({ ok: true });
+    expect(mockHttp.mock.calls[0][0]).toContain(`/shares/u!${Buffer.from(viewer).toString('base64url')}/driveItem`);
+  });
+
+  it('reports an unresolvable SharePoint URL as not found', async () => {
+    mockHttp.mockResolvedValue(err(createError(ErrorCode.NOT_FOUND, 'HTTP 404')));
+    expect(await downloadFile('https://school.sharepoint.com/sites/x/gone.docx', join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.NOT_FOUND } });
+  });
+
   it.each([
     'https://evil.example/v1.0/drives/b!abc/items/01X',
     'https://graph.microsoft.com/v1.0/me/drive/items/01X',
     `${FILE_URL}?$select=x`,
     `${FILE_URL}/../../me`,
-  ])('rejects anything but a Graph drive-item URL before using the token: %s', async url => {
-    expect(await downloadDriveItem(url, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    'http://school.sharepoint.com/sites/x/file.docx',
+    'https://school.sharepoint.com.evil.example/file.docx',
+    'https://user:pass@school.sharepoint.com/file.docx',
+    'https://school.sharepoint.com:8443/file.docx',
+    'https://forms.office.com/Pages/ResponsePage.aspx?id=x',
+    'not a url',
+  ])('rejects anything but a Graph drive item or SharePoint URL before using the token: %s', async url => {
+    expect(await downloadFile(url, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
     expect(requireGraphTokenAsync).not.toHaveBeenCalled();
   });
 
   it('requires an absolute output path', async () => {
-    expect(await downloadDriveItem(FILE_URL, 'relative.pptx')).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    expect(await downloadFile(FILE_URL, 'relative.pptx')).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
     expect(requireGraphTokenAsync).not.toHaveBeenCalled();
   });
 
@@ -85,7 +117,7 @@ describe('downloadDriveItem', () => {
     mockHttp.mockResolvedValue(item());
     const out = join(dir, 'existing.pptx');
     await writeFile(out, 'keep me');
-    expect(await downloadDriveItem(FILE_URL, out)).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    expect(await downloadFile(FILE_URL, out)).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
     expect(await readFile(out, 'utf8')).toBe('keep me');
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -93,25 +125,25 @@ describe('downloadDriveItem', () => {
   it('respects an owner download block without creating a file', async () => {
     mockHttp.mockResolvedValue(item({ currentUserRole: { blocksDownload: true } }));
     const out = join(dir, 'blocked.pptx');
-    expect(await downloadDriveItem(FILE_URL, out)).toMatchObject({ ok: false, error: { code: ErrorCode.ACCESS_DENIED } });
+    expect(await downloadFile(FILE_URL, out)).toMatchObject({ ok: false, error: { code: ErrorCode.ACCESS_DENIED } });
     expect(existsSync(out)).toBe(false);
   });
 
   it.each(['https://evil.example/file', 'http://school.sharepoint.com/file', undefined])('refuses a non-SharePoint download link: %s', async link => {
     mockHttp.mockResolvedValue(item({ '@microsoft.graph.downloadUrl': link }));
-    expect(await downloadDriveItem(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR } });
+    expect(await downloadFile(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR } });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects folders', async () => {
     mockHttp.mockResolvedValue(item({ file: undefined }));
-    expect(await downloadDriveItem(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    expect(await downloadFile(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
   });
 
   it('removes a truncated download', async () => {
     mockHttp.mockResolvedValue(item({ size: BYTES.length + 10 }));
     const out = join(dir, 'short.pptx');
-    expect(await downloadDriveItem(FILE_URL, out)).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR } });
+    expect(await downloadFile(FILE_URL, out)).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR } });
     expect(existsSync(out)).toBe(false);
   });
 
@@ -121,25 +153,25 @@ describe('downloadDriveItem', () => {
       start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); controller.error(new Error('connection reset')); },
     })));
     const out = join(dir, 'broken.pptx');
-    expect(await downloadDriveItem(FILE_URL, out)).toMatchObject({ ok: false, error: { code: ErrorCode.NETWORK_ERROR } });
+    expect(await downloadFile(FILE_URL, out)).toMatchObject({ ok: false, error: { code: ErrorCode.NETWORK_ERROR } });
     expect(existsSync(out)).toBe(false);
   });
 
   it('discards a rejected Graph token without triggering Teams re-login', async () => {
     mockHttp.mockResolvedValue(err(createError(ErrorCode.AUTH_EXPIRED, 'HTTP 401')));
-    expect(await downloadDriveItem(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR, retryable: true } });
+    expect(await downloadFile(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR, retryable: true } });
     expect(invalidateAccessToken).toHaveBeenCalledWith('graph-token');
   });
 
   it('reports a 403 as access denied, not an auth error', async () => {
     mockHttp.mockResolvedValue(err(createError(ErrorCode.AUTH_REQUIRED, 'HTTP 403')));
-    expect(await downloadDriveItem(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.ACCESS_DENIED } });
+    expect(await downloadFile(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.ACCESS_DENIED } });
   });
 
   it('passes through an unavailable Graph token unchanged', async () => {
     const unavailable = err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED, 'Microsoft Graph could not be authorized'));
     vi.mocked(requireGraphTokenAsync).mockResolvedValue(unavailable);
-    expect(await downloadDriveItem(FILE_URL, join(dir, 'x'))).toEqual(unavailable);
+    expect(await downloadFile(FILE_URL, join(dir, 'x'))).toEqual(unavailable);
     expect(mockHttp).not.toHaveBeenCalled();
   });
 });

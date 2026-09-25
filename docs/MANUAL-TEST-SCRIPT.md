@@ -62,6 +62,7 @@ This is a test script for verifying all MCP tools work correctly before release.
 | Tool | Purpose |
 |------|---------|
 | `teams_get_shared_files` | Get files/links shared in a conversation (channels, chats, meetings) |
+| `teams_download_file` | Download a shared file's webUrl or an assignment attachment's fileUrl to a local path |
 
 ### Calendar & Meetings
 | Tool | Purpose |
@@ -81,7 +82,6 @@ This is a test script for verifying all MCP tools work correctly before release.
 |------|---------|
 | `teams_list_assignments` | List your assignments across classes (active, completed or all) |
 | `teams_get_assignment` | Get one assignment's full detail, attachments and your submission |
-| `teams_download_assignment_file` | Download an attachment's fileUrl to a local path |
 | `teams_submission_action` | Turn in, undo turn-in, or mark viewed on your own submission |
 
 ---
@@ -185,6 +185,8 @@ When reading channel messages with `teams_get_thread`:
 1. teams_get_favorites or teams_find_channel → get a conversationId
 2. teams_get_shared_files conversationId="..." → list files with names, URLs, sizes, who shared them
 3. Use skipToken from response to paginate if there are more files
+4. teams_download_file url="<a File item's webUrl>" outputPath="/tmp/file.docx" → saved file with size and SHA-256
+5. Repeat step 4 with the same outputPath → must fail (never overwrites)
 ```
 
 ### Search emails
@@ -222,7 +224,7 @@ Quick reactions: `like` (👍), `heart` (❤️), `laugh` (😂), `surprised` (�
 1. teams_list_assignments → active work, earliest due first
 2. teams_list_assignments nextLink="..." → next page; statusFilter comes from the link
 3. teams_get_assignment classId="..." assignmentId="..." → full detail and your submission
-4. teams_download_assignment_file fileUrl="<an attachment's fileUrl>" outputPath="/tmp/lesson.pptx" → saved file with size and SHA-256
+4. teams_download_file url="<an attachment's fileUrl>" outputPath="/tmp/lesson.pptx" → saved file with size and SHA-256
 5. Repeat step 4 with the same outputPath → must fail (never overwrites)
 6. teams_submission_action action="view" classId="..." assignmentId="..." submissionId="..." → mark viewed
 ```
