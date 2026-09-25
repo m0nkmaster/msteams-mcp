@@ -283,7 +283,7 @@ export async function listMyAssignments(
   const filter = buildStatusFilter(statusFilter);
   if (filter) params.set('$filter', filter);
   params.set('$top', String(top));
-  params.set('$orderby', statusFilter === 'active' ? 'dueDateTime asc,id asc' : 'dueDateTime desc,id asc');
+  params.set('$orderby', statusFilter === 'active' ? 'dueDateTime asc,createdDateTime asc' : 'dueDateTime desc,createdDateTime asc');
   params.set('$expand', 'submissions($expand=outcomes)');
   const url = options.nextLink ? validateNextLink(options.nextLink) : `${ASSIGNMENTS_API.myWork()}?${params.toString()}`;
   if (!url) return invalidInput('nextLink must be a continuation URL for the Assignments work endpoint');
@@ -343,21 +343,24 @@ export async function getAssignment(
   const tokenResult = await requireAssignmentsTokenAsync();
   if (!tokenResult.ok) return tokenResult;
 
-  const params = new URLSearchParams();
-  params.set('$expand', 'submissions($expand=outcomes)');
-
-  const url = `${ASSIGNMENTS_API.assignment(classId, assignmentId)}?${params.toString()}`;
-
-  const response = await httpRequest<RawAssignment>(url, {
-    method: 'GET',
-    headers: getAssignmentsHeaders(tokenResult.value),
-  });
+  // Expanding submissions on the assignment itself returns empty outcomes, so
+  // grades need the submissions collection, as the Teams client requests it.
+  const headers = getAssignmentsHeaders(tokenResult.value);
+  const submissionsParams = new URLSearchParams({ '$expand': 'outcomes' });
+  const [response, submissions] = await Promise.all([
+    httpRequest<RawAssignment>(ASSIGNMENTS_API.assignment(classId, assignmentId), { method: 'GET', headers }),
+    httpRequest<{ value?: RawSubmission[] }>(
+      `${ASSIGNMENTS_API.submissions(classId, assignmentId)}?${submissionsParams.toString()}`,
+      { method: 'GET', headers },
+    ),
+  ]);
 
   if (!response.ok) return handleAssignmentsError(response, tokenResult.value);
-  if (!response.value.data || typeof response.value.data.id !== 'string') {
+  if (!submissions.ok) return handleAssignmentsError(submissions, tokenResult.value);
+  if (!response.value.data || typeof response.value.data.id !== 'string' || !Array.isArray(submissions.value.data?.value)) {
     return err(createError(ErrorCode.API_ERROR, 'Invalid assignment detail response', { retryable: false }));
   }
-  return ok(parseAssignment(response.value.data));
+  return ok(parseAssignment({ ...response.value.data, submissions: submissions.value.data.value }));
 }
 
 /** The submission action to perform on the caller's own submission. */

@@ -233,6 +233,10 @@ export const ASSIGNMENTS_API = {
   assignment: (classId: string, assignmentId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
     `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}`,
 
+  /** Submissions visible to the caller (a student sees only their own). */
+  submissions: (classId: string, assignmentId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions`,
+
   /** Read one submission to verify an action. */
   submission: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
     `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}`,
