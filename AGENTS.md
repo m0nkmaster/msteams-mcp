@@ -110,13 +110,13 @@ All operations use direct API calls. A persistent browser profile (`~/.teams-mcp
 
 `teams_login` always tries headless SSO before showing a visible browser. Long-lived Microsoft session cookies (days/weeks) mean users rarely re-authenticate manually, even though MSAL tokens expire after ~1 hour.
 
-The server uses the system browser via Playwright's `launchPersistentContext()` (Edge on Windows, Chrome on macOS/Linux; ~180MB saved vs bundled Chromium). Only one process can use the profile at a time (Chromium lock); the token-refresh module uses a module-level flag to prevent concurrent access. If no system browser is found, the error suggests installing Chrome or running `npx playwright install chromium`.
+The server uses the system browser via Playwright's `launchPersistentContext()` (Edge on Windows, Chrome on macOS/Linux; ~180MB saved vs bundled Chromium). Only one process can use the profile at a time (Chromium lock); the token-refresh module serializes refreshes to prevent concurrent access and session-state overwrites. If no system browser is found, the error suggests installing Chrome or running `npx playwright install chromium`.
 
 ### Token refresh
 
 Refresh uses an HTTP-first strategy in `token-refresh-http.ts`:
 
-1. **HTTP (~1s)**: Extract the MSAL refresh token from session state and POST to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, chatsvcagg, and the EDU Assignments app `8f348934-…`). The Teams host client (`5e3ce6c0-…`) can mint the Assignments token directly — no Nested App Auth broker is needed even though the Assignments web app uses NAA in the browser. Exchange the Skype Spaces token for the `skypetoken_asm` cookie via `authsvc.teams.microsoft.com/v1.0/authz`. Write updated tokens back to session state in MSAL cache format so `token-extractor.ts` finds them. The `Origin: https://teams.microsoft.com` header is required (the Teams client ID is a SPA; without it Azure AD returns AADSTS9002327).
+1. **HTTP (~1s)**: Extract the MSAL refresh token from session state and POST to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, and chatsvcagg). Assignments tokens are acquired separately, on demand, so non-EDU users incur no extra OAuth call. The Teams host client (`5e3ce6c0-…`) can mint the Assignments token directly. After browser recovery, the Assignments OAuth exchange is retried; core refresh success alone does not establish Assignments access. Exchange the Skype Spaces token for the `skypetoken_asm` cookie via `authsvc.teams.microsoft.com/v1.0/authz`. Write updated tokens back to session state in MSAL cache format so `token-extractor.ts` finds them. The `Origin: https://teams.microsoft.com` header is required (the Teams client ID is a SPA; without it Azure AD returns AADSTS9002327).
 2. **Browser fallback (~8s)**: If HTTP fails (e.g. refresh token expired, Conditional Access), a headless browser uses the persistent profile's session cookies for silent SSO.
 
 Both are seamless (no window, no interaction). If both fail, the user must re-authenticate via `teams_login`. First login always needs a browser (no refresh token yet). Works identically for standard MS login and corporate SSO (ADFS/Okta federation). Test with `npm run cli -- login`.
@@ -251,7 +251,7 @@ Conversation ID patterns: channels `19:xxx@thread.tacv2`; meetings `19:meeting_x
 ### Known limitations
 
 - **Presence/status**: real-time via WebSocket, not available over HTTP.
-- **Assignments**: EDU-tenant feature only (education tenants that use Teams Assignments). The list/get reads and the submission "view" action are verified against a captured web session; the submission `submit`/`unsubmit` actions follow Microsoft Graph education parity on the same path shape and act on the user's real account.
+- **Assignments**: EDU-tenant feature only (education tenants that use Teams Assignments). The list/get reads and the submission "view" action are verified against a captured web session; the submission `submit`/`unsubmit` actions follow Microsoft Graph education parity on the same path shape and act on the user's real account. They are not replayed by HTTP retries and only report success after reading back the expected submission state. Live submit/unsubmit verification remains outstanding.
 
 ## Dependencies
 

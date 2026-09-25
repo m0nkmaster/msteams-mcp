@@ -231,23 +231,23 @@ export const ASSIGNMENTS_API = {
 
   /** A single assignment's full detail within a class. */
   assignment: (classId: string, assignmentId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
-    `${baseUrl}/api/v1.0/edu/classes/${classId}/assignments/${assignmentId}`,
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}`,
 
-  /** Submissions for an assignment (a student sees only their own). */
-  submissions: (classId: string, assignmentId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
-    `${baseUrl}/api/v1.0/edu/classes/${classId}/assignments/${assignmentId}/submissions`,
+  /** Read one submission to verify an action. */
+  submission: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}`,
 
   /** Mark a submission as viewed by the student (PATCH). */
   submissionView: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
-    `${baseUrl}/api/v1.0/edu/classes/${classId}/assignments/${assignmentId}/submissions/${submissionId}/view`,
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/view`,
 
   /** Turn in (submit) a submission (POST). */
   submissionSubmit: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
-    `${baseUrl}/api/v1.0/edu/classes/${classId}/assignments/${assignmentId}/submissions/${submissionId}/submit`,
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/submit`,
 
   /** Undo turn-in (unsubmit) a submission (POST). */
   submissionUnsubmit: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
-    `${baseUrl}/api/v1.0/edu/classes/${classId}/assignments/${assignmentId}/submissions/${submissionId}/unsubmit`,
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/unsubmit`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

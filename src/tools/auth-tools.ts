@@ -23,6 +23,7 @@ import {
 } from '../auth/token-extractor.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import * as log from '../utils/logger.js';
+import { resetAssignmentsAvailability } from '../utils/auth-guards.js';
 import { ensureAuthenticated, forceNewLogin, getAuthStatus } from '../browser/auth.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,6 +72,9 @@ async function handleLogin(
   input: z.infer<typeof LoginInputSchema>,
   ctx: ToolContext
 ): Promise<ToolResult> {
+  // A fresh login may have changed what the account can access (e.g. new consent)
+  resetAssignmentsAvailability();
+
   // Close existing browser if any
   const existingManager = ctx.server.getBrowserManager();
   if (existingManager) {

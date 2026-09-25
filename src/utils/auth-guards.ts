@@ -9,7 +9,6 @@ import { ErrorCode, createError, type McpError } from '../types/errors.js';
 import { type Result, err, ok } from '../types/result.js';
 import {
   getValidSubstrateToken,
-  getValidAssignmentsToken,
   extractMessageAuth,
   extractCsaToken,
   extractSubstrateToken,
@@ -21,8 +20,8 @@ import {
   type MessageAuthInfo,
   type RegionConfig,
 } from '../auth/token-extractor.js';
-import { TOKEN_REFRESH_THRESHOLD_MS } from '../constants.js';
-import { refreshTokensViaBrowser } from '../auth/token-refresh.js';
+import { TOKEN_REFRESH_THRESHOLD_MS, ASSIGNMENTS_UNAVAILABLE_TTL_MS } from '../constants.js';
+import { refreshTokensViaBrowser, refreshAssignmentsToken } from '../auth/token-refresh.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error Messages
@@ -94,48 +93,34 @@ export async function requireSubstrateTokenAsync(): Promise<Result<string, McpEr
   return ok(token);
 }
 
-/**
- * Checks if the Assignments token needs refresh (expired or approaching expiry).
- */
-function shouldRefreshAssignmentsToken(): boolean {
-  const assignments = extractAssignmentsToken();
-  if (!assignments) return true;
+/** Briefly remember definitive access refusals; reset on explicit login. */
+let assignmentsUnavailable: { until: number; error: McpError } | undefined;
+let assignmentsRefresh: Promise<Result<string>> | undefined;
 
-  const timeRemaining = assignments.expiry.getTime() - Date.now();
-  return timeRemaining < TOKEN_REFRESH_THRESHOLD_MS;
+export function resetAssignmentsAvailability(): void {
+  assignmentsUnavailable = undefined;
 }
 
-/**
- * Requires a valid EDU Assignments token with proactive refresh.
- *
- * Mirrors `requireSubstrateTokenAsync`: refreshes tokens if the Assignments
- * token is missing or approaching expiry, then returns the current token. On a
- * fresh session the token is absent until the first refresh mints it, so a
- * missing token returning AUTH_REQUIRED/AUTH_EXPIRED lets the server's
- * auto-login retry populate it. Use in Assignments API functions.
- */
+/** Require the resource's own token, preserving auth, access and transient errors. */
 export async function requireAssignmentsTokenAsync(): Promise<Result<string, McpError>> {
-  if (shouldRefreshAssignmentsToken()) {
-    const refreshResult = await refreshTokensViaBrowser();
-    if (refreshResult.ok) {
-      const token = getValidAssignmentsToken();
-      if (token) {
-        return ok(token);
+  const current = extractAssignmentsToken();
+  if (current && current.expiry.getTime() - Date.now() >= TOKEN_REFRESH_THRESHOLD_MS) {
+    return ok(current.token);
+  }
+  if (assignmentsUnavailable && Date.now() < assignmentsUnavailable.until) {
+    return current ? ok(current.token) : err(assignmentsUnavailable.error);
+  }
+  if (!assignmentsRefresh) {
+    assignmentsRefresh = refreshAssignmentsToken().then(result => {
+      if (!result.ok && result.error.code === ErrorCode.ACCESS_DENIED) {
+        assignmentsUnavailable = { until: Date.now() + ASSIGNMENTS_UNAVAILABLE_TTL_MS, error: result.error };
       }
-    }
-    // Refresh failed or did not yield a token — fall through to the error below.
+      return result;
+    }).finally(() => { assignmentsRefresh = undefined; });
   }
-
-  const token = getValidAssignmentsToken();
-  if (!token) {
-    return err(createError(
-      ErrorCode.AUTH_REQUIRED,
-      'ACTION REQUIRED: No valid EDU Assignments token. You MUST call teams_login to authenticate before retrying.',
-      { suggestions: ['Call teams_login to authenticate'] }
-    ));
-  }
-
-  return ok(token);
+  const result = await assignmentsRefresh;
+  if (!result.ok && current && current.expiry.getTime() > Date.now()) return ok(current.token);
+  return result;
 }
 
 /**

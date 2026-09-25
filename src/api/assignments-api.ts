@@ -15,9 +15,51 @@
  */
 
 import { httpRequest } from '../utils/http.js';
-import { type Result, ok } from '../types/result.js';
-import { requireAssignmentsTokenAsync, handleSubstrateError } from '../utils/auth-guards.js';
+import { type Result, ok, err } from '../types/result.js';
+import { requireAssignmentsTokenAsync } from '../utils/auth-guards.js';
 import { ASSIGNMENTS_API, getAssignmentsHeaders } from '../utils/api-config.js';
+import { ErrorCode, createError } from '../types/errors.js';
+import { invalidateAssignmentsToken } from '../auth/token-extractor.js';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants.js';
+
+/** IDs are opaque single path segments; reject dot segments and URL delimiters. */
+export const ASSIGNMENT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+function validIds(...ids: string[]): boolean {
+  return ids.every(id => ASSIGNMENT_ID_PATTERN.test(id));
+}
+
+function invalidInput(message: string) {
+  return err(createError(ErrorCode.INVALID_INPUT, message));
+}
+
+function handleAssignmentsError<T>(response: Result<T>, token: string): Result<T> {
+  if (!response.ok && response.error.code === ErrorCode.AUTH_EXPIRED) {
+    invalidateAssignmentsToken(token);
+  }
+  if (!response.ok && response.error.code === ErrorCode.AUTH_REQUIRED) {
+    return err(createError(ErrorCode.ACCESS_DENIED, response.error.message, {
+      retryable: false,
+      suggestions: ['Check your permission to access this assignment'],
+    }));
+  }
+  return response;
+}
+
+/** Never send the bearer token to a host or endpoint supplied by a continuation link. */
+function validateNextLink(link: string, base?: string): string | null {
+  try {
+    const url = new URL(link, base);
+    const allowed = new URL(ASSIGNMENTS_API.myWork());
+    if (url.origin !== allowed.origin || url.pathname !== allowed.pathname || url.username || url.password || url.hash) return null;
+    const top = Number(url.searchParams.get('$top') ?? DEFAULT_PAGE_SIZE);
+    const skip = Number(url.searchParams.get('$skip') ?? 0);
+    if (!Number.isInteger(top) || top < 1 || top > MAX_PAGE_SIZE || !Number.isSafeInteger(skip) || skip < 0) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -74,6 +116,8 @@ export interface ListAssignmentsResult {
   statusFilter: AssignmentStatusFilter;
   returned: number;
   assignments: Assignment[];
+  /** Follow this link for the next page. A full page may require an empty final fetch. */
+  nextLink?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,6 +156,7 @@ interface RawAssignment {
 }
 
 interface RawListResponse {
+  '@odata.nextLink'?: string;
   value?: RawAssignment[];
 }
 
@@ -199,36 +244,51 @@ function buildStatusFilter(filter: AssignmentStatusFilter): string | null {
  * @param options.top - max assignments to return (default 25).
  */
 export async function listMyAssignments(
-  options: { statusFilter?: AssignmentStatusFilter; top?: number } = {}
+  options: { statusFilter?: AssignmentStatusFilter; top?: number; nextLink?: string } = {}
 ): Promise<Result<ListAssignmentsResult>> {
-  const tokenResult = await requireAssignmentsTokenAsync();
-  if (!tokenResult.ok) return tokenResult;
-
   const statusFilter = options.statusFilter ?? 'active';
-  const top = options.top ?? 25;
-
+  const top = options.top ?? DEFAULT_PAGE_SIZE;
+  if (!Number.isInteger(top) || top < 1 || top > MAX_PAGE_SIZE) {
+    return invalidInput(`top must be an integer from 1 to ${MAX_PAGE_SIZE}`);
+  }
   const params = new URLSearchParams();
   const filter = buildStatusFilter(statusFilter);
   if (filter) params.set('$filter', filter);
   params.set('$top', String(top));
-  params.set('$orderby', 'dueDateTime desc');
+  params.set('$orderby', statusFilter === 'active' ? 'dueDateTime asc,id asc' : 'dueDateTime desc,id asc');
   params.set('$expand', 'submissions($expand=outcomes)');
-
-  const url = `${ASSIGNMENTS_API.myWork()}?${params.toString()}`;
+  const url = options.nextLink ? validateNextLink(options.nextLink) : `${ASSIGNMENTS_API.myWork()}?${params.toString()}`;
+  if (!url) return invalidInput('nextLink must be a continuation URL for the Assignments work endpoint');
+  const tokenResult = await requireAssignmentsTokenAsync();
+  if (!tokenResult.ok) return tokenResult;
 
   const response = await httpRequest<RawListResponse>(url, {
     method: 'GET',
     headers: getAssignmentsHeaders(tokenResult.value),
   });
 
-  if (!response.ok) return handleSubstrateError(response);
+  if (!response.ok) return handleAssignmentsError(response, tokenResult.value);
 
-  const items = response.value.data.value ?? [];
-  return ok({
-    statusFilter,
-    returned: items.length,
-    assignments: items.map(parseAssignment),
-  });
+  const data = response.value.data;
+  if (!data || !Array.isArray(data.value)) {
+    return err(createError(ErrorCode.API_ERROR, 'Invalid Assignments list response', { retryable: false }));
+  }
+  const items = data.value;
+  let nextLink = data['@odata.nextLink'];
+  if (nextLink) {
+    nextLink = validateNextLink(nextLink, url) ?? undefined;
+    if (!nextLink) return err(createError(ErrorCode.API_ERROR, 'Invalid Assignments continuation URL', { retryable: false }));
+  } else {
+    // Some responses omit nextLink when $top was used. Expose an offset page
+    // rather than silently cutting off all older work at the tool's size cap.
+    const next = new URL(url);
+    const pageSize = Number(next.searchParams.get('$top') ?? top);
+    if (!next.searchParams.has('$skiptoken') && items.length > 0 && items.length >= pageSize) {
+      next.searchParams.set('$skip', String(Number(next.searchParams.get('$skip') ?? 0) + items.length));
+      nextLink = next.toString();
+    }
+  }
+  return ok({ statusFilter, returned: items.length, assignments: items.map(parseAssignment), nextLink });
 }
 
 /**
@@ -241,6 +301,7 @@ export async function getAssignment(
   classId: string,
   assignmentId: string
 ): Promise<Result<Assignment>> {
+  if (!validIds(classId, assignmentId)) return invalidInput('Invalid classId or assignmentId');
   const tokenResult = await requireAssignmentsTokenAsync();
   if (!tokenResult.ok) return tokenResult;
 
@@ -254,7 +315,10 @@ export async function getAssignment(
     headers: getAssignmentsHeaders(tokenResult.value),
   });
 
-  if (!response.ok) return handleSubstrateError(response);
+  if (!response.ok) return handleAssignmentsError(response, tokenResult.value);
+  if (!response.value.data || typeof response.value.data.id !== 'string') {
+    return err(createError(ErrorCode.API_ERROR, 'Invalid assignment detail response', { retryable: false }));
+  }
   return ok(parseAssignment(response.value.data));
 }
 
@@ -275,6 +339,7 @@ export async function actOnSubmission(
   assignmentId: string,
   submissionId: string
 ): Promise<Result<{ action: SubmissionAction; submissionId: string; status?: string }>> {
+  if (!validIds(classId, assignmentId, submissionId)) return invalidInput('Invalid assignment or submission ID');
   const tokenResult = await requireAssignmentsTokenAsync();
   if (!tokenResult.ok) return tokenResult;
 
@@ -298,13 +363,34 @@ export async function actOnSubmission(
   const response = await httpRequest<RawSubmission>(url, {
     method,
     headers: getAssignmentsHeaders(tokenResult.value),
-    // Submission actions take no body; PATCH view returns the updated submission.
+    // Do not replay a mutation after a timeout or server error.
+    maxRetries: 1,
+    // Graph parity specifies no request body; do not guess a private API payload.
   });
 
-  if (!response.ok) return handleSubstrateError(response);
-  return ok({
-    action,
-    submissionId,
-    status: response.value.data?.status,
-  });
+  if (!response.ok) {
+    if (response.error.retryable && response.error.code !== ErrorCode.RATE_LIMITED) {
+      return err({ ...response.error, retryable: false,
+        suggestions: ['The action may have completed. Read the submission state before repeating it'] });
+    }
+    return handleAssignmentsError(response, tokenResult.value);
+  }
+  let status = response.value.data?.status;
+  if (action !== 'view') {
+    const verification = await httpRequest<RawSubmission>(
+      ASSIGNMENTS_API.submission(classId, assignmentId, submissionId),
+      { method: 'GET', headers: getAssignmentsHeaders(tokenResult.value) },
+    );
+    if (!verification.ok) handleAssignmentsError(verification, tokenResult.value);
+    status = verification.ok ? verification.value.data?.status : undefined;
+    const expected = action === 'submit' ? 'submitted' : 'working';
+    if (!verification.ok || verification.value.data?.id !== submissionId || status !== expected) {
+      return err(createError(ErrorCode.API_ERROR,
+        `The ${action} request was accepted, but submission state could not be confirmed as ${expected}. Check the submission before repeating the action.`,
+        { retryable: false, suggestions: ['Read the assignment to check the current submission state; do not automatically repeat the action'] }));
+    }
+  } else if (response.value.status !== 204 && (typeof status !== 'string' || response.value.data?.id !== submissionId)) {
+    return err(createError(ErrorCode.API_ERROR, 'The view request returned an unexpected response; its result is unconfirmed.', { retryable: false }));
+  }
+  return ok({ action, submissionId, status });
 }

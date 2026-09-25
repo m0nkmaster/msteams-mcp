@@ -21,6 +21,7 @@
  * 6. Write updated session state back to encrypted storage
  */
 
+import { ASSIGNMENTS_APP_ID } from '../constants.js';
 import {
   readSessionState,
   writeSessionState,
@@ -117,12 +118,11 @@ const TOKEN_ENDPOINT = 'https://login.microsoftonline.com/{tenantId}/oauth2/v2.0
 /** Teams authsvc endpoint for skype token exchange. */
 const AUTHSVC_ENDPOINT = 'https://authsvc.teams.microsoft.com/v1.0/authz';
 
-/**
- * Scopes to refresh. Each entry maps a resource identifier to the scopes
- * we request. The resource identifier is used to match existing MSAL cache
- * entries so we can update them in-place.
- */
-const REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string; optional?: boolean }> = [
+/** Resource key used by the on-demand Assignments refresh. */
+const ASSIGNMENTS_RESOURCE = 'EduAssignments';
+
+/** Core scopes are refreshed together; Assignments is requested only on demand. */
+const REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string; onDemand?: boolean }> = [
   {
     /** Substrate search/people APIs. */
     resource: 'substrate.office.com',
@@ -141,16 +141,13 @@ const REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string; optional
   {
     /**
      * EDU Assignments API (assignments.edu.cloud.microsoft, backed by OneNote EDU).
-     * The resource is identified by its app GUID; the granted scopes come back as
-     * bare permission names (EduAssignments.Read/ReadWrite, EduCurricula.Read), so
-     * `resource` here is the substring we match against those granted scopes to find
-     * and update the cached entry — not the value we request. `scopes` is what we
-     * actually request. See `extractAssignmentsToken()` in token-extractor.ts.
+     * Use the app GUID to request a token. Cache selection checks the audience,
+     * since Graph grants similarly named EduAssignments permissions.
      */
-    resource: 'EduAssignments',
-    scopes: '8f348934-64be-4bb2-bc16-c54c96789f43/.default offline_access',
+    resource: ASSIGNMENTS_RESOURCE,
+    scopes: `${ASSIGNMENTS_APP_ID}/.default offline_access`,
     // EDU access may be unavailable even when the core Teams session is valid.
-    optional: true,
+    onDemand: true,
   },
 ];
 
@@ -296,6 +293,16 @@ async function refreshAccessToken(
         errorDetail = `HTTP ${response.status}: ${errorText.substring(0, 200)}`;
       }
 
+      // Consent/resource refusals are not an expired Teams login. Do not classify
+      // all HTTP 400s this way: invalid_grant may require renewed SSO or MFA.
+      if (scopes.startsWith(ASSIGNMENTS_APP_ID) && /AADSTS(?:65001|65004|500011|700016)\b/.test(errorDetail)) {
+        return err(createError(ErrorCode.ACCESS_DENIED,
+          `Assignments access was refused: ${errorDetail}`, {
+            retryable: false,
+            suggestions: ['Check Assignments availability and required consent with your tenant administrator'],
+          }));
+      }
+
       // Specific error codes that indicate the refresh token is invalid/expired
       const isAuthError = response.status === 400 || response.status === 401;
 
@@ -413,7 +420,10 @@ function findAccessTokenKey(
     try {
       const entry = JSON.parse(item.value);
       if (entry.credentialType !== 'AccessToken') continue;
-      if (!entry.target?.includes(resource)) continue;
+      if (resource === ASSIGNMENTS_RESOURCE) {
+        const payload = JSON.parse(Buffer.from(entry.secret.split('.')[1], 'base64url').toString());
+        if (payload.aud !== ASSIGNMENTS_APP_ID) continue;
+      } else if (!entry.target?.includes(resource)) continue;
       return { key: item.name, entry: entry as MsalAccessToken };
     } catch {
       continue;
@@ -450,6 +460,11 @@ function updateAccessTokenInCache(
   cacheInfo: MsalCacheInfo,
 ): boolean {
   const existing = findAccessTokenKey(localStorage, resource);
+  // Qualify Assignments scopes when creating a key: Graph can return the same
+  // bare permission names for the same account/client, but a different audience.
+  const target = resource === ASSIGNMENTS_RESOURCE
+    ? tokenResponse.scope.split(/\s+/).filter(Boolean).map(scope => scope.includes('/') ? scope : `${ASSIGNMENTS_APP_ID}/${scope}`).join(' ')
+    : tokenResponse.scope;
   if (!existing) {
     // No existing entry for this resource — create one
     // Build the key in MSAL format: {homeAccountId}-{environment}-accesstoken-{clientId}-{realm}-{target}
@@ -460,7 +475,7 @@ function updateAccessTokenInCache(
       environment: cacheInfo.environment,
       clientId: cacheInfo.clientId,
       realm: cacheInfo.tenantId,
-      target: tokenResponse.scope,
+      target,
       tokenType: tokenResponse.token_type || 'Bearer',
       secret: tokenResponse.access_token,
       expiresOn: String(now + tokenResponse.expires_in),
@@ -469,7 +484,7 @@ function updateAccessTokenInCache(
     };
 
     // Build key in MSAL format
-    const scopeKey = tokenResponse.scope.toLowerCase();
+    const scopeKey = target.toLowerCase();
     const key = `${cacheInfo.homeAccountId}-${cacheInfo.environment}-accesstoken-${cacheInfo.clientId}-${cacheInfo.tenantId}-${scopeKey}`;
     updateLocalStorageEntry(localStorage, key, JSON.stringify(newEntry));
     return true;
@@ -487,7 +502,7 @@ function updateAccessTokenInCache(
 
   // If the response includes new scopes, update target
   if (tokenResponse.scope) {
-    updated.target = tokenResponse.scope;
+    updated.target = target;
   }
 
   updateLocalStorageEntry(localStorage, existing.key, JSON.stringify(updated));
@@ -607,7 +622,7 @@ function updateAuthTokenCookie(
  * Falls back to browser-based refresh if this fails (e.g., refresh token
  * expired, Conditional Access policy requires interactive auth).
  */
-export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>> {
+export async function refreshTokensViaHttp(resource: 'core' | 'assignments' = 'core'): Promise<Result<HttpRefreshResult>> {
   // Read current session state
   const state = readSessionState();
   if (!state) {
@@ -667,8 +682,8 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
   // Use the current refresh token; it may be rotated by Azure AD
   let currentRefreshToken = cacheInfo.refreshToken;
 
-  // Refresh each scope
-  for (const scope of REFRESH_SCOPES) {
+  const scopes = REFRESH_SCOPES.filter(scope => resource === 'assignments' ? scope.onDemand : !scope.onDemand);
+  for (const scope of scopes) {
     const result = await refreshAccessToken(
       cacheInfo.tenantId,
       cacheInfo.clientId,
@@ -677,16 +692,10 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
     );
 
     if (!result.ok) {
-      // Core auth failures still require browser fallback. An optional resource
-      // may reject consent/access independently; preserve the successful tokens.
-      if (result.error.code === ErrorCode.AUTH_EXPIRED && !scope.optional) {
-        return err(createError(
-          ErrorCode.AUTH_EXPIRED,
-          `HTTP token refresh failed for ${scope.resource}: ${result.error.message}. Browser login required.`,
-          { suggestions: ['Call teams_login to re-authenticate via browser'] }
-        ));
-      }
-      // Log optional-resource failures and other errors, then continue.
+      // A resource-specific caller needs the actual failure, not core success.
+      if (resource === 'assignments') return result;
+      if (result.error.code === ErrorCode.AUTH_EXPIRED) return result;
+      // A transient core resource failure must not discard other refreshed tokens.
       log.warn('token-refresh-http', `Failed to refresh ${scope.resource}: ${result.error.message}`);
       scopeErrors.push(`${scope.resource}: ${result.error.message}`);
       continue;
@@ -719,7 +728,7 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
   if (tokensRefreshed === 0) {
     return err(createError(
       ErrorCode.UNKNOWN,
-      `HTTP token refresh failed: ${scopeErrors.length} of ${REFRESH_SCOPES.length} scopes failed. ${scopeErrors.join('; ')}`,
+      `HTTP token refresh failed: ${scopeErrors.length} of ${scopes.length} scopes failed. ${scopeErrors.join('; ')}`,
       { retryable: true }
     ));
   }
@@ -751,7 +760,7 @@ export async function refreshTokensViaHttp(): Promise<Result<HttpRefreshResult>>
   writeSessionState(state);
 
   // Clear the in-memory token cache so it re-reads from the updated session
-  clearTokenCache();
+  if (resource === 'core') clearTokenCache();
 
   return ok({
     tokensRefreshed,

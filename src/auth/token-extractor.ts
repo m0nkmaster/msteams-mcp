@@ -8,6 +8,7 @@
 
 import {
   readSessionState,
+  writeSessionState,
   readTokenCache,
   writeTokenCache,
   clearTokenCache,
@@ -16,7 +17,7 @@ import {
   type TokenCache,
 } from './session-store.js';
 import { parseJwtProfile, type UserProfile } from '../utils/parsers.js';
-import { MRI_TYPE_PREFIX, ORGID_PREFIX, MRI_ORGID_PREFIX, MAX_DEBUG_CONFIG_VALUE_LENGTH } from '../constants.js';
+import { MRI_TYPE_PREFIX, ORGID_PREFIX, MRI_ORGID_PREFIX, MAX_DEBUG_CONFIG_VALUE_LENGTH, ASSIGNMENTS_APP_ID } from '../constants.js';
 
 // ============================================================================
 // JWT Utilities
@@ -226,12 +227,9 @@ export function getSubstrateTokenStatus(): {
  * Extracts the EDU Assignments API token from session state.
  *
  * This token authenticates calls to `assignments.edu.cloud.microsoft`. It is
- * minted by the HTTP token refresh (see the `EduAssignments` entry in
- * `token-refresh-http.ts`) and stored in the MSAL cache in localStorage. The
- * granted scopes come back as bare permission names, so we match the MSAL
- * `target` on `EduAssignments` (the read/readwrite permissions). The audience
- * is the Assignments app GUID `8f348934-...`, which we also accept as a match
- * in case a future token stores the resource GUID in its target.
+ * minted on demand by HTTP token refresh and stored in the MSAL cache.
+ * Select AccessToken entries by the JWT audience, since Microsoft Graph uses
+ * the same EduAssignments permission names for a different resource.
  */
 export function extractAssignmentsToken(state?: SessionState): SubstrateTokenInfo | null {
   return withLocalStorage(state, (localStorage) => {
@@ -241,13 +239,9 @@ export function extractAssignmentsToken(state?: SessionState): SubstrateTokenInf
       try {
         const entry = JSON.parse(item.value);
 
-        const target = entry.target as string | undefined;
-        if (!target) continue;
-        if (!target.includes('EduAssignments') && !target.includes('8f348934-64be-4bb2-bc16-c54c96789f43')) {
-          continue;
-        }
-
+        if (entry.credentialType !== 'AccessToken') continue;
         if (!isJwtToken(entry.secret)) continue;
+        if (decodeJwtPayload(entry.secret)?.aud !== ASSIGNMENTS_APP_ID) continue;
 
         const expiry = getJwtExpiry(entry.secret);
         if (!expiry) continue;
@@ -266,12 +260,28 @@ export function extractAssignmentsToken(state?: SessionState): SubstrateTokenInf
   });
 }
 
+/** Remove only the rejected credential; leave other API tokens untouched. */
+export function invalidateAssignmentsToken(token: string): void {
+  const state = readSessionState();
+  if (!state) return;
+  const origin = getTeamsOrigin(state);
+  if (!origin) return;
+  origin.localStorage = origin.localStorage.filter(item => {
+    try {
+      return JSON.parse(item.value).secret !== token;
+    } catch {
+      return true;
+    }
+  });
+  writeSessionState(state);
+}
+
 /**
  * Gets a valid EDU Assignments token by extracting it from the session.
  *
  * Unlike the Substrate token there is no dedicated on-disk cache entry for it;
- * extraction from localStorage is cheap and the token is refreshed alongside the
- * others by `refreshTokensViaHttp()`. Returns null if no unexpired token exists
+ * extraction from localStorage is cheap and the token is refreshed on demand by
+ * `refreshTokensViaHttp('assignments')`. Returns null if no unexpired token exists
  * (callers surface AUTH_REQUIRED, which triggers the server's auto-login retry).
  */
 export function getValidAssignmentsToken(): string | null {

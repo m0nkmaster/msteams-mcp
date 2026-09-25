@@ -210,7 +210,7 @@ describe('refreshTokensViaHttp', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.tokensRefreshed).toBe(4);
+      expect(result.value.tokensRefreshed).toBe(3);
       expect(result.value.skypeTokenRefreshed).toBe(true);
       expect(result.value.refreshTokenRotated).toBe(true);
     }
@@ -221,8 +221,8 @@ describe('refreshTokensViaHttp', () => {
     // Verify token cache was cleared
     expect(clearTokenCache).toHaveBeenCalledOnce();
 
-    // Verify fetch was called 5 times (4 token refreshes + 1 skype exchange)
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(5);
+    // Verify fetch was called 4 times (3 token refreshes + 1 skype exchange)
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(4);
   });
 
   it('updates skypetoken_asm cookies in session state', async () => {
@@ -281,7 +281,7 @@ describe('refreshTokensViaHttp', () => {
     }
   });
 
-  it.each([400, 401])('preserves core tokens when Assignments refresh returns HTTP %s', async (status) => {
+  it.each([400, 401])('core refresh never requests Assignments even when it would fail with HTTP %s', async (status) => {
     const state = makeMockSessionState();
     vi.mocked(readSessionState).mockReturnValue(state);
     vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
@@ -312,6 +312,7 @@ describe('refreshTokensViaHttp', () => {
       skypeTokenRefreshed: true,
       refreshTokenRotated: true,
     } });
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => String(init?.body).includes('8f348934'))).toBe(false);
     expect(writeSessionState).toHaveBeenCalledOnce();
     const saved = vi.mocked(writeSessionState).mock.calls[0][0];
     const entries = saved.origins[0].localStorage.map(item => JSON.parse(item.value));
@@ -358,8 +359,8 @@ describe('refreshTokensViaHttp', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      // 3 of 4 scopes succeeded (first one failed with network error)
-      expect(result.value.tokensRefreshed).toBe(3);
+      // 2 of 3 scopes succeeded (first one failed with network error)
+      expect(result.value.tokensRefreshed).toBe(2);
     }
   });
 
@@ -386,7 +387,7 @@ describe('refreshTokensViaHttp', () => {
     // Should still succeed — skype token failure is non-fatal
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.tokensRefreshed).toBe(4);
+      expect(result.value.tokensRefreshed).toBe(3);
       expect(result.value.skypeTokenRefreshed).toBe(false);
     }
   });
@@ -480,4 +481,40 @@ describe('refreshTokensViaHttp', () => {
     const parsed = JSON.parse(rtEntry!.value);
     expect(parsed.secret).toBe('rotated-refresh-token');
   });
+  it.each([
+    ['AADSTS65001: Consent required.', 'ACCESS_DENIED'],
+    ['AADSTS500011: Resource principal missing.', 'ACCESS_DENIED'],
+    ['AADSTS700082: Refresh token expired.', 'AUTH_EXPIRED'],
+    ['AADSTS50076: MFA required.', 'AUTH_EXPIRED'],
+  ])('keeps Assignments refusal distinct from expired auth: %s', async (description, code) => {
+    const state = makeMockSessionState();
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ error_description: description }), { status: 400 }));
+    expect(await refreshTokensViaHttp('assignments')).toMatchObject({ ok: false, error: { code } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(writeSessionState).not.toHaveBeenCalled();
+  });
+
+  it('refreshes only Assignments and preserves Graph credentials with the same scopes', async () => {
+    const state = makeMockSessionState();
+    const graphEntry = makeAccessTokenEntry('graph', 'EduAssignments.ReadWrite');
+    state.origins[0].localStorage.push(graphEntry);
+    graphEntry.value = JSON.stringify({ ...JSON.parse(graphEntry.value), secret: `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ aud: '00000003-0000-0000-c000-000000000000' })).toString('base64url')}.sig` });
+    const originalGraph = graphEntry.value;
+    const accessToken = `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ aud: '8f348934-64be-4bb2-bc16-c54c96789f43', exp: Date.now() / 1000 + 3600 })).toString('base64url')}.sig`;
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
+      ...makeTokenResponse('EduAssignments.ReadWrite'), access_token: accessToken,
+    }), { status: 200 }));
+    expect(await refreshTokensViaHttp('assignments')).toMatchObject({ ok: true, value: { tokensRefreshed: 1, skypeTokenRefreshed: false } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(graphEntry.value).toBe(originalGraph);
+    const saved = vi.mocked(writeSessionState).mock.calls[0][0];
+    expect(saved.origins[0].localStorage.some(item => JSON.parse(item.value).secret === accessToken)).toBe(true);
+    expect(saved.cookies[0].value).toBe('old-skype-token');
+    expect(clearTokenCache).not.toHaveBeenCalled();
+  });
+
 });

@@ -12,9 +12,12 @@ import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import {
   listMyAssignments,
+  ASSIGNMENT_ID_PATTERN,
   getAssignment,
   actOnSubmission,
 } from '../api/assignments-api.js';
+
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -22,19 +25,20 @@ import {
 
 export const ListAssignmentsInputSchema = z.object({
   statusFilter: z.enum(['active', 'completed', 'all']).optional().default('active'),
-  top: z.number().min(1).max(100).optional().default(25),
+  nextLink: z.string().url().optional(),
+  top: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().default(DEFAULT_PAGE_SIZE),
 });
 
 export const GetAssignmentInputSchema = z.object({
-  classId: z.string().min(1),
-  assignmentId: z.string().min(1),
+  classId: z.string().regex(ASSIGNMENT_ID_PATTERN),
+  assignmentId: z.string().regex(ASSIGNMENT_ID_PATTERN),
 });
 
 export const SubmissionActionInputSchema = z.object({
   action: z.enum(['submit', 'unsubmit', 'view']),
-  classId: z.string().min(1),
-  assignmentId: z.string().min(1),
-  submissionId: z.string().min(1),
+  classId: z.string().regex(ASSIGNMENT_ID_PATTERN),
+  assignmentId: z.string().regex(ASSIGNMENT_ID_PATTERN),
+  submissionId: z.string().regex(ASSIGNMENT_ID_PATTERN),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,7 +48,7 @@ export const SubmissionActionInputSchema = z.object({
 const listAssignmentsToolDefinition: Tool = {
   name: 'teams_list_assignments',
   description:
-    "List the signed-in user's Microsoft Teams assignments across all their classes (the Teams \"Assignments\" tab, for EDU tenants). Returns each assignment's title, class ID, due date, status, max points, instructions, a Teams deep link (webUrl), and the user's own submission summary including submission state and any grade/feedback. Use statusFilter to choose which slice: 'active' (assigned and not yet completed — the default), 'completed' (turned in or returned), or 'all'. To act on or read the full detail of one result, pass its classId + id to teams_get_assignment or its submission's id to teams_submission_action. Only available on education tenants that use Assignments.",
+    "List the signed-in user's Microsoft Teams assignments across all their classes (the Teams \"Assignments\" tab, for EDU tenants). Active work is ordered earliest due first. Results are paged: follow nextLink with the same statusFilter until it is absent (a final page may be empty). nextLink preserves the original query and page size. Returns each assignment's title, class ID, due date, status, max points, instructions, a Teams deep link (webUrl), and the user's own submission summary including submission state and any grade/feedback. Use statusFilter to choose which slice: 'active' (assigned and not yet completed — the default), 'completed' (turned in or returned), or 'all'. To act on or read the full detail of one result, pass its classId + id to teams_get_assignment or its submission's id to teams_submission_action. Only available on education tenants that use Assignments.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -53,8 +57,9 @@ const listAssignmentsToolDefinition: Tool = {
         enum: ['active', 'completed', 'all'],
         description: "Which assignments to return: 'active' (default), 'completed', or 'all'.",
       },
+      nextLink: { type: 'string', description: 'Continuation URL returned by the previous call. Keep statusFilter unchanged; this URL determines the query and page size.' },
       top: {
-        type: 'number',
+        type: 'integer',
         description: 'Maximum number of assignments to return (default 25, max 100).',
       },
     },
@@ -122,11 +127,13 @@ async function handleListAssignments(
   const result = await listMyAssignments({
     statusFilter: input.statusFilter,
     top: input.top,
+    nextLink: input.nextLink,
   });
   return handleApiResult(result, (value) => ({
     statusFilter: value.statusFilter,
     returned: value.returned,
     assignments: value.assignments,
+    nextLink: value.nextLink,
   }));
 }
 
