@@ -19,7 +19,7 @@ vi.mock('./token-extractor.js', () => ({
   clearTokenCache: vi.fn(),
 }));
 
-import { refreshTokensViaHttp } from './token-refresh-http.js';
+import { refreshTokensViaHttp, getSharePointToken } from './token-refresh-http.js';
 import { readSessionState, writeSessionState, getTeamsOrigin } from './session-store.js';
 import { clearTokenCache } from './token-extractor.js';
 import type { SessionState } from './session-store.js';
@@ -554,4 +554,62 @@ describe('refreshTokensViaHttp', () => {
     expect(await refreshTokensViaHttp('graph')).toMatchObject({ ok: false, error: { code: 'ACCESS_DENIED', message: expect.stringContaining('Microsoft Graph') } });
   });
 
+});
+
+
+describe('getSharePointToken', () => {
+  const origin = 'https://tenant-my.sharepoint.com';
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  function session(expiresIn = 3600) {
+    const state = makeMockSessionState();
+    state.origins[0].localStorage.push(makeAccessTokenEntry(origin, `${origin}/.default`, expiresIn));
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    return state;
+  }
+
+  it('reuses the unexpired token for the requested host', async () => {
+    session();
+    expect(await getSharePointToken(origin)).toEqual({ ok: true, value: 'old-access-token' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refreshes an expired token and persists token rotation', async () => {
+    const state = session(-100);
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(makeTokenResponse(`${origin}/.default`)), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    expect((await getSharePointToken(origin)).ok).toBe(true);
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/oauth2/v2.0/token'), expect.objectContaining({
+      body: expect.stringContaining(encodeURIComponent(`${origin}/.default`)),
+    }));
+    expect(writeSessionState).toHaveBeenCalledWith(state);
+    const entries = state.origins[0].localStorage.map(item => JSON.parse(item.value));
+    expect(entries.find(item => item.credentialType === 'RefreshToken').secret).toBe('new-refresh-token');
+    expect(entries.find(item => item.target === `${origin}/.default`).secret).toContain('new-access-token');
+  });
+
+  it('does not use another host token', async () => {
+    session();
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(makeTokenResponse('https://other.sharepoint.com/.default'))));
+    expect((await getSharePointToken('https://other.sharepoint.com')).ok).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('can force renewal of an unexpired but rejected token', async () => {
+    session();
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(makeTokenResponse(`${origin}/.default`))));
+    expect((await getSharePointToken(origin, true)).ok).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects non-SharePoint resources without reading the session', async () => {
+    expect((await getSharePointToken('https://example.org')).ok).toBe(false);
+    expect(readSessionState).not.toHaveBeenCalled();
+  });
 });

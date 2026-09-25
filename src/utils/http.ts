@@ -12,7 +12,10 @@ import {
 import { type Result, ok, err } from '../types/result.js';
 
 /** Options for HTTP requests. */
-export interface HttpOptions extends Omit<RequestInit, 'signal'> {
+export interface HttpOptions<T = unknown> extends Omit<RequestInit, 'signal'> {
+  /** Consume a successful response without buffering it. Reset the timeout on progress
+   * to use an inactivity timeout. Disable retries when the consumer has side effects. */
+  consumeResponse?: (response: Response, resetTimeout: () => void) => Promise<T>;
   /** Timeout in milliseconds (default: 30000). */
   timeoutMs?: number;
   /** Maximum retry attempts (default: 3). */
@@ -38,9 +41,10 @@ let rateLimitedUntil: number | null = null;
  */
 export async function httpRequest<T = unknown>(
   url: string,
-  options: HttpOptions = {}
+  options: HttpOptions<T> = {}
 ): Promise<Result<HttpResponse<T>>> {
   const {
+    consumeResponse,
     timeoutMs = 30000,
     maxRetries = 3,
     retryBaseDelayMs = 1000,
@@ -62,7 +66,7 @@ export async function httpRequest<T = unknown>(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const result = await fetchWithTimeout<T>(url, fetchOptions, timeoutMs);
+      const result = await fetchWithTimeout<T>(url, fetchOptions, timeoutMs, consumeResponse);
       
       if (result.ok) {
         return result;
@@ -117,18 +121,21 @@ export async function httpRequest<T = unknown>(
 async function fetchWithTimeout<T>(
   url: string,
   options: RequestInit,
-  timeoutMs: number
+  timeoutMs: number,
+  consumeResponse?: HttpOptions<T>['consumeResponse'],
 ): Promise<Result<HttpResponse<T>>> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const resetTimeout = () => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  };
 
   try {
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     // Handle error responses
     if (!response.ok) {
@@ -146,7 +153,11 @@ async function fetchWithTimeout<T>(
     const contentType = response.headers.get('content-type') || '';
     let data: T;
     
-    if (contentType.includes('application/json')) {
+    if (consumeResponse) {
+      resetTimeout();
+      data = await consumeResponse(response, resetTimeout);
+      controller.signal.throwIfAborted();
+    } else if (contentType.includes('application/json')) {
       const text = await response.text();
       data = text ? JSON.parse(text) as T : {} as T;
     } else {
@@ -187,6 +198,8 @@ async function fetchWithTimeout<T>(
       error instanceof Error ? error.message : String(error),
       { retryable: false }
     ));
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
