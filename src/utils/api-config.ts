@@ -316,23 +316,3 @@ export function getMessagingHeaders(skypeToken: string, authToken: string, baseU
     'X-Ms-Client-Version': '1415/1.0.0.2025010401',
   };
 }
-
-/** Convert a shared file web URL to SharePoint's raw-content REST endpoint. */
-export function sharePointDownloadUrl(webUrl: string): { origin: string; url: string; fileName: string } {
-  const parsed = new URL(webUrl);
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port ||
-      !/^[a-z0-9-]+\.sharepoint\.(com|us|de|cn)$/.test(parsed.hostname)) {
-    throw new Error('Expected an HTTPS SharePoint/OneDrive for Business file URL');
-  }
-  const pathname = decodeURIComponent(parsed.pathname.replace(/^\/:[a-z]:\/r\//i, '/'));
-  if (pathname.startsWith('/:') || pathname.includes('/_layouts/') || pathname.endsWith('/')) {
-    throw new Error('Use the direct file webUrl from teams_get_shared_files, not a sharing or preview link');
-  }
-  const site = pathname.match(/^\/(personal|sites|teams)\/[^/]+(?=\/)/)?.[0] ?? '';
-  const escapedPath = encodeURIComponent(pathname.replace(/'/g, "''")).replace(/'/g, '%27');
-  return {
-    origin: parsed.origin,
-    url: `${parsed.origin}${site}/_api/web/GetFileByServerRelativePath(decodedUrl='${escapedPath}')/$value`,
-    fileName: pathname.slice(pathname.lastIndexOf('/') + 1),
-  };
-}

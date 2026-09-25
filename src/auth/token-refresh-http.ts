@@ -798,30 +798,3 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
     refreshTokenRotated,
   });
 }
-
-/** Return a host-specific SharePoint token, refreshing the existing MSAL session when needed. */
-export async function getSharePointToken(origin: string, forceRefresh = false): Promise<Result<string>> {
-  // Only allow a SharePoint origin, never an arbitrary OAuth resource supplied by a caller.
-  if (!/^https:\/\/[a-z0-9-]+\.sharepoint\.(com|us|de|cn)$/.test(origin)) {
-    return err(createError(ErrorCode.INVALID_INPUT, 'Expected a SharePoint HTTPS origin'));
-  }
-  const state = readSessionState();
-  const storage = state && getTeamsOrigin(state)?.localStorage;
-  if (!state || !storage) return err(createError(ErrorCode.AUTH_REQUIRED, 'No Teams session found'));
-  const cached = findAccessTokenKey(storage, `${origin}/`);
-  if (!forceRefresh && cached && Number(cached.entry.expiresOn) > Date.now() / 1000 + 60) {
-    return ok(cached.entry.secret);
-  }
-  const extraction = extractMsalCacheInfoWithDiagnostics(state);
-  if (!extraction.cacheInfo) return err(createError(ErrorCode.AUTH_REQUIRED, 'No MSAL refresh token found'));
-  const info = extraction.cacheInfo;
-  const result = await refreshAccessToken(info.tenantId, info.clientId, info.refreshToken, `${origin}/.default`);
-  if (!result.ok) return result;
-  updateAccessTokenInCache(storage, `${origin}/`, result.value, info);
-  const refreshEntry = storage.find(item => item.name === info.refreshTokenKey);
-  if (result.value.refresh_token && refreshEntry) {
-    updateRefreshTokenInCache(storage, info.refreshTokenKey, result.value.refresh_token, refreshEntry.value);
-  }
-  writeSessionState(state);
-  return ok(result.value.access_token);
-}
