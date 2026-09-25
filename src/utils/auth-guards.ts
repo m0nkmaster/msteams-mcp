@@ -12,6 +12,7 @@ import {
   extractMessageAuth,
   extractCsaToken,
   extractSubstrateToken,
+  extractAssignmentsToken,
   extractSkypeSpacesToken,
   extractRegionConfig,
   getUserProfile,
@@ -19,8 +20,8 @@ import {
   type MessageAuthInfo,
   type RegionConfig,
 } from '../auth/token-extractor.js';
-import { TOKEN_REFRESH_THRESHOLD_MS } from '../constants.js';
-import { refreshTokensViaBrowser } from '../auth/token-refresh.js';
+import { TOKEN_REFRESH_THRESHOLD_MS, ASSIGNMENTS_UNAVAILABLE_TTL_MS } from '../constants.js';
+import { refreshTokensViaBrowser, refreshAssignmentsToken } from '../auth/token-refresh.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error Messages
@@ -90,6 +91,36 @@ export async function requireSubstrateTokenAsync(): Promise<Result<string, McpEr
   }
 
   return ok(token);
+}
+
+/** Briefly remember definitive access refusals; reset on explicit login. */
+let assignmentsUnavailable: { until: number; error: McpError } | undefined;
+let assignmentsRefresh: Promise<Result<string>> | undefined;
+
+export function resetAssignmentsAvailability(): void {
+  assignmentsUnavailable = undefined;
+}
+
+/** Require the resource's own token, preserving auth, access and transient errors. */
+export async function requireAssignmentsTokenAsync(): Promise<Result<string, McpError>> {
+  const current = extractAssignmentsToken();
+  if (current && current.expiry.getTime() - Date.now() >= TOKEN_REFRESH_THRESHOLD_MS) {
+    return ok(current.token);
+  }
+  if (assignmentsUnavailable && Date.now() < assignmentsUnavailable.until) {
+    return current ? ok(current.token) : err(assignmentsUnavailable.error);
+  }
+  if (!assignmentsRefresh) {
+    assignmentsRefresh = refreshAssignmentsToken().then(result => {
+      if (!result.ok && result.error.code === ErrorCode.ACCESS_DENIED) {
+        assignmentsUnavailable = { until: Date.now() + ASSIGNMENTS_UNAVAILABLE_TTL_MS, error: result.error };
+      }
+      return result;
+    }).finally(() => { assignmentsRefresh = undefined; });
+  }
+  const result = await assignmentsRefresh;
+  if (!result.ok && current && current.expiry.getTime() > Date.now()) return ok(current.token);
+  return result;
 }
 
 /**

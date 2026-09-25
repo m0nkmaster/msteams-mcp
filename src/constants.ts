@@ -166,6 +166,12 @@ export const MAX_FILES_PAGE_SIZE = 100;
 /** Threshold for proactive token refresh (10 minutes before expiry). */
 export const TOKEN_REFRESH_THRESHOLD_MS = 10 * 60 * 1000;
 
+/**
+ * How long to remember that an account can't get an EDU Assignments token
+ * (e.g. non-EDU tenant) before trying to mint one again.
+ */
+export const ASSIGNMENTS_UNAVAILABLE_TTL_MS = 30 * 60 * 1000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // User Identity
 // ─────────────────────────────────────────────────────────────────────────────
@@ -259,3 +265,6 @@ export const STANDARD_EMOJIS: readonly StandardEmoji[] = [
   { key: 'makeup', description: 'Make-up 💄', category: 'other' },
   { key: 'snowangel', description: 'Snow angel', category: 'other' },
 ];
+
+/** OAuth audience of the Teams EDU Assignments service. */
+export const ASSIGNMENTS_APP_ID = '8f348934-64be-4bb2-bc16-c54c96789f43';

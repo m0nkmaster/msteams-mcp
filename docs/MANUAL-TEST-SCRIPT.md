@@ -76,6 +76,13 @@ This is a test script for verifying all MCP tools work correctly before release.
 | `teams_add_favorite` | Pin a conversation |
 | `teams_remove_favorite` | Unpin a conversation |
 
+### Assignments (education tenants only)
+| Tool | Purpose |
+|------|---------|
+| `teams_list_assignments` | List your assignments across classes (active, completed or all) |
+| `teams_get_assignment` | Get one assignment's full detail and your submission |
+| `teams_submission_action` | Turn in, undo turn-in, or mark viewed on your own submission |
+
 ---
 
 ## Search Operators
@@ -209,6 +216,21 @@ Quick reactions: `like` (👍), `heart` (❤️), `laugh` (😂), `surprised` (�
 2. teams_add_reaction emoji="..." → use the key from search
 ```
 
+### Check assignments (education tenant)
+```
+1. teams_list_assignments → active work, earliest due first
+2. teams_list_assignments nextLink="..." → next page; statusFilter comes from the link
+3. teams_get_assignment classId="..." assignmentId="..." → full detail and your submission
+4. teams_submission_action action="view" classId="..." assignmentId="..." submissionId="..." → mark viewed
+```
+Only confirm `submit`/`unsubmit` against a test assignment you own: they change your real submission.
+
+### Assignments on a non-education account
+```
+1. teams_list_assignments → expect ACCESS_DENIED or AUTH_INTERACTION_REQUIRED
+2. teams_get_me, teams_search, teams_list_chats → must still work, with no browser opened
+```
+
 ---
 
 ## Known Limitations
@@ -218,6 +240,7 @@ Quick reactions: `like` (👍), `heart` (❤️), `laugh` (😂), `surprised` (�
 | Save message | Only works on root messages, not thread replies |
 | Unread on channels | May fail ACL check; works reliably for chats/meetings |
 | Token expiry | Tokens last ~1 hour; call `teams_login` to refresh |
+| Assignments | Education tenants only; failures never affect other tools. Submit/unsubmit not yet verified live |
 
 ---
 

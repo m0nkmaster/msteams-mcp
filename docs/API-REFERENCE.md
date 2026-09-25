@@ -16,7 +16,8 @@ Complete reference for the undocumented Microsoft Teams APIs used by this MCP se
 10. [Calendar & Scheduling](#calendar--scheduling)
 11. [Transcripts](#transcripts)
 12. [Files & Attachments](#files--attachments)
-13. [Common Gotchas](#common-gotchas)
+13. [Assignments (EDU)](#assignments-edu)
+14. [Common Gotchas](#common-gotchas)
 
 ---
 
@@ -31,6 +32,7 @@ Teams uses multiple authentication mechanisms depending on the API surface:
 | **Bearer (Spaces)** | `Authorization: Bearer {spacesToken}` | MSAL, `api.spaces.skype.com` audience | Calendar/Meetings |
 | **Skype Token** | `Authentication: skypetoken={token}` | Cookie `skypetoken_asm` | Messaging, Threads, Calendar |
 | **Bearer (Substrate + Prefer)** | `Authorization: Bearer {token}` + `Prefer` header | Same as Substrate search token | Transcripts (WorkingSetFiles) |
+| **Bearer (Assignments)** | `Authorization: Bearer {token}` + `MS-Int-AppID: assignments-ui` | MSAL, audience `8f348934-64be-4bb2-bc16-c54c96789f43` (requested on demand) | EDU Assignments |
 
 ### Required Headers
 
@@ -114,6 +116,8 @@ grant_type=refresh_token
 | `https://substrate.office.com/.default offline_access` | Search, People, Transcripts, Files |
 | `https://api.spaces.skype.com/.default offline_access` | Calendar, Meetings + skypetoken_asm derivation |
 | `https://chatsvcagg.teams.microsoft.com/.default offline_access` | Favorites, Teams list (CSA) |
+
+These three are refreshed together. The EDU Assignments scope (`8f348934-64be-4bb2-bc16-c54c96789f43/.default offline_access`) is **not** part of that set: it is requested separately, only when an Assignments tool is called. See [Assignments (EDU)](#assignments-edu).
 
 Azure AD may rotate the refresh token on each use — always store the new `refresh_token` from the response.
 
@@ -1844,6 +1848,58 @@ The `TranscriptJson` field is a JSON string containing the full transcript:
   ]
 }
 ```
+
+---
+
+## Assignments (EDU)
+
+The API behind the Teams **Assignments** tab, available only on education tenants. It is not Microsoft Graph, although the data model mirrors Graph's `education` types.
+
+**Base URL:** `https://assignments.edu.cloud.microsoft/api/v1.0` (hardcoded; no session config source found yet)
+
+**Headers:**
+```
+Authorization: Bearer {assignmentsToken}
+MS-Int-AppID: assignments-ui
+Accept: application/json
+```
+
+### Token (optional, on demand)
+
+The Teams web client (`5e3ce6c0-…`) can mint the token directly with the normal refresh-token grant, scope `8f348934-64be-4bb2-bc16-c54c96789f43/.default offline_access`. Because most tenants don't have Assignments, the server treats it as optional:
+
+- The token is requested only when an Assignments tool runs, with a single HTTP exchange. It never launches a browser or refreshes the core Teams tokens.
+- Assignments auth failures never surface as `AUTH_REQUIRED`/`AUTH_EXPIRED`, so they can't trigger the server's auto-login or disturb the main Teams session.
+- These Azure AD errors are treated as a definitive refusal (`ACCESS_DENIED`) and remembered for 30 minutes, or until `teams_login`: `AADSTS50105` (user not assigned), `53003` (Conditional Access block), `65001`/`65004` (consent), `90094` (admin consent required), `500011` (resource not in tenant), `650057` (invalid resource), `700016` (app not found).
+- A 401 from the API discards the token and returns a retryable error; the next call requests a fresh one.
+
+### List My Work
+
+**Endpoint:** `GET /edu/me/work?$filter={filter}&$top={n}&$orderby={order}&$expand=submissions($expand=outcomes)`
+
+| Slice | `$filter` | `$orderby` |
+|-------|-----------|------------|
+| active | `status eq microsoft.education.assignments.api.educationAssignmentStatus'assigned' and isCompleted eq false` | `dueDateTime asc,id asc` |
+| completed | `isCompleted eq true` | `dueDateTime desc,id asc` |
+| all | (none) | `dueDateTime desc,id asc` |
+
+Returns `{ value: [assignment…], "@odata.nextLink"? }`. Each assignment includes the caller's own submission with its grade outcomes.
+
+**Paging:** follow `@odata.nextLink` when present. Some responses omit it even when the page is full; the server then offers a `$skip` offset link. If following that link returns the same page again, the service ignored `$skip`, and the server returns an error instead of looping.
+
+### Get Assignment
+
+**Endpoint:** `GET /edu/classes/{classId}/assignments/{assignmentId}?$expand=submissions($expand=outcomes)`
+
+### Submission Actions
+
+| Action | Method | Path | Verified |
+|--------|--------|------|----------|
+| Mark viewed | `PATCH` | `/edu/classes/{classId}/assignments/{assignmentId}/submissions/{submissionId}/view` | Captured web session |
+| Turn in | `POST` | `…/submissions/{submissionId}/submit` | Graph parity only |
+| Undo turn-in | `POST` | `…/submissions/{submissionId}/unsubmit` | Graph parity only |
+
+Submit and unsubmit are never replayed by HTTP retries. Success is reported only after a follow-up `GET …/submissions/{submissionId}` shows the expected status (`submitted` or `working`).
 
 ---
 

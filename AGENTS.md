@@ -27,20 +27,21 @@ src/
 │   ├── people-tools.ts   # People search and profile tools
 │   ├── meeting-tools.ts  # Calendar and meeting tools
 │   ├── file-tools.ts     # Shared files tools
+│   ├── tag-tools.ts      # Channel tag tools
+│   ├── assignment-tools.ts # EDU Assignments tools (list, get, submission actions)
 │   └── auth-tools.ts     # Login and status tools
 ├── auth/                 # Authentication and credential management
-│   ├── index.ts          # Module exports
 │   ├── crypto.ts         # AES-256-GCM encryption for credentials at rest
 │   ├── session-store.ts  # Secure session state storage with encryption
 │   ├── token-extractor.ts # Extract tokens from Playwright session state
 │   ├── token-refresh.ts  # Token refresh orchestrator (HTTP-first, browser fallback)
 │   └── token-refresh-http.ts # Browserless token refresh via direct OAuth2 calls
 ├── api/                  # API client modules (one per API surface)
-│   ├── index.ts          # Module exports
 │   ├── substrate-api.ts  # Search and people APIs (Substrate v2)
 │   ├── chatsvc-api.ts    # Barrel file re-exporting all chatsvc sub-modules
 │   ├── chatsvc-common.ts # Shared utilities (date formatting)
 │   ├── chatsvc-messaging.ts # Send, edit, delete, threads, 1:1/group chat
+│   ├── chatsvc-conversations.ts # Recent conversation list with last-message preview
 │   ├── chatsvc-activity.ts  # Activity feed (mentions, reactions, replies)
 │   ├── chatsvc-reactions.ts # Add/remove emoji reactions
 │   ├── chatsvc-virtual.ts   # Saved messages, followed threads, save/unsave
@@ -49,22 +50,25 @@ src/
 │   ├── calendar-api.ts   # Calendar/meetings API
 │   ├── transcript-api.ts # Meeting transcripts (Substrate WorkingSetFiles)
 │   ├── files-api.ts      # Shared files (Substrate AllFiles)
+│   ├── tags-api.ts       # Channel tags (mt/part teams/{groupId}/tags)
+│   ├── assignments-api.ts # EDU Assignments (assignments.edu.cloud.microsoft, OneNote EDU)
 │   └── profile-api.ts    # Resolve MRIs to profiles (middleTier fetchShortProfile)
 ├── browser/              # Playwright browser automation (login only)
 │   ├── context.ts        # Persistent browser profile management
 │   └── auth.ts           # Authentication detection and manual login handling
 ├── utils/
 │   ├── parsers.ts        # Pure parsing functions (barrel; testable submodules)
-│   ├── parsers-reactions.ts # Emoji reaction parsing from raw messages
-│   ├── parsers.test.ts   # Unit tests for parsers
+│   ├── parsers-*.ts      # Parser submodules (html, markdown, search, people, channels, identifiers, reactions, virtual)
 │   ├── http.ts           # HTTP client with retry, timeout, error handling
 │   ├── api-config.ts     # API endpoints and header configuration
+│   ├── logger.ts         # Prefixed logger used for all production logging
 │   └── auth-guards.ts    # Reusable auth check utilities (Result types)
 ├── types/
 │   ├── teams.ts          # Teams data interfaces
 │   ├── errors.ts         # Error taxonomy with machine-readable codes
 │   ├── result.ts         # Result<T, E> type for explicit error handling
-│   └── api-responses.ts  # Typed interfaces for raw API response shapes
+│   ├── api-responses.ts  # Typed interfaces for raw API response shapes
+│   └── server.ts         # Server interface types (avoids server.ts <-> tools/index.ts cycle)
 ├── __fixtures__/
 │   └── api-responses.ts  # Mock API responses for testing
 ```
@@ -91,7 +95,7 @@ All tenant-specific config is extracted from the user's session localStorage, so
 - **User details**: From `DISCOVER-USER-DETAILS`, including user MRI, licence info, and user/tenant partitions.
 - **Service URLs**: Full chatsvc, CSA, and mt/part URLs are in the config and passed to endpoint builders.
 
-**Note**: The Substrate search URL (`substrate.office.com`) is hardcoded, as no config source has been found for it. This may need to become configurable if GCC users report issues.
+**Note**: The Substrate search URL (`substrate.office.com`) and the EDU Assignments URL (`assignments.edu.cloud.microsoft`) are hardcoded, as no config source has been found for them. These may need to become configurable if GCC/GCC-High/DoD users report issues.
 
 ## Authentication
 
@@ -106,13 +110,13 @@ All operations use direct API calls. A persistent browser profile (`~/.teams-mcp
 
 `teams_login` always tries headless SSO before showing a visible browser. Long-lived Microsoft session cookies (days/weeks) mean users rarely re-authenticate manually, even though MSAL tokens expire after ~1 hour.
 
-The server uses the system browser via Playwright's `launchPersistentContext()` (Edge on Windows, Chrome on macOS/Linux; ~180MB saved vs bundled Chromium). Only one process can use the profile at a time (Chromium lock); the token-refresh module uses a module-level flag to prevent concurrent access. If no system browser is found, the error suggests installing Chrome or running `npx playwright install chromium`.
+The server uses the system browser via Playwright's `launchPersistentContext()` (Edge on Windows, Chrome on macOS/Linux; ~180MB saved vs bundled Chromium). Only one process can use the profile at a time (Chromium lock); the token-refresh module serializes refreshes to prevent concurrent access and session-state overwrites. If no system browser is found, the error suggests installing Chrome or running `npx playwright install chromium`.
 
 ### Token refresh
 
 Refresh uses an HTTP-first strategy in `token-refresh-http.ts`:
 
-1. **HTTP (~1s)**: Extract the MSAL refresh token from session state and POST to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, chatsvcagg). Exchange the Skype Spaces token for the `skypetoken_asm` cookie via `authsvc.teams.microsoft.com/v1.0/authz`. Write updated tokens back to session state in MSAL cache format so `token-extractor.ts` finds them. The `Origin: https://teams.microsoft.com` header is required (the Teams client ID is a SPA; without it Azure AD returns AADSTS9002327).
+1. **HTTP (~1s)**: Extract the MSAL refresh token from session state and POST to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, and chatsvcagg). Assignments tokens are acquired separately, on demand, so non-EDU users incur no extra OAuth call. The Teams host client (`5e3ce6c0-…`) can mint the Assignments token directly. Assignments is optional (most tenants don't have it), so its auth can never block the rest of Teams: it uses a single HTTP exchange, never launches a browser or refreshes core credentials, and never returns `AUTH_REQUIRED`/`AUTH_EXPIRED` (which would trigger the server's auto-login). Definitive refusals are remembered for 30 minutes. Exchange the Skype Spaces token for the `skypetoken_asm` cookie via `authsvc.teams.microsoft.com/v1.0/authz`. Write updated tokens back to session state in MSAL cache format so `token-extractor.ts` finds them. The `Origin: https://teams.microsoft.com` header is required (the Teams client ID is a SPA; without it Azure AD returns AADSTS9002327).
 2. **Browser fallback (~8s)**: If HTTP fails (e.g. refresh token expired, Conditional Access), a headless browser uses the persistent profile's session cookies for silent SSO.
 
 Both are seamless (no window, no interaction). If both fail, the user must re-authenticate via `teams_login`. First login always needs a browser (no refresh token yet). Works identically for standard MS login and corporate SSO (ADFS/Okta federation). Test with `npm run cli -- login`.
@@ -130,8 +134,10 @@ Different Teams APIs use different auth mechanisms:
 | **Transcripts** (Substrate WorkingSetFiles) | Substrate JWT + `Prefer` header | `getValidSubstrateToken()` |
 | **Files** (Substrate AllFiles) | Substrate JWT + message auth for user MRI | `getValidSubstrateToken()` + `extractMessageAuth()` |
 | **Profiles** (mt/part fetchShortProfile) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuthWithConfig()` |
+| **Tags** (mt/part teams/{groupId}/tags) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuth()` |
+| **Assignments** (assignments.edu.cloud.microsoft) | JWT Bearer for the Assignments app (aud `8f348934-…`) + `MS-Int-AppID: assignments-ui` header | `requireAssignmentsTokenAsync()` |
 
-All helpers live in `auth/token-extractor`. Notes:
+The `extract*`/`getValid*` helpers live in `auth/token-extractor`; the `require*` guards live in `utils/auth-guards`. Notes:
 - The CSA API (favorites) needs GET to read; POST is only for modifications.
 - The Substrate suggestions API requires `cvid` and `logicalId` correlation IDs in the body.
 - Regional APIs (chatsvc, csa, mt/part) resolve their region via `getRegion()`; partitioned endpoints (mt/part Calendar) also use the partition suffix from `DISCOVER-REGION-GTM`.
@@ -186,7 +192,9 @@ npm run cli -- search "your query" --from 25 --size 25  # Pagination
 
 ### Unit tests
 
-Vitest, focused on pure functions and outcomes over implementation. Fixtures (`src/__fixtures__/api-responses.ts`) mirror real API shapes. Tested functions live in `src/utils/parsers.ts` and cover HTML stripping/entity decoding, deep-link generation, timestamp extraction, search/people/email result parsing, JWT profile extraction, token-status calculation, base64 GUID decoding, and user-ID extraction across formats.
+Vitest, focused on pure functions and outcomes over implementation. Tests are colocated with source as `src/**/*.test.ts` and span `api/`, `auth/`, `tools/`, `types/` and `utils/`; `parsers.test.ts` is the largest, covering HTML stripping/entity decoding, deep-link generation, timestamp extraction, search/people/email result parsing, JWT profile extraction, token-status calculation, base64 GUID decoding, and user-ID extraction. Fixtures (`src/__fixtures__/api-responses.ts`) mirror real API shapes.
+
+Run a subset with `npx vitest run src/utils/parsers.test.ts` (one file), `npx vitest run src/auth` (a directory), or `npx vitest run -t "extractObjectId"` (by test name).
 
 ### Extending
 
@@ -243,6 +251,7 @@ Conversation ID patterns: channels `19:xxx@thread.tacv2`; meetings `19:meeting_x
 ### Known limitations
 
 - **Presence/status**: real-time via WebSocket, not available over HTTP.
+- **Assignments**: EDU-tenant feature only (education tenants that use Teams Assignments). The list/get reads and the submission "view" action are verified against a captured web session; the submission `submit`/`unsubmit` actions follow Microsoft Graph education parity on the same path shape and act on the user's real account. They are not replayed by HTTP retries and only report success after reading back the expected submission state. Live submit/unsubmit verification remains outstanding.
 
 ## Dependencies
 
