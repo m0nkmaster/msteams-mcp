@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractAssignmentsToken, invalidateAssignmentsToken } from './token-extractor.js';
+import { extractAssignmentsToken, invalidateAccessToken } from './token-extractor.js';
 import { readSessionState, writeSessionState, type SessionState } from './session-store.js';
 import { ASSIGNMENTS_APP_ID } from '../constants.js';
 
@@ -33,7 +33,7 @@ describe('Assignments token selection', () => {
     const rejected = token(ASSIGNMENTS_APP_ID);
     const unrelated = entry(token('graph'));
     vi.mocked(readSessionState).mockReturnValue(state([entry(rejected), unrelated]));
-    invalidateAssignmentsToken(rejected);
+    invalidateAccessToken(rejected);
     expect(vi.mocked(writeSessionState).mock.calls[0][0].origins[0].localStorage).toEqual([unrelated]);
   });
 });

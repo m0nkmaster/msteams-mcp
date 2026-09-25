@@ -9,9 +9,9 @@
  * via `requireAssignmentsTokenAsync()`. That token is minted by the HTTP token
  * refresh (the `EduAssignments` entry in `token-refresh-http.ts`).
  *
- * Read endpoints (my work, assignment detail, submissions) and the "mark viewed"
- * PATCH were verified against a captured web session. The submit / unsubmit
- * actions follow Microsoft Graph education parity on the same path shape.
+ * Read endpoints (my work, assignment detail, submissions) and the submit /
+ * unsubmit actions are verified live against an education tenant; the "mark
+ * viewed" PATCH against a captured web session.
  */
 
 import { httpRequest } from '../utils/http.js';
@@ -19,7 +19,7 @@ import { type Result, ok, err } from '../types/result.js';
 import { requireAssignmentsTokenAsync } from '../utils/auth-guards.js';
 import { ASSIGNMENTS_API, getAssignmentsHeaders } from '../utils/api-config.js';
 import { ErrorCode, createError } from '../types/errors.js';
-import { invalidateAssignmentsToken } from '../auth/token-extractor.js';
+import { invalidateAccessToken } from '../auth/token-extractor.js';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants.js';
 
 /** IDs are opaque single path segments; reject dot segments and URL delimiters. */
@@ -37,7 +37,7 @@ function handleAssignmentsError<T>(response: Result<T>, token: string): Result<T
   // Never surface AUTH_EXPIRED: it would make the server re-authenticate the
   // whole Teams session (and replay the tool) for this optional feature.
   if (!response.ok && response.error.code === ErrorCode.AUTH_EXPIRED) {
-    invalidateAssignmentsToken(token);
+    invalidateAccessToken(token);
     return err(createError(ErrorCode.API_ERROR,
       'Assignments rejected its access token; it has been discarded, so a retry will request a new one.', {
         retryable: true,
@@ -87,6 +87,20 @@ export interface SubmissionOutcome {
   publishedFeedback?: string;
 }
 
+/** A file, form or link attached to an assignment or submission. */
+export interface AssignmentAttachment {
+  id?: string;
+  name?: string;
+  /** word | powerpoint | excel | file | form | link | … (from the resource's OData type). */
+  type: string;
+  /** Graph drive-item URL; pass to teams_download_assignment_file. Absent for forms and links. */
+  fileUrl?: string;
+  /** Web URL for non-file resources (e.g. a Microsoft Forms quiz or a link). */
+  url?: string;
+  /** True when each student gets their own copy (found in their submission's attachments). */
+  copiedForEachStudent?: boolean;
+}
+
 /** A compact view of the signed-in user's submission for an assignment. */
 export interface SubmissionSummary {
   id?: string;
@@ -96,6 +110,10 @@ export interface SubmissionSummary {
   returnedDateTime?: string;
   /** Merged grade/feedback from the submission's outcomes. */
   outcome?: SubmissionOutcome;
+  /** The student's working files, including their copies of distributed attachments. */
+  attachments?: AssignmentAttachment[];
+  /** Files as they were when last turned in. */
+  submittedAttachments?: AssignmentAttachment[];
 }
 
 /** A single assignment as surfaced to the caller. */
@@ -116,6 +134,8 @@ export interface Assignment {
   webUrl?: string;
   /** The caller's own submission summary, when expanded. */
   submission?: SubmissionSummary;
+  /** Teacher-provided attachments (teams_get_assignment only). */
+  attachments?: AssignmentAttachment[];
 }
 
 /** Result of listing the user's assignments. */
@@ -139,12 +159,26 @@ interface RawOutcome {
   publishedFeedback?: { text?: { content?: string } | string } | null;
 }
 
+interface RawResource {
+  id?: string;
+  distributeForStudentWork?: boolean;
+  resource?: {
+    '@odata.type'?: string;
+    displayName?: string;
+    fileUrl?: string;
+    link?: string;
+    viewUrl?: string;
+  } | null;
+}
+
 interface RawSubmission {
   id?: string;
   status?: string;
   submittedDateTime?: string;
   returnedDateTime?: string;
   outcomes?: RawOutcome[];
+  resources?: RawResource[];
+  submittedResources?: RawResource[];
 }
 
 interface RawAssignment {
@@ -160,6 +194,7 @@ interface RawAssignment {
   instructions?: { content?: string } | null;
   webUrl?: string;
   submissions?: RawSubmission[];
+  resources?: RawResource[];
 }
 
 interface RawListResponse {
@@ -191,6 +226,19 @@ function parseOutcomes(outcomes?: RawOutcome[]): SubmissionOutcome | undefined {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function parseAttachments(resources?: RawResource[]): AssignmentAttachment[] | undefined {
+  if (!resources) return undefined;
+  return resources.map(({ id, distributeForStudentWork, resource }) => ({
+    id,
+    name: resource?.displayName,
+    // '#microsoft.education.assignments.api.educationPowerPointResource' -> 'powerpoint'
+    type: (resource?.['@odata.type'] ?? '').replace(/^.*\.education/, '').replace(/Resource$/, '').toLowerCase() || 'unknown',
+    fileUrl: resource?.fileUrl,
+    url: resource?.link ?? resource?.viewUrl,
+    copiedForEachStudent: distributeForStudentWork || undefined,
+  }));
+}
+
 function parseSubmission(sub?: RawSubmission): SubmissionSummary | undefined {
   if (!sub) return undefined;
   return {
@@ -199,6 +247,8 @@ function parseSubmission(sub?: RawSubmission): SubmissionSummary | undefined {
     submittedDateTime: sub.submittedDateTime,
     returnedDateTime: sub.returnedDateTime,
     outcome: parseOutcomes(sub.outcomes),
+    attachments: parseAttachments(sub.resources),
+    submittedAttachments: parseAttachments(sub.submittedResources),
   };
 }
 
@@ -216,6 +266,7 @@ function parseAssignment(raw: RawAssignment): Assignment {
     instructions: raw.instructions?.content ?? undefined,
     webUrl: raw.webUrl ?? undefined,
     submission: parseSubmission(raw.submissions?.[0]),
+    attachments: parseAttachments(raw.resources),
   };
 }
 
@@ -346,9 +397,10 @@ export async function getAssignment(
   // Expanding submissions on the assignment itself returns empty outcomes, so
   // grades need the submissions collection, as the Teams client requests it.
   const headers = getAssignmentsHeaders(tokenResult.value);
-  const submissionsParams = new URLSearchParams({ '$expand': 'outcomes' });
+  const submissionsParams = new URLSearchParams({ '$expand': 'outcomes,resources,submittedResources' });
+  const assignmentParams = new URLSearchParams({ '$expand': 'resources' });
   const [response, submissions] = await Promise.all([
-    httpRequest<RawAssignment>(ASSIGNMENTS_API.assignment(classId, assignmentId), { method: 'GET', headers }),
+    httpRequest<RawAssignment>(`${ASSIGNMENTS_API.assignment(classId, assignmentId)}?${assignmentParams.toString()}`, { method: 'GET', headers }),
     httpRequest<{ value?: RawSubmission[] }>(
       `${ASSIGNMENTS_API.submissions(classId, assignmentId)}?${submissionsParams.toString()}`,
       { method: 'GET', headers },
@@ -371,8 +423,8 @@ export type SubmissionAction = 'submit' | 'unsubmit' | 'view';
  * turn-in (unsubmit), or mark viewed. These change state on the user's real
  * Teams account, so callers should confirm intent before invoking.
  *
- * Only `view` (PATCH) is verified against a captured session; submit/unsubmit
- * (POST) follow Microsoft Graph education parity.
+ * submit/unsubmit (POST, no body) are verified live; `view` (PATCH) against a
+ * captured session.
  */
 export async function actOnSubmission(
   action: SubmissionAction,

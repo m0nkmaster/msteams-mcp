@@ -28,7 +28,7 @@ src/
 │   ├── meeting-tools.ts  # Calendar and meeting tools
 │   ├── file-tools.ts     # Shared files tools
 │   ├── tag-tools.ts      # Channel tag tools
-│   ├── assignment-tools.ts # EDU Assignments tools (list, get, submission actions)
+│   ├── assignment-tools.ts # EDU Assignments tools (list, get, attachment download, submission actions)
 │   └── auth-tools.ts     # Login and status tools
 ├── auth/                 # Authentication and credential management
 │   ├── crypto.ts         # AES-256-GCM encryption for credentials at rest
@@ -52,6 +52,7 @@ src/
 │   ├── files-api.ts      # Shared files (Substrate AllFiles)
 │   ├── tags-api.ts       # Channel tags (mt/part teams/{groupId}/tags)
 │   ├── assignments-api.ts # EDU Assignments (assignments.edu.cloud.microsoft, OneNote EDU)
+│   ├── graph-files-api.ts # Microsoft Graph drive-item downloads (assignment attachments)
 │   └── profile-api.ts    # Resolve MRIs to profiles (middleTier fetchShortProfile)
 ├── browser/              # Playwright browser automation (login only)
 │   ├── context.ts        # Persistent browser profile management
@@ -116,7 +117,7 @@ The server uses the system browser via Playwright's `launchPersistentContext()` 
 
 Refresh uses an HTTP-first strategy in `token-refresh-http.ts`:
 
-1. **HTTP (~1s)**: Extract the MSAL refresh token from session state and POST to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, and chatsvcagg). Assignments tokens are acquired separately, on demand, so non-EDU users incur no extra OAuth call. The Teams host client (`5e3ce6c0-…`) can mint the Assignments token directly. Assignments is optional (most tenants don't have it), so its auth can never block the rest of Teams: it uses a single HTTP exchange, never launches a browser or refreshes core credentials, and never returns `AUTH_REQUIRED`/`AUTH_EXPIRED` (which would trigger the server's auto-login). Definitive refusals are remembered for 30 minutes. Exchange the Skype Spaces token for the `skypetoken_asm` cookie via `authsvc.teams.microsoft.com/v1.0/authz`. Write updated tokens back to session state in MSAL cache format so `token-extractor.ts` finds them. The `Origin: https://teams.microsoft.com` header is required (the Teams client ID is a SPA; without it Azure AD returns AADSTS9002327).
+1. **HTTP (~1s)**: Extract the MSAL refresh token from session state and POST to Azure AD's OAuth2 token endpoint for each required scope (Substrate, Skype Spaces, and chatsvcagg). Optional resources (EDU Assignments and Microsoft Graph) are acquired separately, on demand, so users who never call those tools incur no extra OAuth call. The Teams host client (`5e3ce6c0-…`) can mint both tokens directly; Teams web also caches its own Graph token (`Files.ReadWrite.All`), which is reused while valid. Optional auth can never block the rest of Teams: it uses a single HTTP exchange, never launches a browser or refreshes core credentials, and never returns `AUTH_REQUIRED`/`AUTH_EXPIRED` (which would trigger the server's auto-login). Optional tokens are selected by JWT audience, not MSAL target, because Graph and Assignments grant overlapping permission names. Definitive refusals are remembered for 30 minutes, per resource. Exchange the Skype Spaces token for the `skypetoken_asm` cookie via `authsvc.teams.microsoft.com/v1.0/authz`. Write updated tokens back to session state in MSAL cache format so `token-extractor.ts` finds them. The `Origin: https://teams.microsoft.com` header is required (the Teams client ID is a SPA; without it Azure AD returns AADSTS9002327).
 2. **Browser fallback (~8s)**: If HTTP fails (e.g. refresh token expired, Conditional Access), a headless browser uses the persistent profile's session cookies for silent SSO.
 
 Both are seamless (no window, no interaction). If both fail, the user must re-authenticate via `teams_login`. First login always needs a browser (no refresh token yet). Works identically for standard MS login and corporate SSO (ADFS/Okta federation). Test with `npm run cli -- login`.
@@ -135,6 +136,7 @@ Different Teams APIs use different auth mechanisms:
 | **Files** (Substrate AllFiles) | Substrate JWT + message auth for user MRI | `getValidSubstrateToken()` + `extractMessageAuth()` |
 | **Profiles** (mt/part fetchShortProfile) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuthWithConfig()` |
 | **Tags** (mt/part teams/{groupId}/tags) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuth()` |
+| **Graph files** (graph.microsoft.com drive items) | Teams client's Graph JWT (aud `https://graph.microsoft.com`); the resulting `downloadUrl` is pre-authenticated and gets no header | `requireGraphTokenAsync()` |
 | **Assignments** (assignments.edu.cloud.microsoft) | JWT Bearer for the Assignments app (aud `8f348934-…`) + `MS-Int-AppID: assignments-ui` header | `requireAssignmentsTokenAsync()` |
 
 The `extract*`/`getValid*` helpers live in `auth/token-extractor`; the `require*` guards live in `utils/auth-guards`. Notes:
@@ -251,7 +253,7 @@ Conversation ID patterns: channels `19:xxx@thread.tacv2`; meetings `19:meeting_x
 ### Known limitations
 
 - **Presence/status**: real-time via WebSocket, not available over HTTP.
-- **Assignments**: EDU-tenant feature only (education tenants that use Teams Assignments). The list/get reads and the submission "view" action are verified against a captured web session; the submission `submit`/`unsubmit` actions follow Microsoft Graph education parity on the same path shape and act on the user's real account. They are not replayed by HTTP retries and only report success after reading back the expected submission state. Live submit/unsubmit verification remains outstanding.
+- **Assignments**: EDU-tenant feature only (education tenants that use Teams Assignments). List, get, attachments, attachment download, and the submission `submit`/`unsubmit` actions are verified live against an education tenant; the submission "view" action is verified against a captured web session. `submit`/`unsubmit` act on the user's real account (a re-submit records a new submitted date the teacher sees), are not replayed by HTTP retries, and only report success after reading back the expected submission state.
 
 ## Dependencies
 

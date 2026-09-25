@@ -11,6 +11,7 @@ vi.mock('../auth/token-extractor.js', () => ({
   getValidSubstrateToken: vi.fn(),
   getValidAssignmentsToken: vi.fn(),
   extractAssignmentsToken: vi.fn(),
+  extractGraphToken: vi.fn(),
   extractMessageAuth: vi.fn(),
   extractCsaToken: vi.fn(),
   extractSubstrateToken: vi.fn(),
@@ -19,7 +20,7 @@ vi.mock('../auth/token-extractor.js', () => ({
   getUserProfile: vi.fn(),
   clearTokenCache: vi.fn(),
 }));
-vi.mock('../auth/token-refresh.js', () => ({ refreshAssignmentsToken: vi.fn() }));
+vi.mock('../auth/token-refresh.js', () => ({ refreshAssignmentsToken: vi.fn(), refreshGraphToken: vi.fn() }));
 
 import { getValidAssignmentsToken, extractAssignmentsToken } from '../auth/token-extractor.js';
 import { refreshAssignmentsToken } from '../auth/token-refresh.js';

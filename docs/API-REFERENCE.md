@@ -32,6 +32,7 @@ Teams uses multiple authentication mechanisms depending on the API surface:
 | **Bearer (Spaces)** | `Authorization: Bearer {spacesToken}` | MSAL, `api.spaces.skype.com` audience | Calendar/Meetings |
 | **Skype Token** | `Authentication: skypetoken={token}` | Cookie `skypetoken_asm` | Messaging, Threads, Calendar |
 | **Bearer (Substrate + Prefer)** | `Authorization: Bearer {token}` + `Prefer` header | Same as Substrate search token | Transcripts (WorkingSetFiles) |
+| **Bearer (Graph)** | `Authorization: Bearer {token}` | MSAL, audience `https://graph.microsoft.com` (requested on demand) | Assignment attachment downloads |
 | **Bearer (Assignments)** | `Authorization: Bearer {token}` + `MS-Int-AppID: assignments-ui` | MSAL, audience `8f348934-64be-4bb2-bc16-c54c96789f43` (requested on demand) | EDU Assignments |
 
 ### Required Headers
@@ -117,7 +118,7 @@ grant_type=refresh_token
 | `https://api.spaces.skype.com/.default offline_access` | Calendar, Meetings + skypetoken_asm derivation |
 | `https://chatsvcagg.teams.microsoft.com/.default offline_access` | Favorites, Teams list (CSA) |
 
-These three are refreshed together. The EDU Assignments scope (`8f348934-64be-4bb2-bc16-c54c96789f43/.default offline_access`) is **not** part of that set: it is requested separately, only when an Assignments tool is called. See [Assignments (EDU)](#assignments-edu).
+These three are refreshed together. The EDU Assignments scope (`8f348934-64be-4bb2-bc16-c54c96789f43/.default offline_access`) and the Microsoft Graph scope (`https://graph.microsoft.com/.default offline_access`) are **not** part of that set: each is requested separately, only when a tool needs it. See [Assignments (EDU)](#assignments-edu).
 
 Azure AD may rotate the refresh token on each use — always store the new `refresh_token` from the response.
 
@@ -1897,15 +1898,42 @@ Returns `{ value: [assignment…], "@odata.nextLink"? }`. Each assignment includ
 
 Grades need the second call: expanding `submissions($expand=outcomes)` on the assignment itself returns the submission with an empty `outcomes` array. An unknown class or assignment ID returns 403 rather than 404.
 
+### Attachments
+
+Teacher attachments come from `GET /edu/classes/{classId}/assignments/{assignmentId}?$expand=resources`; the student's own files from the submissions call with `$expand=outcomes,resources,submittedResources`. Each entry wraps a `resource`:
+
+| `@odata.type` (suffix) | Useful fields |
+|------------------------|---------------|
+| `educationWordResource`, `educationPowerPointResource`, `educationExcelResource`, `educationFileResource` | `displayName`, `fileUrl` (a Graph drive-item URL) |
+| `educationFormResource` | `displayName`, `viewUrl` (`forms.office.com`), `formId`; no file |
+| `educationLinkResource` | `displayName`, `link` |
+
+Word, PowerPoint, File and Form resources are verified live; Excel and Link follow the Graph education schema and have not yet been seen in a capture.
+
+On assignment resources, `distributeForStudentWork: true` means each student gets a personal copy, which appears in their submission's `resources`. `submittedResources` holds the files as last turned in.
+
+### Downloading an Attachment (Microsoft Graph)
+
+`fileUrl` looks like `https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}`. As the Assignments web client does:
+
+```
+GET {fileUrl}?$select=name,size,file,currentUserRole,content.downloadUrl
+Authorization: Bearer {graphToken}
+```
+
+The response's `@microsoft.graph.downloadUrl` is a short-lived, pre-authenticated SharePoint link (`/_layouts/15/download.aspx?…&tempauth=…`): fetch it with **no** Authorization header. `currentUserRole.blocksDownload` is `true` when the owner has blocked downloads. `GET {fileUrl}/content` also works (302 to the same link).
+
+**Token:** the Teams client (`5e3ce6c0-…`) holds Graph `Files.ReadWrite.All`/`Sites.ReadWrite.All`; Teams web caches it (audience `https://graph.microsoft.com` or `00000003-0000-0000-c000-000000000000`), and the refresh-token grant with scope `https://graph.microsoft.com/.default offline_access` renews it. Like Assignments, it is optional: fetched on demand and never allowed to trigger re-login.
+
 ### Submission Actions
 
 | Action | Method | Path | Verified |
 |--------|--------|------|----------|
 | Mark viewed | `PATCH` | `/edu/classes/{classId}/assignments/{assignmentId}/submissions/{submissionId}/view` | Captured web session |
-| Turn in | `POST` | `…/submissions/{submissionId}/submit` | Graph parity only |
-| Undo turn-in | `POST` | `…/submissions/{submissionId}/unsubmit` | Graph parity only |
+| Turn in | `POST` | `…/submissions/{submissionId}/submit` | Live (education tenant) |
+| Undo turn-in | `POST` | `…/submissions/{submissionId}/unsubmit` | Live (education tenant) |
 
-Submit and unsubmit are never replayed by HTTP retries. Success is reported only after a follow-up `GET …/submissions/{submissionId}` shows the expected status (`submitted` or `working`).
+Neither takes a request body. Undo turn-in moves the submission to `working`, clears `submittedResources` and keeps the student's working files; turning in again copies them back and sets a new `submittedDateTime`. Submit and unsubmit are never replayed by HTTP retries. Success is reported only after a follow-up `GET …/submissions/{submissionId}` shows the expected status (`submitted` or `working`).
 
 ---
 
