@@ -253,7 +253,7 @@ Conversation ID patterns: channels `19:xxx@thread.tacv2`; meetings `19:meeting_x
 ### Known limitations
 
 - **Presence/status**: real-time via WebSocket, not available over HTTP.
-- **Assignments**: EDU-tenant feature only (education tenants that use Teams Assignments). List, get, attachments and attachment download are verified live against an education tenant; the submission "view" action is verified against a captured web session; the submission `submit`/`unsubmit` actions follow Microsoft Graph education parity on the same path shape and act on the user's real account. They are not replayed by HTTP retries and only report success after reading back the expected submission state. Live submit/unsubmit verification remains outstanding.
+- **Assignments**: EDU-tenant feature only (education tenants that use Teams Assignments). List, get, attachments, attachment download, and the submission `submit`/`unsubmit` actions are verified live against an education tenant; the submission "view" action is verified against a captured web session. `submit`/`unsubmit` act on the user's real account (a re-submit records a new submitted date the teacher sees), are not replayed by HTTP retries, and only report success after reading back the expected submission state.
 
 ## Dependencies
 

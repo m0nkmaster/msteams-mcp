@@ -9,9 +9,9 @@
  * via `requireAssignmentsTokenAsync()`. That token is minted by the HTTP token
  * refresh (the `EduAssignments` entry in `token-refresh-http.ts`).
  *
- * Read endpoints (my work, assignment detail, submissions) and the "mark viewed"
- * PATCH were verified against a captured web session. The submit / unsubmit
- * actions follow Microsoft Graph education parity on the same path shape.
+ * Read endpoints (my work, assignment detail, submissions) and the submit /
+ * unsubmit actions are verified live against an education tenant; the "mark
+ * viewed" PATCH against a captured web session.
  */
 
 import { httpRequest } from '../utils/http.js';
@@ -423,8 +423,8 @@ export type SubmissionAction = 'submit' | 'unsubmit' | 'view';
  * turn-in (unsubmit), or mark viewed. These change state on the user's real
  * Teams account, so callers should confirm intent before invoking.
  *
- * Only `view` (PATCH) is verified against a captured session; submit/unsubmit
- * (POST) follow Microsoft Graph education parity.
+ * submit/unsubmit (POST, no body) are verified live; `view` (PATCH) against a
+ * captured session.
  */
 export async function actOnSubmission(
   action: SubmissionAction,
