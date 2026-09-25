@@ -93,7 +93,7 @@ export interface AssignmentAttachment {
   name?: string;
   /** word | powerpoint | excel | file | form | link | … (from the resource's OData type). */
   type: string;
-  /** Graph drive-item URL; pass to teams_download_assignment_file. Absent for forms and links. */
+  /** Graph drive-item URL; pass to teams_download_file. Absent for forms and links. */
   fileUrl?: string;
   /** Web URL for non-file resources (e.g. a Microsoft Forms quiz or a link). */
   url?: string;

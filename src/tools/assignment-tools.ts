@@ -2,9 +2,9 @@
  * EDU Assignments tool handlers.
  *
  * Surface the Teams "Assignments" feature: list the signed-in user's
- * assignments, read a single assignment's detail and attachments, download an
- * attachment, and act on the user's own submission (turn in, undo turn-in,
- * mark viewed).
+ * assignments, read a single assignment's detail and attachments, and act on
+ * the user's own submission (turn in, undo turn-in, mark viewed). Attachments
+ * are downloaded with teams_download_file (file-tools.ts).
  */
 
 import { z } from 'zod';
@@ -17,7 +17,6 @@ import {
   getAssignment,
   actOnSubmission,
 } from '../api/assignments-api.js';
-import { downloadDriveItem } from '../api/graph-files-api.js';
 
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants.js';
 
@@ -34,11 +33,6 @@ export const ListAssignmentsInputSchema = z.object({
 export const GetAssignmentInputSchema = z.object({
   classId: z.string().regex(ASSIGNMENT_ID_PATTERN),
   assignmentId: z.string().regex(ASSIGNMENT_ID_PATTERN),
-});
-
-export const DownloadAssignmentFileInputSchema = z.object({
-  fileUrl: z.string().url(),
-  outputPath: z.string().min(1),
 });
 
 export const SubmissionActionInputSchema = z.object({
@@ -77,7 +71,7 @@ const listAssignmentsToolDefinition: Tool = {
 const getAssignmentToolDefinition: Tool = {
   name: 'teams_get_assignment',
   description:
-    "Get the full detail of a single Teams assignment, including instructions, due/close dates, max points, a Teams deep link, teacher attachments (name, type, and a fileUrl for files or a url for forms and links), and the signed-in user's own submission (state, grade, feedback, and their own working and turned-in files, including personal copies of attachments marked copiedForEachStudent). Download any attachment with a fileUrl using teams_download_assignment_file. Requires the classId and assignmentId, both available from teams_list_assignments (fields classId and id). Only available on education tenants that use Assignments; on other accounts it returns an ACCESS_DENIED or AUTH_INTERACTION_REQUIRED error. That does not affect any other Teams tool, and teams_login is not needed.",
+    "Get the full detail of a single Teams assignment, including instructions, due/close dates, max points, a Teams deep link, teacher attachments (name, type, and a fileUrl for files or a url for forms and links), and the signed-in user's own submission (state, grade, feedback, and their own working and turned-in files, including personal copies of attachments marked copiedForEachStudent). Download any attachment with a fileUrl using teams_download_file. Requires the classId and assignmentId, both available from teams_list_assignments (fields classId and id). Only available on education tenants that use Assignments; on other accounts it returns an ACCESS_DENIED or AUTH_INTERACTION_REQUIRED error. That does not affect any other Teams tool, and teams_login is not needed.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -91,20 +85,6 @@ const getAssignmentToolDefinition: Tool = {
       },
     },
     required: ['classId', 'assignmentId'],
-  },
-};
-
-const downloadAssignmentFileToolDefinition: Tool = {
-  name: 'teams_download_assignment_file',
-  description:
-    "Download a Teams assignment attachment to a local file. Pass the fileUrl of an entry in teams_get_assignment's attachments (teacher resources), or in its submission.attachments / submission.submittedAttachments (the student's own copies and turned-in work). Only Microsoft Graph drive-item URLs are accepted; forms and links have no fileUrl and cannot be downloaded (use their url instead). Saves the raw file to an absolute path on the MCP server machine and returns its name, size, content type and SHA-256. The parent directory must exist and existing files are never overwritten. Streams to disk with no size limit; a transfer that stalls for 30 seconds is cancelled and the partial file removed. Uses Microsoft Graph via the existing Teams session (no extra sign-in); if Graph is unavailable, only this tool fails and no other Teams tool is affected.",
-  inputSchema: {
-    type: 'object',
-    properties: {
-      fileUrl: { type: 'string', description: "An attachment's fileUrl from teams_get_assignment (https://graph.microsoft.com/v1.0/drives/{id}/items/{id})." },
-      outputPath: { type: 'string', description: 'Absolute destination file path on the MCP server machine. Must not already exist; the parent directory must exist.' },
-    },
-    required: ['fileUrl', 'outputPath'],
   },
 };
 
@@ -166,14 +146,6 @@ async function handleGetAssignment(
   return handleApiResult(result, (value) => ({ assignment: value }));
 }
 
-async function handleDownloadAssignmentFile(
-  input: z.infer<typeof DownloadAssignmentFileInputSchema>,
-  _ctx: ToolContext
-): Promise<ToolResult> {
-  const result = await downloadDriveItem(input.fileUrl, input.outputPath);
-  return handleApiResult(result, (value) => ({ ...value }));
-}
-
 async function handleSubmissionAction(
   input: z.infer<typeof SubmissionActionInputSchema>,
   _ctx: ToolContext
@@ -208,12 +180,6 @@ export const getAssignmentTool: RegisteredTool<typeof GetAssignmentInputSchema> 
   handler: handleGetAssignment,
 };
 
-export const downloadAssignmentFileTool: RegisteredTool<typeof DownloadAssignmentFileInputSchema> = {
-  definition: downloadAssignmentFileToolDefinition,
-  schema: DownloadAssignmentFileInputSchema,
-  handler: handleDownloadAssignmentFile,
-};
-
 export const submissionActionTool: RegisteredTool<typeof SubmissionActionInputSchema> = {
   definition: submissionActionToolDefinition,
   schema: SubmissionActionInputSchema,
@@ -224,6 +190,5 @@ export const submissionActionTool: RegisteredTool<typeof SubmissionActionInputSc
 export const assignmentTools = [
   listAssignmentsTool,
   getAssignmentTool,
-  downloadAssignmentFileTool,
   submissionActionTool,
 ];

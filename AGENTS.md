@@ -26,9 +26,9 @@ src/
 │   ├── message-tools.ts  # Messaging, favourites, save/unsave tools
 │   ├── people-tools.ts   # People search and profile tools
 │   ├── meeting-tools.ts  # Calendar and meeting tools
-│   ├── file-tools.ts     # Shared files tools
+│   ├── file-tools.ts     # Shared files and file download tools
 │   ├── tag-tools.ts      # Channel tag tools
-│   ├── assignment-tools.ts # EDU Assignments tools (list, get, attachment download, submission actions)
+│   ├── assignment-tools.ts # EDU Assignments tools (list, get with attachments, submission actions)
 │   └── auth-tools.ts     # Login and status tools
 ├── auth/                 # Authentication and credential management
 │   ├── crypto.ts         # AES-256-GCM encryption for credentials at rest
@@ -52,7 +52,7 @@ src/
 │   ├── files-api.ts      # Shared files (Substrate AllFiles)
 │   ├── tags-api.ts       # Channel tags (mt/part teams/{groupId}/tags)
 │   ├── assignments-api.ts # EDU Assignments (assignments.edu.cloud.microsoft, OneNote EDU)
-│   ├── graph-files-api.ts # Microsoft Graph drive-item downloads (assignment attachments)
+│   ├── graph-files-api.ts # File downloads via Microsoft Graph (shared files and assignment attachments)
 │   └── profile-api.ts    # Resolve MRIs to profiles (middleTier fetchShortProfile)
 ├── browser/              # Playwright browser automation (login only)
 │   ├── context.ts        # Persistent browser profile management
@@ -136,7 +136,7 @@ Different Teams APIs use different auth mechanisms:
 | **Files** (Substrate AllFiles) | Substrate JWT + message auth for user MRI | `getValidSubstrateToken()` + `extractMessageAuth()` |
 | **Profiles** (mt/part fetchShortProfile) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuthWithConfig()` |
 | **Tags** (mt/part teams/{groupId}/tags) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuth()` |
-| **Graph files** (graph.microsoft.com drive items) | Teams client's Graph JWT (aud `https://graph.microsoft.com`); the resulting `downloadUrl` is pre-authenticated and gets no header | `requireGraphTokenAsync()` |
+| **File downloads** (Graph drive items; SharePoint URLs resolved via `/shares`) | Teams client's Graph JWT (aud `https://graph.microsoft.com`); the resulting `downloadUrl` is pre-authenticated and gets no header | `requireGraphTokenAsync()` |
 | **Assignments** (assignments.edu.cloud.microsoft) | JWT Bearer for the Assignments app (aud `8f348934-…`) + `MS-Int-AppID: assignments-ui` header | `requireAssignmentsTokenAsync()` |
 
 The `extract*`/`getValid*` helpers live in `auth/token-extractor`; the `require*` guards live in `utils/auth-guards`. Notes:

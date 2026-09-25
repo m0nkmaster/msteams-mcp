@@ -32,7 +32,7 @@ Teams uses multiple authentication mechanisms depending on the API surface:
 | **Bearer (Spaces)** | `Authorization: Bearer {spacesToken}` | MSAL, `api.spaces.skype.com` audience | Calendar/Meetings |
 | **Skype Token** | `Authentication: skypetoken={token}` | Cookie `skypetoken_asm` | Messaging, Threads, Calendar |
 | **Bearer (Substrate + Prefer)** | `Authorization: Bearer {token}` + `Prefer` header | Same as Substrate search token | Transcripts (WorkingSetFiles) |
-| **Bearer (Graph)** | `Authorization: Bearer {token}` | MSAL, audience `https://graph.microsoft.com` (requested on demand) | Assignment attachment downloads |
+| **Bearer (Graph)** | `Authorization: Bearer {token}` | MSAL, audience `https://graph.microsoft.com` (requested on demand) | File downloads (shared files, assignment attachments) |
 | **Bearer (Assignments)** | `Authorization: Bearer {token}` + `MS-Int-AppID: assignments-ui` | MSAL, audience `8f348934-64be-4bb2-bc16-c54c96789f43` (requested on demand) | EDU Assignments |
 
 ### Required Headers
@@ -1850,6 +1850,22 @@ The `TranscriptJson` field is a JSON string containing the full transcript:
 }
 ```
 
+### Downloading a File (Microsoft Graph)
+
+One flow serves both shared files and assignment attachments, as the Assignments web client does. The Graph token is only ever sent to `graph.microsoft.com`.
+
+1. **Resolve to a drive item.**
+   - A Graph drive-item URL (`https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}`, an assignment `fileUrl`) is used as-is.
+   - A SharePoint/OneDrive web URL (a shared file's `webUrl`) goes through the shares API: `https://graph.microsoft.com/v1.0/shares/u!{base64url(webUrl)}/driveItem`. Verified live for OneDrive chat uploads (`-my.sharepoint.com/personal/…`), team-site file paths (`/sites/…`), and `/_layouts/15/Doc.aspx` viewer links.
+2. **Get the download link.**
+   ```
+   GET {driveItemUrl}?$select=name,size,file,currentUserRole,content.downloadUrl
+   Authorization: Bearer {graphToken}
+   ```
+3. **Download.** `@microsoft.graph.downloadUrl` is a short-lived, pre-authenticated SharePoint link (`/_layouts/15/download.aspx?…&tempauth=…`). Fetch it with **no** Authorization header. `currentUserRole.blocksDownload` is `true` when the owner has blocked downloads. `GET {driveItemUrl}/content` also works (302 to the same link).
+
+**Token:** the Teams client (`5e3ce6c0-…`) holds Graph `Files.ReadWrite.All`/`Sites.ReadWrite.All`. Teams web caches it (audience `https://graph.microsoft.com` or `00000003-0000-0000-c000-000000000000`), and the refresh-token grant with scope `https://graph.microsoft.com/.default offline_access` renews it. It is optional: fetched on demand and never allowed to trigger re-login.
+
 ---
 
 ## Assignments (EDU)
@@ -1912,18 +1928,7 @@ Word, PowerPoint, File and Form resources are verified live; Excel and Link foll
 
 On assignment resources, `distributeForStudentWork: true` means each student gets a personal copy, which appears in their submission's `resources`. `submittedResources` holds the files as last turned in.
 
-### Downloading an Attachment (Microsoft Graph)
-
-`fileUrl` looks like `https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}`. As the Assignments web client does:
-
-```
-GET {fileUrl}?$select=name,size,file,currentUserRole,content.downloadUrl
-Authorization: Bearer {graphToken}
-```
-
-The response's `@microsoft.graph.downloadUrl` is a short-lived, pre-authenticated SharePoint link (`/_layouts/15/download.aspx?…&tempauth=…`): fetch it with **no** Authorization header. `currentUserRole.blocksDownload` is `true` when the owner has blocked downloads. `GET {fileUrl}/content` also works (302 to the same link).
-
-**Token:** the Teams client (`5e3ce6c0-…`) holds Graph `Files.ReadWrite.All`/`Sites.ReadWrite.All`; Teams web caches it (audience `https://graph.microsoft.com` or `00000003-0000-0000-c000-000000000000`), and the refresh-token grant with scope `https://graph.microsoft.com/.default offline_access` renews it. Like Assignments, it is optional: fetched on demand and never allowed to trigger re-login.
+Download attachments with the Graph flow in [Downloading a File](#downloading-a-file-microsoft-graph).
 
 ### Submission Actions
 

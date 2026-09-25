@@ -1,10 +1,16 @@
 /**
- * Microsoft Graph drive-item downloads.
+ * File downloads via Microsoft Graph.
  *
- * Assignment attachments are referenced by Graph drive-item URLs
- * (`https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}`). As the
- * Teams Assignments client does, we read the item's `@microsoft.graph.downloadUrl`
- * (a short-lived, pre-authenticated SharePoint link) and stream it to disk.
+ * Accepts either form Teams hands out:
+ * - Graph drive-item URLs (`https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}`),
+ *   used by assignment attachments;
+ * - SharePoint/OneDrive web URLs (direct file paths, `Doc.aspx` viewer links,
+ *   sharing links), used by shared chat and channel files. These are resolved
+ *   through Graph's shares API (`/shares/u!{base64url}/driveItem`).
+ *
+ * As the Teams Assignments client does, we read the item's
+ * `@microsoft.graph.downloadUrl` (a short-lived, pre-authenticated SharePoint
+ * link) and stream it to disk.
  *
  * Auth: the Teams client's own Graph token (`Files.ReadWrite.All`), obtained on
  * demand via `requireGraphTokenAsync()`. Like Assignments, it is optional: a
@@ -25,11 +31,25 @@ import { requireGraphTokenAsync } from '../utils/auth-guards.js';
 import { invalidateAccessToken } from '../auth/token-extractor.js';
 import { DOWNLOAD_INACTIVITY_TIMEOUT_MS } from '../constants.js';
 
-/** Only Graph drive items: the Graph token must never be sent anywhere else. */
+/** Graph drive items are requested as-is; the Graph token only ever goes to Graph. */
 const DRIVE_ITEM_URL = /^https:\/\/graph\.microsoft\.com\/v1\.0\/drives\/[A-Za-z0-9!_-]+\/items\/[A-Za-z0-9!_-]+$/;
 
-/** The download link must be SharePoint; it carries its own short-lived auth. */
+/** SharePoint/OneDrive hosts: web URLs to resolve, and the only download-link hosts. */
 const SHAREPOINT_HOST = /\.sharepoint(?:-mil)?\.(?:com|us|de|cn)$/;
+
+/**
+ * Map an accepted URL to the Graph drive-item URL to request, or null. A
+ * SharePoint URL is only ever sent to Graph, base64url-encoded as a share ID.
+ */
+function toDriveItemUrl(url: string): string | null {
+  if (DRIVE_ITEM_URL.test(url)) return url;
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return null; }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || !SHAREPOINT_HOST.test(parsed.hostname)) {
+    return null;
+  }
+  return `https://graph.microsoft.com/v1.0/shares/u!${Buffer.from(url).toString('base64url')}/driveItem`;
+}
 
 export interface DownloadedFile {
   name: string;
@@ -48,14 +68,16 @@ interface RawDriveItem {
 }
 
 /**
- * Downloads a Graph drive item to `outputPath` (absolute; parent must exist;
- * never overwrites). Streams to disk, verifies the byte count against Graph's
- * reported size, and removes the partial file on any failure.
+ * Downloads a file to `outputPath` (absolute; parent must exist; never
+ * overwrites). `url` is a Graph drive-item URL or a SharePoint/OneDrive web
+ * URL. Streams to disk, verifies the byte count against Graph's reported size,
+ * and removes the partial file on any failure.
  */
-export async function downloadDriveItem(fileUrl: string, outputPath: string): Promise<Result<DownloadedFile>> {
-  if (!DRIVE_ITEM_URL.test(fileUrl)) {
+export async function downloadFile(url: string, outputPath: string): Promise<Result<DownloadedFile>> {
+  const itemUrl = toDriveItemUrl(url);
+  if (!itemUrl) {
     return err(createError(ErrorCode.INVALID_INPUT,
-      'fileUrl must be a Graph drive-item URL (https://graph.microsoft.com/v1.0/drives/{id}/items/{id}), as returned in an attachment\'s fileUrl'));
+      'url must be a Microsoft Graph drive-item URL (https://graph.microsoft.com/v1.0/drives/{id}/items/{id}) or an HTTPS SharePoint/OneDrive file URL (*.sharepoint.com)'));
   }
   if (!isAbsolute(outputPath)) {
     return err(createError(ErrorCode.INVALID_INPUT, 'outputPath must be an absolute file path'));
@@ -65,7 +87,7 @@ export async function downloadDriveItem(fileUrl: string, outputPath: string): Pr
   if (!tokenResult.ok) return tokenResult;
 
   const params = new URLSearchParams({ '$select': 'name,size,file,currentUserRole,content.downloadUrl' });
-  const meta = await httpRequest<RawDriveItem>(`${fileUrl}?${params.toString()}`, {
+  const meta = await httpRequest<RawDriveItem>(`${itemUrl}?${params.toString()}`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${tokenResult.value}`, Accept: 'application/json' },
   });
@@ -78,6 +100,10 @@ export async function downloadDriveItem(fileUrl: string, outputPath: string): Pr
     }
     if (meta.error.code === ErrorCode.AUTH_REQUIRED) {
       return err(createError(ErrorCode.ACCESS_DENIED, `You don't have access to this file: ${meta.error.message}`, { retryable: false }));
+    }
+    if (meta.error.code === ErrorCode.NOT_FOUND) {
+      return err(createError(ErrorCode.NOT_FOUND,
+        'File not found. It may have been moved or deleted, or the URL is not a file you can access.', { retryable: false }));
     }
     return meta;
   }

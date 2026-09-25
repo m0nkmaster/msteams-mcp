@@ -201,9 +201,12 @@ See [CLI Usage](#cli-usage) for commands.
 | Tool                     | Description                                                        |
 | ------------------------ | ------------------------------------------------------------------ |
 | `teams_get_shared_files` | Get files and links shared in a conversation (supports pagination) |
+| `teams_download_file`    | Download a shared file or assignment attachment to a local path    |
 
 
-Returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
+`teams_get_shared_files` returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
+
+`teams_download_file` takes a file's `webUrl` from `teams_get_shared_files`, or an attachment's `fileUrl` from `teams_get_assignment`. It downloads through Microsoft Graph using the Teams client's own access, so no extra sign-in is needed. Files stream straight to disk, never overwrite an existing file, and are removed if the download fails part-way. Links and Microsoft Forms aren't files and can't be downloaded.
 
 ### Assignments (education tenants only)
 
@@ -212,13 +215,12 @@ Returns both files (name, extension, URL, size) and links (URL, title), along wi
 | ------------------------- | ---------------------------------------------------------------------------------------------- |
 | `teams_list_assignments`  | List your assignments across classes (`active`, `completed` or `all`), with due dates, grades and your submission state |
 | `teams_get_assignment`    | Get one assignment's full detail, including instructions, attachments and your submission (with your own copies of files) |
-| `teams_download_assignment_file` | Download an assignment attachment or your own submitted file to a local path |         |
 | `teams_submission_action` | Turn in, undo turn-in, or mark viewed on your own submission                                   |
 
 
 Assignments is optional. It only works on education tenants that use Teams Assignments, and its token is requested separately, on demand, so other accounts pay no extra cost. If Assignments isn't available, or its authorisation fails, only these tools return an error: the rest of Teams keeps working, and no browser or re-login is triggered.
 
-Attachments (Word, PowerPoint and other files) are downloaded through Microsoft Graph using the Teams client's own access, so no extra sign-in is needed. Microsoft Forms quizzes and links are returned as URLs instead. Downloads stream straight to disk, never overwrite an existing file, and are removed if they fail part-way.
+Download attachments (Word, PowerPoint and other files) with `teams_download_file`. Microsoft Forms quizzes and links are returned as URLs instead.
 
 ### Session
 
