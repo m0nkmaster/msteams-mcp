@@ -462,7 +462,7 @@ If API calls fail with 404 or redirect errors:
 **Files:**
 - `session-state.json` - Encrypted session (cookies + localStorage)
 - `token-cache.json` - Encrypted token cache
-- `.user-data/` - Browser profile directory
+- `browser-profile/` - Persistent Chrome/Edge profile directory
 
 ### Encryption
 

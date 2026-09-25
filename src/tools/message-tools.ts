@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import {
   sendMessage,
   getMessage,
@@ -552,8 +552,7 @@ const waitForReplyToolDefinition: Tool = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleSendMessage(
-  input: z.infer<typeof SendMessageInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SendMessageInputSchema>
 ): Promise<ToolResult> {
   const result = await sendMessage(input.conversationId, input.content, {
     replyToMessageId: input.replyToMessageId,
@@ -605,8 +604,7 @@ async function handleSendMessage(
 }
 
 async function handleGetFavorites(
-  _input: Record<string, never>,
-  _ctx: ToolContext
+  _input: Record<string, never>
 ): Promise<ToolResult> {
   const result = await getFavorites();
 
@@ -624,8 +622,7 @@ async function handleGetFavorites(
 }
 
 async function handleAddFavorite(
-  input: z.infer<typeof FavoriteInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof FavoriteInputSchema>
 ): Promise<ToolResult> {
   const result = await addFavorite(input.conversationId);
 
@@ -642,8 +639,7 @@ async function handleAddFavorite(
 }
 
 async function handleRemoveFavorite(
-  input: z.infer<typeof FavoriteInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof FavoriteInputSchema>
 ): Promise<ToolResult> {
   const result = await removeFavorite(input.conversationId);
 
@@ -660,8 +656,7 @@ async function handleRemoveFavorite(
 }
 
 async function handleSaveMessage(
-  input: z.infer<typeof SaveMessageInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SaveMessageInputSchema>
 ): Promise<ToolResult> {
   const result = await saveMessage(input.conversationId, input.messageId, input.rootMessageId);
 
@@ -680,8 +675,7 @@ async function handleSaveMessage(
 }
 
 async function handleUnsaveMessage(
-  input: z.infer<typeof SaveMessageInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SaveMessageInputSchema>
 ): Promise<ToolResult> {
   const result = await unsaveMessage(input.conversationId, input.messageId, input.rootMessageId);
 
@@ -700,8 +694,7 @@ async function handleUnsaveMessage(
 }
 
 async function handleGetChat(
-  input: z.infer<typeof GetChatInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetChatInputSchema>
 ): Promise<ToolResult> {
   const result = getOneOnOneChatId(input.userId);
 
@@ -721,8 +714,7 @@ async function handleGetChat(
 }
 
 async function handleCreateGroupChat(
-  input: z.infer<typeof CreateGroupChatInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof CreateGroupChatInputSchema>
 ): Promise<ToolResult> {
   const result = await createGroupChat(input.userIds, input.topic);
 
@@ -742,8 +734,7 @@ async function handleCreateGroupChat(
 }
 
 async function handleEditMessage(
-  input: z.infer<typeof EditMessageInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof EditMessageInputSchema>
 ): Promise<ToolResult> {
   const result = await editMessage(
     input.conversationId,
@@ -767,8 +758,7 @@ async function handleEditMessage(
 }
 
 async function handleDeleteMessage(
-  input: z.infer<typeof DeleteMessageInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof DeleteMessageInputSchema>
 ): Promise<ToolResult> {
   const result = await deleteMessage(
     input.conversationId,
@@ -790,8 +780,7 @@ async function handleDeleteMessage(
 }
 
 async function handleGetUnread(
-  input: z.infer<typeof GetUnreadInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetUnreadInputSchema>
 ): Promise<ToolResult> {
   // If a specific conversation is provided, just check that one
   if (input.conversationId) {
@@ -839,8 +828,7 @@ async function handleGetUnread(
 }
 
 async function handleMarkAsRead(
-  input: z.infer<typeof MarkAsReadInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof MarkAsReadInputSchema>
 ): Promise<ToolResult> {
   const result = await markAsRead(input.conversationId, input.messageId);
 
@@ -859,8 +847,7 @@ async function handleMarkAsRead(
 }
 
 async function handleGetActivity(
-  input: z.infer<typeof GetActivityInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetActivityInputSchema>
 ): Promise<ToolResult> {
   const result = await getActivityFeed({ limit: input.limit, syncState: input.syncState });
 
@@ -879,8 +866,7 @@ async function handleGetActivity(
 }
 
 async function handleSearchEmoji(
-  input: z.infer<typeof SearchEmojiInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SearchEmojiInputSchema>
 ): Promise<ToolResult> {
   const query = input.query.toLowerCase();
   
@@ -935,8 +921,7 @@ async function handleSearchEmoji(
 }
 
 async function handleAddReaction(
-  input: z.infer<typeof AddReactionInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof AddReactionInputSchema>
 ): Promise<ToolResult> {
   const result = await addReaction(
     input.conversationId,
@@ -960,8 +945,7 @@ async function handleAddReaction(
 }
 
 async function handleRemoveReaction(
-  input: z.infer<typeof RemoveReactionInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof RemoveReactionInputSchema>
 ): Promise<ToolResult> {
   const result = await removeReaction(
     input.conversationId,
@@ -985,8 +969,7 @@ async function handleRemoveReaction(
 }
 
 async function handleGetSavedMessages(
-  input: z.infer<typeof GetSavedMessagesInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetSavedMessagesInputSchema>
 ): Promise<ToolResult> {
   const result = await getSavedMessages({ limit: input.limit });
 
@@ -1012,8 +995,7 @@ async function handleGetSavedMessages(
 }
 
 async function handleGetFollowedThreads(
-  input: z.infer<typeof GetFollowedThreadsInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetFollowedThreadsInputSchema>
 ): Promise<ToolResult> {
   const result = await getFollowedThreads({ limit: input.limit });
 
@@ -1039,8 +1021,7 @@ async function handleGetFollowedThreads(
 }
 
 async function handleGetMessage(
-  input: z.infer<typeof GetMessageInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetMessageInputSchema>
 ): Promise<ToolResult> {
   const result = await getMessage(input.conversationId, input.messageId);
 
@@ -1071,8 +1052,7 @@ async function handleGetMessage(
 }
 
 async function handleListChats(
-  input: z.infer<typeof ListChatsInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof ListChatsInputSchema>
 ): Promise<ToolResult> {
   const result = await getConversations({ limit: input.limit });
 
@@ -1090,8 +1070,7 @@ async function handleListChats(
 }
 
 async function handleWaitForReply(
-  input: z.infer<typeof WaitForReplyInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof WaitForReplyInputSchema>
 ): Promise<ToolResult> {
   let conversationId = input.conversationId;
   if (input.fromUrl) {

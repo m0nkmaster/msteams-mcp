@@ -25,10 +25,11 @@ import { ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES } from '../constants.js';
 import {
   readSessionState,
   writeSessionState,
+  clearTokenCache,
   getTeamsOrigin,
   type SessionState,
 } from './session-store.js';
-import { clearTokenCache } from './token-extractor.js';
+import { decodeJwtPayload } from './token-extractor.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import * as log from '../utils/logger.js';
@@ -96,16 +97,6 @@ interface AuthsvcResponse {
     expiresIn?: number;
   };
   regionGtms?: Record<string, unknown>;
-}
-
-/** Result of a successful HTTP token refresh. */
-export interface HttpRefreshResult {
-  /** Number of access tokens refreshed. */
-  tokensRefreshed: number;
-  /** Whether the skype token was refreshed. */
-  skypeTokenRefreshed: boolean;
-  /** Whether the refresh token itself was rotated. */
-  refreshTokenRotated: boolean;
 }
 
 // ============================================================================
@@ -181,58 +172,26 @@ const REFRESH_TIMEOUT_MS = 10000;
 // MSAL Cache Extraction
 // ============================================================================
 
-/** Diagnostic info about why MSAL cache extraction failed. */
-interface MsalCacheExtractionResult {
-  success: boolean;
-  cacheInfo?: MsalCacheInfo;
-  diagnostics: {
-    hasTeamsOrigin: boolean;
-    localStorageItemCount: number;
-    hasRefreshToken: boolean;
-    hasTenantId: boolean;
-    refreshTokenClientId?: string;
-  };
-}
-
 /**
  * Extracts MSAL cache info (refresh token, client ID, tenant ID) from session state.
- * Returns detailed diagnostics to help debug extraction failures.
+ * On failure returns a diagnostic string describing what was missing.
  */
-function extractMsalCacheInfoWithDiagnostics(state: SessionState): MsalCacheExtractionResult {
-  const teamsOrigin = getTeamsOrigin(state);
-  
-  const diagnostics = {
-    hasTeamsOrigin: teamsOrigin !== null,
-    localStorageItemCount: teamsOrigin?.localStorage?.length ?? 0,
-    hasRefreshToken: false,
-    hasTenantId: false,
-    refreshTokenClientId: undefined as string | undefined,
-  };
-
-  if (!teamsOrigin?.localStorage) {
-    return { success: false, diagnostics };
-  }
-
+function extractMsalCacheInfo(state: SessionState): { cacheInfo: MsalCacheInfo; refreshTokenEntry: MsalRefreshToken } | { missing: string } {
+  const localStorage = getTeamsOrigin(state)?.localStorage ?? [];
   let refreshToken: MsalRefreshToken | null = null;
   let refreshTokenKey: string | null = null;
   let tenantId: string | null = null;
 
-  for (const item of teamsOrigin.localStorage) {
+  for (const item of localStorage) {
     try {
       const entry = JSON.parse(item.value);
-
-      // Find the refresh token entry
       if (entry.credentialType === 'RefreshToken' && entry.secret && entry.clientId) {
         refreshToken = entry as MsalRefreshToken;
         refreshTokenKey = item.name;
-        diagnostics.hasRefreshToken = true;
-        diagnostics.refreshTokenClientId = entry.clientId;
       }
-
-      // Extract tenant ID from any access token's realm field
+      // Tenant ID comes from any access token's realm field
       if (entry.credentialType === 'AccessToken' && entry.realm && !tenantId) {
         tenantId = entry.realm;
-        diagnostics.hasTenantId = true;
       }
     } catch {
       continue;
@@ -240,11 +199,10 @@ function extractMsalCacheInfoWithDiagnostics(state: SessionState): MsalCacheExtr
   }
 
   if (!refreshToken || !refreshTokenKey || !tenantId) {
-    return { success: false, diagnostics };
+    return { missing: `localStorage items: ${localStorage.length}, refreshToken: ${!!refreshToken}, tenantId: ${!!tenantId}` };
   }
 
   return {
-    success: true,
     cacheInfo: {
       refreshToken: refreshToken.secret,
       clientId: refreshToken.clientId,
@@ -253,7 +211,7 @@ function extractMsalCacheInfoWithDiagnostics(state: SessionState): MsalCacheExtr
       environment: refreshToken.environment,
       refreshTokenKey,
     },
-    diagnostics,
+    refreshTokenEntry: refreshToken,
   };
 }
 
@@ -282,9 +240,6 @@ async function refreshAccessToken(
     scope: scopes,
   });
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
-
   try {
     // The Origin header is required because the Teams client ID is registered as
     // a Single-Page Application (SPA). Azure AD validates that refresh token grants
@@ -297,7 +252,7 @@ async function refreshAccessToken(
         'Origin': 'https://teams.microsoft.com',
       },
       body: body.toString(),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -310,7 +265,7 @@ async function refreshAccessToken(
         if (errorJson.error_description) {
           errorDetail = errorJson.error_description;
         } else if (errorJson.error) {
-          errorDetail = `${errorJson.error}: ${errorJson.error_description || errorText}`;
+          errorDetail = `${errorJson.error}: ${errorText}`;
         }
       } catch {
         errorDetail = `HTTP ${response.status}: ${errorText.substring(0, 200)}`;
@@ -346,7 +301,7 @@ async function refreshAccessToken(
     return ok(data);
 
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (error instanceof Error && error.name === 'TimeoutError') {
       return err(createError(
         ErrorCode.TIMEOUT,
         'Token refresh request timed out',
@@ -359,8 +314,6 @@ async function refreshAccessToken(
       `Token refresh network error: ${error instanceof Error ? error.message : String(error)}`,
       { retryable: true }
     ));
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
@@ -377,9 +330,6 @@ async function refreshAccessToken(
 async function exchangeSkypeToken(
   skypeSpacesToken: string,
 ): Promise<Result<{ skypeToken: string; expiresIn: number }>> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
-
   try {
     const response = await fetch(AUTHSVC_ENDPOINT, {
       method: 'POST',
@@ -388,7 +338,7 @@ async function exchangeSkypeToken(
         'Content-Type': 'application/json',
       },
       body: '{}',
-      signal: controller.signal,
+      signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -415,7 +365,7 @@ async function exchangeSkypeToken(
     return ok({ skypeToken, expiresIn: expiresIn ?? 86400 });
 
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (error instanceof Error && error.name === 'TimeoutError') {
       return err(createError(
         ErrorCode.TIMEOUT,
         'Skype token exchange timed out',
@@ -428,8 +378,6 @@ async function exchangeSkypeToken(
       `Skype token exchange error: ${error instanceof Error ? error.message : String(error)}`,
       { retryable: true }
     ));
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
@@ -437,22 +385,22 @@ async function exchangeSkypeToken(
 // Session State Update
 // ============================================================================
 
+type LocalStorage = Array<{ name: string; value: string }>;
+
 /**
- * Finds the localStorage key for an existing MSAL access token entry
- * that matches the given resource.
+ * Finds the existing MSAL access token entry for the given resource.
  */
-function findAccessTokenKey(
-  localStorage: Array<{ name: string; value: string }>,
+function findAccessToken(
+  localStorage: LocalStorage,
   resource: string,
 ): { key: string; entry: MsalAccessToken } | null {
+  const audiences = ON_DEMAND_AUDIENCES[resource];
   for (const item of localStorage) {
     try {
       const entry = JSON.parse(item.value);
       if (entry.credentialType !== 'AccessToken') continue;
-      const audiences = ON_DEMAND_AUDIENCES[resource];
       if (audiences) {
-        const payload = JSON.parse(Buffer.from(entry.secret.split('.')[1], 'base64url').toString());
-        if (!audiences.includes(payload.aud)) continue;
+        if (!audiences.includes(String(decodeJwtPayload(entry.secret)?.aud))) continue;
       } else if (!entry.target?.includes(resource)) continue;
       return { key: item.name, entry: entry as MsalAccessToken };
     } catch {
@@ -462,176 +410,82 @@ function findAccessTokenKey(
   return null;
 }
 
-/**
- * Updates a localStorage entry in the session state.
- * If the key exists, updates it. Otherwise, adds a new entry.
- */
-function updateLocalStorageEntry(
-  localStorage: Array<{ name: string; value: string }>,
-  key: string,
-  value: string,
-): void {
-  const existing = localStorage.findIndex(item => item.name === key);
-  if (existing >= 0) {
-    localStorage[existing].value = value;
-  } else {
-    localStorage.push({ name: key, value });
-  }
+/** Sets a localStorage entry, adding it if the key is new. */
+function upsertLocalStorage(localStorage: LocalStorage, key: string, value: string): void {
+  const existing = localStorage.find(item => item.name === key);
+  if (existing) existing.value = value;
+  else localStorage.push({ name: key, value });
+}
+
+/** Sets a cookie, replacing any with the same name and domain. */
+function upsertCookie(state: SessionState, cookie: SessionState['cookies'][number]): void {
+  const idx = state.cookies.findIndex(c => c.name === cookie.name && c.domain === cookie.domain);
+  if (idx >= 0) state.cookies[idx] = cookie;
+  else state.cookies.push(cookie);
 }
 
 /**
- * Updates the MSAL access token cache entry with a new token.
- * Maintains the exact MSAL cache format so token-extractor.ts can find it.
+ * Writes a new access token into the MSAL cache, updating the resource's
+ * existing entry or creating one. Keeps the exact MSAL cache format so
+ * token-extractor.ts can find it.
  */
 function updateAccessTokenInCache(
-  localStorage: Array<{ name: string; value: string }>,
+  localStorage: LocalStorage,
   resource: string,
   tokenResponse: TokenResponse,
   cacheInfo: MsalCacheInfo,
-): boolean {
-  const existing = findAccessTokenKey(localStorage, resource);
-  // Qualify Assignments scopes when creating a key: Graph can return the same
-  // bare permission names for the same account/client, but a different audience.
+): void {
+  // Qualify Assignments scopes: Graph can return the same bare permission names
+  // for the same account/client, but a different audience.
   const target = resource === ASSIGNMENTS_RESOURCE
     ? tokenResponse.scope.split(/\s+/).filter(Boolean).map(scope => scope.includes('/') ? scope : `${ASSIGNMENTS_APP_ID}/${scope}`).join(' ')
     : tokenResponse.scope;
-  if (!existing) {
-    // No existing entry for this resource — create one
-    // Build the key in MSAL format: {homeAccountId}-{environment}-accesstoken-{clientId}-{realm}-{target}
-    const now = Math.floor(Date.now() / 1000);
-    const newEntry: MsalAccessToken = {
+  const existing = findAccessToken(localStorage, resource);
+  const now = Math.floor(Date.now() / 1000);
+  const entry: MsalAccessToken = {
+    ...(existing?.entry ?? {
       credentialType: 'AccessToken',
       homeAccountId: cacheInfo.homeAccountId,
       environment: cacheInfo.environment,
       clientId: cacheInfo.clientId,
       realm: cacheInfo.tenantId,
-      target,
       tokenType: tokenResponse.token_type || 'Bearer',
-      secret: tokenResponse.access_token,
-      expiresOn: String(now + tokenResponse.expires_in),
-      extendedExpiresOn: String(now + (tokenResponse.ext_expires_in ?? tokenResponse.expires_in)),
-      cachedAt: String(now),
-    };
-
-    // Build key in MSAL format
-    const scopeKey = target.toLowerCase();
-    const key = `${cacheInfo.homeAccountId}-${cacheInfo.environment}-accesstoken-${cacheInfo.clientId}-${cacheInfo.tenantId}-${scopeKey}`;
-    updateLocalStorageEntry(localStorage, key, JSON.stringify(newEntry));
-    return true;
-  }
-
-  // Update existing entry
-  const now = Math.floor(Date.now() / 1000);
-  const updated: MsalAccessToken = {
-    ...existing.entry,
+    }),
+    target: target || existing?.entry.target || '',
     secret: tokenResponse.access_token,
     expiresOn: String(now + tokenResponse.expires_in),
     extendedExpiresOn: String(now + (tokenResponse.ext_expires_in ?? tokenResponse.expires_in)),
     cachedAt: String(now),
   };
-
-  // If the response includes new scopes, update target
-  if (tokenResponse.scope) {
-    updated.target = target;
-  }
-
-  updateLocalStorageEntry(localStorage, existing.key, JSON.stringify(updated));
-  return true;
+  // MSAL key format: {homeAccountId}-{environment}-accesstoken-{clientId}-{realm}-{target}
+  const key = existing?.key
+    ?? `${cacheInfo.homeAccountId}-${cacheInfo.environment}-accesstoken-${cacheInfo.clientId}-${cacheInfo.tenantId}-${target.toLowerCase()}`;
+  upsertLocalStorage(localStorage, key, JSON.stringify(entry));
 }
 
 /**
- * Updates the refresh token in the MSAL cache.
- * Azure AD may rotate the refresh token on each use.
+ * Stores a freshly exchanged skypetoken_asm cookie and the Skype Spaces
+ * `authtoken` cookie (the Skype Spaces access token, used by messaging APIs).
  */
-function updateRefreshTokenInCache(
-  localStorage: Array<{ name: string; value: string }>,
-  refreshTokenKey: string,
-  newRefreshToken: string,
-  existingEntry: string,
-): void {
-  try {
-    const entry = JSON.parse(existingEntry) as MsalRefreshToken;
-    entry.secret = newRefreshToken;
-    entry.lastUpdatedAt = String(Date.now());
-    updateLocalStorageEntry(localStorage, refreshTokenKey, JSON.stringify(entry));
-  } catch {
-    // If we can't parse the existing entry, just update the secret
-    updateLocalStorageEntry(localStorage, refreshTokenKey, JSON.stringify({
-      credentialType: 'RefreshToken',
-      secret: newRefreshToken,
-      lastUpdatedAt: String(Date.now()),
-    }));
-  }
-}
-
-/**
- * Updates the skypetoken_asm cookies in session state.
- */
-function updateSkypeTokenCookies(
+function updateSkypeCookies(
   state: SessionState,
   skypeToken: string,
-  expiresIn: number,
-): void {
-  const expiryTimestamp = Date.now() / 1000 + expiresIn;
-
-  // Domains where skypetoken_asm is set
-  const skypeTokenDomains = ['.asyncgw.teams.microsoft.com', '.asm.skype.com'];
-
-  for (const domain of skypeTokenDomains) {
-    const existingIdx = state.cookies.findIndex(
-      c => c.name === 'skypetoken_asm' && c.domain === domain
-    );
-
-    const cookie = {
-      name: 'skypetoken_asm',
-      value: skypeToken,
-      domain,
-      path: '/',
-      expires: expiryTimestamp,
-      httpOnly: true,
-      secure: true,
-      sameSite: 'None' as const,
-    };
-
-    if (existingIdx >= 0) {
-      state.cookies[existingIdx] = cookie;
-    } else {
-      state.cookies.push(cookie);
-    }
-  }
-}
-
-/**
- * Updates the authtoken cookie in session state.
- * The authtoken is the Skype Spaces access token stored as a cookie.
- */
-function updateAuthTokenCookie(
-  state: SessionState,
+  skypeExpiresIn: number,
   skypeSpacesToken: string,
-  expiresIn: number,
+  spacesExpiresIn: number,
 ): void {
-  const expiryTimestamp = Date.now() / 1000 + expiresIn;
-
-  const existingIdx = state.cookies.findIndex(
-    c => c.name === 'authtoken' && c.domain === 'teams.microsoft.com'
-  );
-
-  const cookie = {
-    name: 'authtoken',
-    value: `Bearer%3D${encodeURIComponent(skypeSpacesToken)}`,
-    domain: 'teams.microsoft.com',
-    path: '/',
-    expires: expiryTimestamp,
-    httpOnly: false,
-    secure: true,
-    sameSite: 'None' as const,
-  };
-
-  if (existingIdx >= 0) {
-    state.cookies[existingIdx] = cookie;
-  } else {
-    state.cookies.push(cookie);
+  const nowSec = Date.now() / 1000;
+  for (const domain of ['.asyncgw.teams.microsoft.com', '.asm.skype.com']) {
+    upsertCookie(state, {
+      name: 'skypetoken_asm', value: skypeToken, domain, path: '/',
+      expires: nowSec + skypeExpiresIn, httpOnly: true, secure: true, sameSite: 'None',
+    });
   }
+  upsertCookie(state, {
+    name: 'authtoken', value: `Bearer%3D${encodeURIComponent(skypeSpacesToken)}`,
+    domain: 'teams.microsoft.com', path: '/',
+    expires: nowSec + spacesExpiresIn, httpOnly: false, secure: true, sameSite: 'None',
+  });
 }
 
 // ============================================================================
@@ -652,8 +506,7 @@ function updateAuthTokenCookie(
  * Falls back to browser-based refresh if this fails (e.g., refresh token
  * expired, Conditional Access policy requires interactive auth).
  */
-export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource = 'core'): Promise<Result<HttpRefreshResult>> {
-  // Read current session state
+export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource = 'core'): Promise<Result<void>> {
   const state = readSessionState();
   if (!state) {
     log.warn('token-refresh-http', 'No session state file found');
@@ -664,52 +517,25 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
     ));
   }
 
-  // Extract MSAL cache info with diagnostics
-  const extractionResult = extractMsalCacheInfoWithDiagnostics(state);
-  if (!extractionResult.success) {
-    const diag = extractionResult.diagnostics;
-    log.warn('token-refresh-http', 
-      `MSAL cache extraction failed: ` +
-      `teamsOrigin=${diag.hasTeamsOrigin}, ` +
-      `localStorageItems=${diag.localStorageItemCount}, ` +
-      `hasRefreshToken=${diag.hasRefreshToken}, ` +
-      `hasTenantId=${diag.hasTenantId}` +
-      (diag.refreshTokenClientId ? `, clientId=${diag.refreshTokenClientId.substring(0, 8)}...` : '')
-    );
+  const extracted = extractMsalCacheInfo(state);
+  if ('missing' in extracted) {
+    log.warn('token-refresh-http', `MSAL cache extraction failed: ${extracted.missing}`);
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
-      `No MSAL refresh token found in session state (localStorage items: ${diag.localStorageItemCount}, refreshToken: ${diag.hasRefreshToken}, tenantId: ${diag.hasTenantId}). Browser login is required.`,
+      `No MSAL refresh token found in session state (${extracted.missing}). Browser login is required.`,
       { suggestions: ['Call teams_login to authenticate via browser'] }
     ));
   }
 
-  const cacheInfo = extractionResult.cacheInfo!;
-  log.debug('token-refresh-http', 
-    `MSAL cache extracted: clientId=${cacheInfo.clientId.substring(0, 8)}..., ` +
-    `tenantId=${cacheInfo.tenantId.substring(0, 8)}...`
-  );
-
-  const teamsOrigin = getTeamsOrigin(state);
-  if (!teamsOrigin?.localStorage) {
-    log.warn('token-refresh-http', 'Teams origin disappeared after extraction');
-    return err(createError(
-      ErrorCode.AUTH_REQUIRED,
-      'No Teams localStorage found in session state.',
-    ));
-  }
-
-  // Get the existing refresh token entry for later update
-  const refreshTokenEntry = teamsOrigin.localStorage.find(
-    item => item.name === cacheInfo.refreshTokenKey
-  );
+  const { cacheInfo, refreshTokenEntry } = extracted;
+  // Non-null: extraction found the refresh token in this origin's localStorage.
+  const localStorage = getTeamsOrigin(state)!.localStorage;
 
   let tokensRefreshed = 0;
-  let refreshTokenRotated = false;
-  let skypeSpacesToken: string | null = null;
-  let skypeSpacesExpiresIn: number | null = null;
+  let skypeSpaces: TokenResponse | null = null;
   const scopeErrors: string[] = [];
 
-  // Use the current refresh token; it may be rotated by Azure AD
+  // Azure AD may rotate the refresh token on each use
   let currentRefreshToken = cacheInfo.refreshToken;
 
   const scopes = REFRESH_SCOPES.filter(scope => resource === 'core' ? !scope.onDemand : scope.onDemand === resource);
@@ -731,28 +557,10 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
       continue;
     }
 
-    const tokenResponse = result.value;
-
-    // Update the access token in MSAL cache
-    updateAccessTokenInCache(
-      teamsOrigin.localStorage,
-      scope.resource,
-      tokenResponse,
-      cacheInfo,
-    );
+    updateAccessTokenInCache(localStorage, scope.resource, result.value, cacheInfo);
     tokensRefreshed++;
-
-    // If Azure AD rotated the refresh token, use the new one for subsequent calls
-    if (tokenResponse.refresh_token && tokenResponse.refresh_token !== currentRefreshToken) {
-      currentRefreshToken = tokenResponse.refresh_token;
-      refreshTokenRotated = true;
-    }
-
-    // Capture the Skype Spaces token for skypetoken_asm exchange
-    if (scope.resource === 'api.spaces.skype.com') {
-      skypeSpacesToken = tokenResponse.access_token;
-      skypeSpacesExpiresIn = tokenResponse.expires_in;
-    }
+    if (result.value.refresh_token) currentRefreshToken = result.value.refresh_token;
+    if (scope.resource === 'api.spaces.skype.com') skypeSpaces = result.value;
   }
 
   if (tokensRefreshed === 0) {
@@ -763,38 +571,34 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
     ));
   }
 
-  // Update the refresh token if it was rotated
-  if (refreshTokenRotated && refreshTokenEntry) {
-    updateRefreshTokenInCache(
-      teamsOrigin.localStorage,
-      cacheInfo.refreshTokenKey,
-      currentRefreshToken,
-      refreshTokenEntry.value,
-    );
+  if (currentRefreshToken !== cacheInfo.refreshToken) {
+    upsertLocalStorage(localStorage, cacheInfo.refreshTokenKey, JSON.stringify({
+      ...refreshTokenEntry,
+      secret: currentRefreshToken,
+      lastUpdatedAt: String(Date.now()),
+    }));
   }
 
   // Exchange Skype Spaces token for skypetoken_asm
   let skypeTokenRefreshed = false;
-  if (skypeSpacesToken) {
-    const skypeResult = await exchangeSkypeToken(skypeSpacesToken);
+  if (skypeSpaces) {
+    const skypeResult = await exchangeSkypeToken(skypeSpaces.access_token);
     if (skypeResult.ok) {
-      updateSkypeTokenCookies(state, skypeResult.value.skypeToken, skypeResult.value.expiresIn);
-      updateAuthTokenCookie(state, skypeSpacesToken, skypeSpacesExpiresIn ?? 3600);
+      updateSkypeCookies(state, skypeResult.value.skypeToken, skypeResult.value.expiresIn,
+        skypeSpaces.access_token, skypeSpaces.expires_in);
       skypeTokenRefreshed = true;
     } else {
       log.warn('token-refresh-http', `Skype token exchange failed: ${skypeResult.error.message}`);
     }
   }
 
-  // Write updated session state back to encrypted storage
   writeSessionState(state);
 
   // Clear the in-memory token cache so it re-reads from the updated session
   if (resource === 'core') clearTokenCache();
 
-  return ok({
-    tokensRefreshed,
-    skypeTokenRefreshed,
-    refreshTokenRotated,
-  });
+  log.info('token-refresh-http', `Refreshed ${tokensRefreshed} of ${scopes.length} tokens` +
+    (skypeTokenRefreshed ? ', skype token refreshed' : '') +
+    (currentRefreshToken !== cacheInfo.refreshToken ? ', refresh token rotated' : ''));
+  return ok(undefined);
 }

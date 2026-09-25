@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchMessages, searchEmails, searchChannels } from '../api/substrate-api.js';
 import { getThreadMessages, getConsumptionHorizon, markAsRead } from '../api/chatsvc-api.js';
@@ -175,8 +175,7 @@ const searchEmailToolDefinition: Tool = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleSearch(
-  input: z.infer<typeof SearchInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SearchInputSchema>
 ): Promise<ToolResult> {
   const result = await searchMessages(input.query, {
     maxResults: input.maxResults,
@@ -209,8 +208,7 @@ async function handleSearch(
 }
 
 async function handleGetThread(
-  input: z.infer<typeof GetThreadInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetThreadInputSchema>
 ): Promise<ToolResult> {
   // Resolve conversation and thread root from a deep link when fromUrl is given.
   let conversationId = input.conversationId;
@@ -321,8 +319,7 @@ async function handleGetThread(
 }
 
 async function handleSearchEmail(
-  input: z.infer<typeof SearchEmailInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SearchEmailInputSchema>
 ): Promise<ToolResult> {
   const result = await searchEmails(input.query, {
     maxResults: input.maxResults,
@@ -359,8 +356,7 @@ async function handleSearchEmail(
 }
 
 async function handleFindChannel(
-  input: z.infer<typeof FindChannelInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof FindChannelInputSchema>
 ): Promise<ToolResult> {
   const result = await searchChannels(input.query, input.limit);
 

@@ -7,10 +7,11 @@ import { createError, ErrorCode } from '../types/errors.js';
 import { createBrowserContext } from '../browser/context.js';
 
 vi.mock('./token-refresh-http.js', () => ({ refreshTokensViaHttp: vi.fn() }));
-vi.mock('./token-extractor.js', () => ({ extractSubstrateToken: vi.fn(), getValidAssignmentsToken: vi.fn(), clearTokenCache: vi.fn() }));
+vi.mock('./token-extractor.js', () => ({ extractSubstrateToken: vi.fn(), getValidAssignmentsToken: vi.fn() }));
+vi.mock('./session-store.js', () => ({ clearTokenCache: vi.fn() }));
 vi.mock('../browser/context.js', () => ({ createBrowserContext: vi.fn(async () => ({ page: {}, context: {} })), closeBrowser: vi.fn() }));
 vi.mock('../browser/auth.js', () => ({ ensureAuthenticated: vi.fn() }));
-const refreshed = ok({ tokensRefreshed: 1, skypeTokenRefreshed: false, refreshTokenRotated: false });
+const refreshed = ok(undefined);
 
 beforeEach(() => {
   vi.resetAllMocks();

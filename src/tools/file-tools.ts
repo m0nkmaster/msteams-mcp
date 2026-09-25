@@ -5,7 +5,7 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { getSharedFiles } from '../api/files-api.js';
 import { downloadFile } from '../api/graph-files-api.js';
@@ -61,8 +61,7 @@ const getSharedFilesToolDefinition: Tool = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleGetSharedFiles(
-  input: z.infer<typeof GetSharedFilesInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetSharedFilesInputSchema>
 ): Promise<ToolResult> {
   const result = await getSharedFiles(input.conversationId, {
     pageSize: input.pageSize,
@@ -102,8 +101,7 @@ const downloadFileToolDefinition: Tool = {
 };
 
 async function handleDownloadFile(
-  input: z.infer<typeof DownloadFileInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof DownloadFileInputSchema>
 ): Promise<ToolResult> {
   const result = await downloadFile(input.url, input.outputPath);
   return handleApiResult(result, (value) => ({ ...value }));

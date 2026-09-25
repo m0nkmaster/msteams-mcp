@@ -7,21 +7,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// We need to mock the session-store and token-extractor modules
+// We need to mock the session-store module
 // before importing the module under test.
 vi.mock('./session-store.js', () => ({
   readSessionState: vi.fn(),
   writeSessionState: vi.fn(),
+  clearTokenCache: vi.fn(),
   getTeamsOrigin: vi.fn(),
 }));
 
-vi.mock('./token-extractor.js', () => ({
-  clearTokenCache: vi.fn(),
-}));
-
 import { refreshTokensViaHttp } from './token-refresh-http.js';
-import { readSessionState, writeSessionState, getTeamsOrigin } from './session-store.js';
-import { clearTokenCache } from './token-extractor.js';
+import { readSessionState, writeSessionState, clearTokenCache, getTeamsOrigin } from './session-store.js';
 import type { SessionState } from './session-store.js';
 
 // ============================================================================
@@ -120,6 +116,19 @@ function makeMockSessionState(): SessionState {
 }
 
 /** Creates a mock Azure AD token response. */
+/** Access token entries in the last written session state. */
+function savedAccessTokens() {
+  const saved = vi.mocked(writeSessionState).mock.calls.at(-1)![0];
+  return saved.origins[0].localStorage.map(item => JSON.parse(item.value))
+    .filter(entry => entry.credentialType === 'AccessToken');
+}
+
+/** Whether the last written session state carries the new skype token. */
+function savedNewSkypeToken(): boolean {
+  const saved = vi.mocked(writeSessionState).mock.calls.at(-1)![0];
+  return saved.cookies.some(cookie => cookie.name === 'skypetoken_asm' && cookie.value === 'new-skype-token');
+}
+
 function makeTokenResponse(scope: string, expiresIn = 3600) {
   return {
     access_token: `new-access-token-for-${scope}`,
@@ -209,11 +218,8 @@ describe('refreshTokensViaHttp', () => {
     const result = await refreshTokensViaHttp();
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.tokensRefreshed).toBe(3);
-      expect(result.value.skypeTokenRefreshed).toBe(true);
-      expect(result.value.refreshTokenRotated).toBe(true);
-    }
+    expect(savedAccessTokens().filter(entry => entry.secret.startsWith('new-access-token'))).toHaveLength(3);
+    expect(savedNewSkypeToken()).toBe(true);
 
     // Verify session state was written back
     expect(writeSessionState).toHaveBeenCalledOnce();
@@ -307,11 +313,7 @@ describe('refreshTokensViaHttp', () => {
 
     const result = await refreshTokensViaHttp();
 
-    expect(result).toEqual({ ok: true, value: {
-      tokensRefreshed: 3,
-      skypeTokenRefreshed: true,
-      refreshTokenRotated: true,
-    } });
+    expect(result).toEqual({ ok: true, value: undefined });
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => String(init?.body).includes('8f348934'))).toBe(false);
     expect(writeSessionState).toHaveBeenCalledOnce();
     const saved = vi.mocked(writeSessionState).mock.calls[0][0];
@@ -358,10 +360,8 @@ describe('refreshTokensViaHttp', () => {
     const result = await refreshTokensViaHttp();
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      // 2 of 3 scopes succeeded (first one failed with network error)
-      expect(result.value.tokensRefreshed).toBe(2);
-    }
+    // 2 of 3 scopes succeeded (first one failed with network error)
+    expect(savedAccessTokens().filter(entry => entry.secret.startsWith('new-access-token'))).toHaveLength(2);
   });
 
   it('handles skype token exchange failure gracefully', async () => {
@@ -386,10 +386,8 @@ describe('refreshTokensViaHttp', () => {
 
     // Should still succeed — skype token failure is non-fatal
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.tokensRefreshed).toBe(3);
-      expect(result.value.skypeTokenRefreshed).toBe(false);
-    }
+    expect(savedAccessTokens().filter(entry => entry.secret.startsWith('new-access-token'))).toHaveLength(3);
+    expect(savedNewSkypeToken()).toBe(false);
   });
 
   it('updates MSAL access token cache entries in localStorage', async () => {
@@ -512,7 +510,7 @@ describe('refreshTokensViaHttp', () => {
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
       ...makeTokenResponse('EduAssignments.ReadWrite'), access_token: accessToken,
     }), { status: 200 }));
-    expect(await refreshTokensViaHttp('assignments')).toMatchObject({ ok: true, value: { tokensRefreshed: 1, skypeTokenRefreshed: false } });
+    expect(await refreshTokensViaHttp('assignments')).toEqual({ ok: true, value: undefined });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(graphEntry.value).toBe(originalGraph);
     const saved = vi.mocked(writeSessionState).mock.calls[0][0];
@@ -538,7 +536,7 @@ describe('refreshTokensViaHttp', () => {
       ...makeTokenResponse('Files.ReadWrite.All'), access_token: accessToken,
     }), { status: 200 }));
 
-    expect(await refreshTokensViaHttp('graph')).toMatchObject({ ok: true, value: { tokensRefreshed: 1, skypeTokenRefreshed: false } });
+    expect(await refreshTokensViaHttp('graph')).toEqual({ ok: true, value: undefined });
 
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(new URLSearchParams(vi.mocked(fetch).mock.calls[0][1]!.body as string).get('scope')).toBe('https://graph.microsoft.com/.default offline_access');
