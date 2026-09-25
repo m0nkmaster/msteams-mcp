@@ -17,7 +17,7 @@ import {
   type TokenCache,
 } from './session-store.js';
 import { parseJwtProfile, type UserProfile } from '../utils/parsers.js';
-import { MRI_TYPE_PREFIX, ORGID_PREFIX, MRI_ORGID_PREFIX, MAX_DEBUG_CONFIG_VALUE_LENGTH, ASSIGNMENTS_APP_ID } from '../constants.js';
+import { MRI_TYPE_PREFIX, ORGID_PREFIX, MRI_ORGID_PREFIX, MAX_DEBUG_CONFIG_VALUE_LENGTH, ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES } from '../constants.js';
 
 // ============================================================================
 // JWT Utilities
@@ -232,6 +232,19 @@ export function getSubstrateTokenStatus(): {
  * the same EduAssignments permission names for a different resource.
  */
 export function extractAssignmentsToken(state?: SessionState): SubstrateTokenInfo | null {
+  return extractTokenByAudience([ASSIGNMENTS_APP_ID], state);
+}
+
+/**
+ * Extracts a Microsoft Graph token from session state. Teams web caches one for
+ * its own client; the on-demand refresh (`refreshTokensViaHttp('graph')`) renews it.
+ */
+export function extractGraphToken(state?: SessionState): SubstrateTokenInfo | null {
+  return extractTokenByAudience(GRAPH_AUDIENCES, state);
+}
+
+/** Longest-lived unexpired AccessToken whose JWT audience is one of `audiences`. */
+function extractTokenByAudience(audiences: readonly string[], state?: SessionState): SubstrateTokenInfo | null {
   return withLocalStorage(state, (localStorage) => {
     let bestToken: SubstrateTokenInfo | null = null;
 
@@ -241,7 +254,7 @@ export function extractAssignmentsToken(state?: SessionState): SubstrateTokenInf
 
         if (entry.credentialType !== 'AccessToken') continue;
         if (!isJwtToken(entry.secret)) continue;
-        if (decodeJwtPayload(entry.secret)?.aud !== ASSIGNMENTS_APP_ID) continue;
+        if (!audiences.includes(String(decodeJwtPayload(entry.secret)?.aud))) continue;
 
         const expiry = getJwtExpiry(entry.secret);
         if (!expiry) continue;
@@ -261,7 +274,7 @@ export function extractAssignmentsToken(state?: SessionState): SubstrateTokenInf
 }
 
 /** Remove only the rejected credential; leave other API tokens untouched. */
-export function invalidateAssignmentsToken(token: string): void {
+export function invalidateAccessToken(token: string): void {
   const state = readSessionState();
   if (!state) return;
   const origin = getTeamsOrigin(state);
@@ -289,6 +302,11 @@ export function getValidAssignmentsToken(): string | null {
   if (!extracted) return null;
   if (extracted.expiry.getTime() <= Date.now()) return null;
   return extracted.token;
+}
+
+/** Gets a valid Microsoft Graph token from the session, or null. */
+export function getValidGraphToken(): string | null {
+  return extractGraphToken()?.token ?? null;
 }
 
 /** Candidate token found during extraction. */

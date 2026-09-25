@@ -24,9 +24,10 @@ import { type Result, ok, err } from '../types/result.js';
 import {
   extractSubstrateToken,
   getValidAssignmentsToken,
+  getValidGraphToken,
   clearTokenCache,
 } from './token-extractor.js';
-import { refreshTokensViaHttp } from './token-refresh-http.js';
+import { refreshTokensViaHttp, type OnDemandResource } from './token-refresh-http.js';
 import * as log from '../utils/logger.js';
 
 /** Result of a successful token refresh. */
@@ -62,24 +63,34 @@ export function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResult>> {
 }
 
 /**
- * Acquire Assignments on demand with a single HTTP exchange. Assignments is an
- * optional EDU feature, so it never launches a browser, refreshes core
- * credentials, or returns an error that would trigger the server's auto-login.
+ * Acquire an optional resource's token on demand with a single HTTP exchange.
+ * Optional features never launch a browser, refresh core credentials, or return
+ * an error that would trigger the server's auto-login.
  */
-export function refreshAssignmentsToken(): Promise<Result<string>> {
+function refreshOnDemandToken(resource: OnDemandResource, label: string, getValid: () => string | null): Promise<Result<string>> {
   return serializeRefresh(async () => {
-    const result = await refreshTokensViaHttp('assignments');
+    const result = await refreshTokensViaHttp(resource);
     if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
       return err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
-        `Assignments could not be authorized: ${result.error.message}`,
+        `${label} could not be authorized: ${result.error.message}`,
         { retryable: false }));
     }
     if (!result.ok) return result;
-    const token = getValidAssignmentsToken();
+    const token = getValid();
     return token ? ok(token) : err(createError(ErrorCode.API_ERROR,
-      'Assignments token exchange did not return a valid token for the Assignments service.',
+      `${label} token exchange did not return a valid token for the ${label} service.`,
       { retryable: false }));
   });
+}
+
+/** Acquire the optional EDU Assignments token. */
+export function refreshAssignmentsToken(): Promise<Result<string>> {
+  return refreshOnDemandToken('assignments', 'Assignments', getValidAssignmentsToken);
+}
+
+/** Acquire the optional Microsoft Graph token (used for file downloads). */
+export function refreshGraphToken(): Promise<Result<string>> {
+  return refreshOnDemandToken('graph', 'Microsoft Graph', getValidGraphToken);
 }
 
 async function refreshCoreTokens(): Promise<Result<TokenRefreshResult>> {

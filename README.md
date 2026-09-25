@@ -211,11 +211,14 @@ Returns both files (name, extension, URL, size) and links (URL, title), along wi
 | Tool                      | Description                                                                                    |
 | ------------------------- | ---------------------------------------------------------------------------------------------- |
 | `teams_list_assignments`  | List your assignments across classes (`active`, `completed` or `all`), with due dates, grades and your submission state |
-| `teams_get_assignment`    | Get one assignment's full detail, including instructions and your submission                   |
+| `teams_get_assignment`    | Get one assignment's full detail, including instructions, attachments and your submission (with your own copies of files) |
+| `teams_download_assignment_file` | Download an assignment attachment or your own submitted file to a local path |         |
 | `teams_submission_action` | Turn in, undo turn-in, or mark viewed on your own submission                                   |
 
 
-Assignments is optional. It only works on education tenants that use Teams Assignments, and its token is requested separately, on demand, so other accounts pay no extra cost. If Assignments isn't available, or its authorisation fails, only these three tools return an error: the rest of Teams keeps working, and no browser or re-login is triggered.
+Assignments is optional. It only works on education tenants that use Teams Assignments, and its token is requested separately, on demand, so other accounts pay no extra cost. If Assignments isn't available, or its authorisation fails, only these tools return an error: the rest of Teams keeps working, and no browser or re-login is triggered.
+
+Attachments (Word, PowerPoint and other files) are downloaded through Microsoft Graph using the Teams client's own access, so no extra sign-in is needed. Microsoft Forms quizzes and links are returned as URLs instead. Downloads stream straight to disk, never overwrite an existing file, and are removed if they fail part-way.
 
 ### Session
 

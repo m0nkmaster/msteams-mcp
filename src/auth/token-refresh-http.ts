@@ -21,7 +21,7 @@
  * 6. Write updated session state back to encrypted storage
  */
 
-import { ASSIGNMENTS_APP_ID } from '../constants.js';
+import { ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES } from '../constants.js';
 import {
   readSessionState,
   writeSessionState,
@@ -121,8 +121,23 @@ const AUTHSVC_ENDPOINT = 'https://authsvc.teams.microsoft.com/v1.0/authz';
 /** Resource key used by the on-demand Assignments refresh. */
 const ASSIGNMENTS_RESOURCE = 'EduAssignments';
 
-/** Core scopes are refreshed together; Assignments is requested only on demand. */
-const REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string; onDemand?: boolean }> = [
+/** Resource key used by the on-demand Microsoft Graph refresh. */
+const GRAPH_RESOURCE = 'MicrosoftGraph';
+
+/** Optional resources requested only when a tool needs them. */
+export type OnDemandResource = 'assignments' | 'graph';
+
+/**
+ * Optional resources are cached by JWT audience rather than MSAL target, because
+ * Graph and Assignments grant overlapping bare permission names.
+ */
+const ON_DEMAND_AUDIENCES: Record<string, readonly string[]> = {
+  [ASSIGNMENTS_RESOURCE]: [ASSIGNMENTS_APP_ID],
+  [GRAPH_RESOURCE]: GRAPH_AUDIENCES,
+};
+
+/** Core scopes are refreshed together; optional resources only on demand. */
+const REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string; onDemand?: OnDemandResource; label?: string }> = [
   {
     /** Substrate search/people APIs. */
     resource: 'substrate.office.com',
@@ -147,7 +162,15 @@ const REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string; onDemand
     resource: ASSIGNMENTS_RESOURCE,
     scopes: `${ASSIGNMENTS_APP_ID}/.default offline_access`,
     // EDU access may be unavailable even when the core Teams session is valid.
-    onDemand: true,
+    onDemand: 'assignments',
+    label: 'Assignments',
+  },
+  {
+    /** Microsoft Graph, used to download files such as assignment attachments. */
+    resource: GRAPH_RESOURCE,
+    scopes: 'https://graph.microsoft.com/.default offline_access',
+    onDemand: 'graph',
+    label: 'Microsoft Graph',
   },
 ];
 
@@ -297,14 +320,14 @@ async function refreshAccessToken(
       // all HTTP 400s this way: invalid_grant may require renewed SSO or MFA.
       // 50105 unassigned user, 53003 Conditional Access block, 90094 admin
       // consent, 650057 invalid resource: none are fixed by re-authenticating.
-      if (scopes.startsWith(ASSIGNMENTS_APP_ID) &&
-        /AADSTS(?:50105|53003|65001|65004|90094|500011|650057|700016)\b/.test(errorDetail)) {
+      const optional = REFRESH_SCOPES.find(scope => scope.onDemand && scope.scopes === scopes);
+      if (optional && /AADSTS(?:50105|53003|65001|65004|90094|500011|650057|700016)\b/.test(errorDetail)) {
         return err(createError(ErrorCode.ACCESS_DENIED,
-          `Assignments access was refused: ${errorDetail}`, {
+          `${optional.label} access was refused: ${errorDetail}`, {
             retryable: false,
             suggestions: [
-              'Assignments is optional (education tenants only); all other Teams tools are unaffected',
-              'Check Assignments availability and required consent with your tenant administrator',
+              `${optional.label} is optional; all other Teams tools are unaffected`,
+              `Check ${optional.label} availability and required consent with your tenant administrator`,
             ],
           }));
       }
@@ -426,9 +449,10 @@ function findAccessTokenKey(
     try {
       const entry = JSON.parse(item.value);
       if (entry.credentialType !== 'AccessToken') continue;
-      if (resource === ASSIGNMENTS_RESOURCE) {
+      const audiences = ON_DEMAND_AUDIENCES[resource];
+      if (audiences) {
         const payload = JSON.parse(Buffer.from(entry.secret.split('.')[1], 'base64url').toString());
-        if (payload.aud !== ASSIGNMENTS_APP_ID) continue;
+        if (!audiences.includes(payload.aud)) continue;
       } else if (!entry.target?.includes(resource)) continue;
       return { key: item.name, entry: entry as MsalAccessToken };
     } catch {
@@ -628,7 +652,7 @@ function updateAuthTokenCookie(
  * Falls back to browser-based refresh if this fails (e.g., refresh token
  * expired, Conditional Access policy requires interactive auth).
  */
-export async function refreshTokensViaHttp(resource: 'core' | 'assignments' = 'core'): Promise<Result<HttpRefreshResult>> {
+export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource = 'core'): Promise<Result<HttpRefreshResult>> {
   // Read current session state
   const state = readSessionState();
   if (!state) {
@@ -688,7 +712,7 @@ export async function refreshTokensViaHttp(resource: 'core' | 'assignments' = 'c
   // Use the current refresh token; it may be rotated by Azure AD
   let currentRefreshToken = cacheInfo.refreshToken;
 
-  const scopes = REFRESH_SCOPES.filter(scope => resource === 'assignments' ? scope.onDemand : !scope.onDemand);
+  const scopes = REFRESH_SCOPES.filter(scope => resource === 'core' ? !scope.onDemand : scope.onDemand === resource);
   for (const scope of scopes) {
     const result = await refreshAccessToken(
       cacheInfo.tenantId,
@@ -699,7 +723,7 @@ export async function refreshTokensViaHttp(resource: 'core' | 'assignments' = 'c
 
     if (!result.ok) {
       // A resource-specific caller needs the actual failure, not core success.
-      if (resource === 'assignments') return result;
+      if (resource !== 'core') return result;
       if (result.error.code === ErrorCode.AUTH_EXPIRED) return result;
       // A transient core resource failure must not discard other refreshed tokens.
       log.warn('token-refresh-http', `Failed to refresh ${scope.resource}: ${result.error.message}`);
