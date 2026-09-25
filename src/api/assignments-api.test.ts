@@ -10,7 +10,7 @@ import { httpRequest } from '../utils/http.js';
 import { requireAssignmentsTokenAsync } from '../utils/auth-guards.js';
 import { ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
-import { invalidateAssignmentsToken } from '../auth/token-extractor.js';
+import { invalidateAccessToken } from '../auth/token-extractor.js';
 import { listMyAssignments, getAssignment, actOnSubmission } from './assignments-api.js';
 
 vi.mock('../utils/http.js', () => ({ httpRequest: vi.fn() }));
@@ -18,7 +18,7 @@ vi.mock('../utils/auth-guards.js', () => ({
   requireAssignmentsTokenAsync: vi.fn(),
 }));
 
-vi.mock('../auth/token-extractor.js', () => ({ invalidateAssignmentsToken: vi.fn() }));
+vi.mock('../auth/token-extractor.js', () => ({ invalidateAccessToken: vi.fn() }));
 
 const mockHttp = vi.mocked(httpRequest);
 const mockToken = vi.mocked(requireAssignmentsTokenAsync);
@@ -151,7 +151,34 @@ describe('getAssignment', () => {
       '/api/v1.0/edu/classes/c1/assignments/a1',
       '/api/v1.0/edu/classes/c1/assignments/a1/submissions',
     ]);
-    expect(urls[1].searchParams.get('$expand')).toBe('outcomes');
+    expect(urls[1].searchParams.get('$expand')).toBe('outcomes,resources,submittedResources');
+  });
+
+  it('returns teacher attachments and the student\'s own files', async () => {
+    const file = (type: string, name: string, id: string) => ({
+      id: `r-${id}`, resource: { '@odata.type': `#microsoft.education.assignments.api.education${type}Resource`, displayName: name,
+        fileUrl: `https://graph.microsoft.com/v1.0/drives/b!d/items/${id}` } });
+    mockHttp.mockImplementation(async url => String(url).includes('/submissions')
+      ? httpOk({ value: [{ id: 's1', status: 'working', resources: [file('Word', 'My copy.docx', 'mine')], submittedResources: [] }] })
+      : httpOk({ id: 'a1', classId: 'c1', displayName: 'Detail', resources: [
+        { ...file('PowerPoint', 'Lesson.pptx', 'ppt'), distributeForStudentWork: false },
+        { ...file('Word', 'Worksheet.docx', 'doc'), distributeForStudentWork: true },
+        { id: 'r-form', resource: { '@odata.type': '#microsoft.education.assignments.api.educationFormResource', displayName: 'Quiz', viewUrl: 'https://forms.office.com/x' } },
+      ] }));
+
+    const result = await getAssignment('c1', 'a1');
+
+    expect(result).toMatchObject({ ok: true, value: {
+      attachments: [
+        { id: 'r-ppt', name: 'Lesson.pptx', type: 'powerpoint', fileUrl: 'https://graph.microsoft.com/v1.0/drives/b!d/items/ppt' },
+        { name: 'Worksheet.docx', type: 'word', copiedForEachStudent: true },
+        { name: 'Quiz', type: 'form', url: 'https://forms.office.com/x', fileUrl: undefined },
+      ],
+      submission: { attachments: [{ name: 'My copy.docx', type: 'word', fileUrl: 'https://graph.microsoft.com/v1.0/drives/b!d/items/mine' }], submittedAttachments: [] },
+    } });
+    const urls = mockHttp.mock.calls.map(call => new URL(call[0] as string));
+    expect(urls[0].searchParams.get('$expand')).toBe('resources');
+    expect(urls[1].searchParams.get('$expand')).toBe('outcomes,resources,submittedResources');
   });
 
   it('fails rather than hiding the submission when it cannot be read', async () => {
@@ -269,13 +296,13 @@ describe('Assignments regression cases', () => {
   it('invalidates a rejected token on a 401 without triggering Teams re-login', async () => {
     mockHttp.mockResolvedValue(err(createError(ErrorCode.AUTH_EXPIRED, 'HTTP 401')));
     expect(await listMyAssignments()).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR, retryable: true } });
-    expect(invalidateAssignmentsToken).toHaveBeenCalledWith('fake-token');
+    expect(invalidateAccessToken).toHaveBeenCalledWith('fake-token');
   });
 
   it('does not trigger login for permission failures', async () => {
     mockHttp.mockResolvedValue(err(createError(ErrorCode.AUTH_REQUIRED, 'HTTP 403')));
     expect(await listMyAssignments()).toMatchObject({ ok: false, error: { code: ErrorCode.ACCESS_DENIED, retryable: false } });
-    expect(invalidateAssignmentsToken).not.toHaveBeenCalled();
+    expect(invalidateAccessToken).not.toHaveBeenCalled();
   });
 
   it('verifies turn-in with a separate GET and never replays the POST', async () => {
@@ -295,7 +322,7 @@ describe('Assignments regression cases', () => {
     mockHttp.mockResolvedValueOnce(httpOk({ id: 's1', status: 'submitted' }))
       .mockResolvedValueOnce(err(createError(ErrorCode.AUTH_EXPIRED, 'HTTP 401')));
     expect(await actOnSubmission('submit', 'c1', 'a1', 's1')).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR, retryable: false } });
-    expect(invalidateAssignmentsToken).toHaveBeenCalledWith('fake-token');
+    expect(invalidateAccessToken).toHaveBeenCalledWith('fake-token');
   });
 
   it('does not report an HTML view response as success', async () => {
