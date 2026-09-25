@@ -15,7 +15,7 @@ Search messages and email, catch up on unread chats, read threads, send replies,
 
 ## Why msteams-mcp?
 
-- **Do real work** - search, unread chats, threads, replies, people, channels, meetings, transcripts, files, reactions and more.
+- **Do real work** - search, unread chats, threads, replies, people, channels, meetings, transcripts, files, reactions, and assignments on education tenants.
 - **Sign in once** - tokens refresh automatically and the browser stays out of routine operations.
 - **Secure** - the assistant has only your existing Teams permissions, with encrypted session data stored locally.
 - **Use it anywhere** - every capability works through both MCP clients and the included `msteams` CLI.
@@ -205,6 +205,18 @@ See [CLI Usage](#cli-usage) for commands.
 
 Returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
 
+### Assignments (education tenants only)
+
+
+| Tool                      | Description                                                                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `teams_list_assignments`  | List your assignments across classes (`active`, `completed` or `all`), with due dates, grades and your submission state |
+| `teams_get_assignment`    | Get one assignment's full detail, including instructions and your submission                   |
+| `teams_submission_action` | Turn in, undo turn-in, or mark viewed on your own submission                                   |
+
+
+Assignments is optional. It only works on education tenants that use Teams Assignments, and its token is requested separately, on demand, so other accounts pay no extra cost. If Assignments isn't available, or its authorisation fails, only these three tools return an error: the rest of Teams keeps working, and no browser or re-login is triggered.
+
 ### Session
 
 
@@ -313,6 +325,7 @@ npm run cli -- send "Hi" --to "conversation-id"
 - **Token expiry** - Tokens expire after ~1 hour; headless refresh is attempted or run `teams_login` again when needed
 - **Undocumented APIs** - Uses Microsoft's internal APIs which may change without notice
 - **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (but LLM will likely use `teams_get_thread` for full context)
+- **Assignments** - Education tenants only. Turn-in and undo turn-in act on your real account and have not yet been verified against a live tenant
 
 
 

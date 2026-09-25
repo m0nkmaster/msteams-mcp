@@ -61,19 +61,18 @@ export function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResult>> {
   return coreRefresh;
 }
 
-/** Acquire Assignments on demand; after restoring SSO, retry its OAuth exchange. */
+/**
+ * Acquire Assignments on demand with a single HTTP exchange. Assignments is an
+ * optional EDU feature, so it never launches a browser, refreshes core
+ * credentials, or returns an error that would trigger the server's auto-login.
+ */
 export function refreshAssignmentsToken(): Promise<Result<string>> {
   return serializeRefresh(async () => {
-    let result = await refreshTokensViaHttp('assignments');
+    const result = await refreshTokensViaHttp('assignments');
     if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
-      const core = await refreshCoreTokens();
-      if (!core.ok) return core;
-      result = await refreshTokensViaHttp('assignments');
-      if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
-        return err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
-          `Teams authentication was refreshed, but Assignments still requires authorization: ${result.error.message}`,
-          { retryable: false }));
-      }
+      return err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
+        `Assignments could not be authorized: ${result.error.message}`,
+        { retryable: false }));
     }
     if (!result.ok) return result;
     const token = getValidAssignmentsToken();

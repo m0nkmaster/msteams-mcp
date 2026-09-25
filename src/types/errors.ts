@@ -90,7 +90,10 @@ function getDefaultSuggestions(code: ErrorCode): string[] {
     case ErrorCode.RATE_LIMITED:
       return ['Wait before retrying', 'Reduce request frequency'];
     case ErrorCode.AUTH_INTERACTION_REQUIRED:
-      return ['Open Assignments in Teams and complete any sign-in or consent prompt, then use teams_login to capture the updated session'];
+      return [
+        'Assignments is optional (education tenants only); all other Teams tools are unaffected',
+        'On an education account, open Assignments in Teams and complete any sign-in or consent prompt, then use teams_login to capture the updated session',
+      ];
     case ErrorCode.ACCESS_DENIED:
       return ['Check your access and required consent with the tenant administrator'];
     case ErrorCode.NOT_FOUND:

@@ -202,6 +202,35 @@ describe('Assignments regression cases', () => {
     if (result.ok) expect(new URL(result.value.nextLink!).searchParams.get('$skip')).toBe('1');
   });
 
+  it('stops instead of looping when the service ignores a synthesised $skip', async () => {
+    mockHttp.mockResolvedValue(httpOk({ value: [{ id: 'a1' }] }));
+    const first = await listMyAssignments({ top: 1 });
+    if (!first.ok) throw new Error('expected first page');
+    expect(await listMyAssignments({ nextLink: first.value.nextLink })).toMatchObject({
+      ok: false, error: { code: ErrorCode.API_ERROR, retryable: false },
+    });
+  });
+
+  it('keeps offering offset pages while $skip advances the results', async () => {
+    mockHttp.mockResolvedValueOnce(httpOk({ value: [{ id: 'a1' }] }));
+    const first = await listMyAssignments({ top: 1 });
+    if (!first.ok) throw new Error('expected first page');
+    mockHttp.mockResolvedValueOnce(httpOk({ value: [{ id: 'a2' }] }));
+    const second = await listMyAssignments({ nextLink: first.value.nextLink });
+    expect(second).toMatchObject({ ok: true, value: { assignments: [{ id: 'a2' }] } });
+    if (second.ok) expect(new URL(second.value.nextLink!).searchParams.get('$skip')).toBe('2');
+  });
+
+  it('reports the status slice the continuation actually queries', async () => {
+    mockHttp.mockResolvedValue(httpOk({ value: [] }));
+    const first = await listMyAssignments({ statusFilter: 'completed', top: 1 });
+    const link = new URL(mockHttp.mock.calls[0][0] as string);
+    link.searchParams.set('$skiptoken', 'opaque');
+    expect(first).toMatchObject({ ok: true, value: { statusFilter: 'completed' } });
+    expect(await listMyAssignments({ statusFilter: 'active', nextLink: link.toString() }))
+      .toMatchObject({ ok: true, value: { statusFilter: 'completed' } });
+  });
+
   it.each([
     'https://evil.example/api/v1.0/edu/me/work',
     'https://assignments.edu.cloud.microsoft/api/v1.0/edu/classes/c1',
@@ -223,9 +252,9 @@ describe('Assignments regression cases', () => {
     expect(mockToken).not.toHaveBeenCalled();
   });
 
-  it('invalidates the rejected Assignments token on a 401', async () => {
+  it('invalidates a rejected token on a 401 without triggering Teams re-login', async () => {
     mockHttp.mockResolvedValue(err(createError(ErrorCode.AUTH_EXPIRED, 'HTTP 401')));
-    expect(await listMyAssignments()).toMatchObject({ ok: false, error: { code: ErrorCode.AUTH_EXPIRED } });
+    expect(await listMyAssignments()).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR, retryable: true } });
     expect(invalidateAssignmentsToken).toHaveBeenCalledWith('fake-token');
   });
 
@@ -259,6 +288,12 @@ describe('Assignments regression cases', () => {
     mockHttp.mockResolvedValue(httpOk('<html>Login</html>'));
     expect(await actOnSubmission('view', 'c1', 'a1', 's1')).toMatchObject({ ok: false });
   });
+  it('does not surface a 401 on a mutation as an auth error the server would replay', async () => {
+    mockHttp.mockResolvedValue(err(createError(ErrorCode.AUTH_EXPIRED, 'HTTP 401')));
+    expect(await actOnSubmission('submit', 'c1', 'a1', 's1')).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR } });
+    expect(mockHttp).toHaveBeenCalledTimes(1);
+  });
+
   it('marks a timed-out mutation as uncertain rather than inviting a retry', async () => {
     mockHttp.mockResolvedValue(err(createError(ErrorCode.TIMEOUT, 'Timed out', { retryable: true })));
     expect(await actOnSubmission('submit', 'c1', 'a1', 's1')).toMatchObject({ ok: false, error: { code: ErrorCode.TIMEOUT, retryable: false } });

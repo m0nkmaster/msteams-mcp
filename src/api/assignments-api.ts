@@ -34,8 +34,15 @@ function invalidInput(message: string) {
 }
 
 function handleAssignmentsError<T>(response: Result<T>, token: string): Result<T> {
+  // Never surface AUTH_EXPIRED: it would make the server re-authenticate the
+  // whole Teams session (and replay the tool) for this optional feature.
   if (!response.ok && response.error.code === ErrorCode.AUTH_EXPIRED) {
     invalidateAssignmentsToken(token);
+    return err(createError(ErrorCode.API_ERROR,
+      'Assignments rejected its access token; it has been discarded, so a retry will request a new one.', {
+        retryable: true,
+        suggestions: ['Retry once; if it fails again, Assignments may be unavailable for this account'],
+      }));
   }
   if (!response.ok && response.error.code === ErrorCode.AUTH_REQUIRED) {
     return err(createError(ErrorCode.ACCESS_DENIED, response.error.message, {
@@ -229,6 +236,27 @@ function buildStatusFilter(filter: AssignmentStatusFilter): string | null {
   }
 }
 
+/** Recover the slice a continuation URL actually queries, whatever the caller passed. */
+function statusFilterFromUrl(url: string): AssignmentStatusFilter | undefined {
+  const filter = new URL(url).searchParams.get('$filter');
+  return (['active', 'completed', 'all'] as const).find(s => buildStatusFilter(s) === filter);
+}
+
+/**
+ * Offset links we synthesised, keyed to the IDs of the page that produced them.
+ * If following one returns that same page, the service ignored $skip and
+ * offering another offset link would loop forever.
+ */
+const syntheticPages = new Map<string, string>();
+const MAX_SYNTHETIC_PAGES = 50;
+
+function rememberSyntheticPage(link: string, pageIds: string): void {
+  if (syntheticPages.size >= MAX_SYNTHETIC_PAGES) {
+    syntheticPages.delete(syntheticPages.keys().next().value!);
+  }
+  syntheticPages.set(link, pageIds);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // API functions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,7 +274,7 @@ function buildStatusFilter(filter: AssignmentStatusFilter): string | null {
 export async function listMyAssignments(
   options: { statusFilter?: AssignmentStatusFilter; top?: number; nextLink?: string } = {}
 ): Promise<Result<ListAssignmentsResult>> {
-  const statusFilter = options.statusFilter ?? 'active';
+  let statusFilter = options.statusFilter ?? 'active';
   const top = options.top ?? DEFAULT_PAGE_SIZE;
   if (!Number.isInteger(top) || top < 1 || top > MAX_PAGE_SIZE) {
     return invalidInput(`top must be an integer from 1 to ${MAX_PAGE_SIZE}`);
@@ -259,6 +287,7 @@ export async function listMyAssignments(
   params.set('$expand', 'submissions($expand=outcomes)');
   const url = options.nextLink ? validateNextLink(options.nextLink) : `${ASSIGNMENTS_API.myWork()}?${params.toString()}`;
   if (!url) return invalidInput('nextLink must be a continuation URL for the Assignments work endpoint');
+  if (options.nextLink) statusFilter = statusFilterFromUrl(url) ?? statusFilter;
   const tokenResult = await requireAssignmentsTokenAsync();
   if (!tokenResult.ok) return tokenResult;
 
@@ -274,6 +303,14 @@ export async function listMyAssignments(
     return err(createError(ErrorCode.API_ERROR, 'Invalid Assignments list response', { retryable: false }));
   }
   const items = data.value;
+  const pageIds = items.map(item => item.id).join(',');
+  const previousPageIds = syntheticPages.get(url);
+  syntheticPages.delete(url);
+  if (previousPageIds !== undefined && previousPageIds === pageIds) {
+    return err(createError(ErrorCode.API_ERROR,
+      'The Assignments service ignored the page offset and returned the previous page again; no further pages can be fetched.',
+      { retryable: false, suggestions: ['Use a narrower statusFilter or a larger top to see more assignments'] }));
+  }
   let nextLink = data['@odata.nextLink'];
   if (nextLink) {
     nextLink = validateNextLink(nextLink, url) ?? undefined;
@@ -286,6 +323,7 @@ export async function listMyAssignments(
     if (!next.searchParams.has('$skiptoken') && items.length > 0 && items.length >= pageSize) {
       next.searchParams.set('$skip', String(Number(next.searchParams.get('$skip') ?? 0) + items.length));
       nextLink = next.toString();
+      rememberSyntheticPage(nextLink, pageIds);
     }
   }
   return ok({ statusFilter, returned: items.length, assignments: items.map(parseAssignment), nextLink });

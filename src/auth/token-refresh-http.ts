@@ -295,11 +295,17 @@ async function refreshAccessToken(
 
       // Consent/resource refusals are not an expired Teams login. Do not classify
       // all HTTP 400s this way: invalid_grant may require renewed SSO or MFA.
-      if (scopes.startsWith(ASSIGNMENTS_APP_ID) && /AADSTS(?:65001|65004|500011|700016)\b/.test(errorDetail)) {
+      // 50105 unassigned user, 53003 Conditional Access block, 90094 admin
+      // consent, 650057 invalid resource: none are fixed by re-authenticating.
+      if (scopes.startsWith(ASSIGNMENTS_APP_ID) &&
+        /AADSTS(?:50105|53003|65001|65004|90094|500011|650057|700016)\b/.test(errorDetail)) {
         return err(createError(ErrorCode.ACCESS_DENIED,
           `Assignments access was refused: ${errorDetail}`, {
             retryable: false,
-            suggestions: ['Check Assignments availability and required consent with your tenant administrator'],
+            suggestions: [
+              'Assignments is optional (education tenants only); all other Teams tools are unaffected',
+              'Check Assignments availability and required consent with your tenant administrator',
+            ],
           }));
       }
 

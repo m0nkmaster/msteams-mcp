@@ -484,6 +484,10 @@ describe('refreshTokensViaHttp', () => {
   it.each([
     ['AADSTS65001: Consent required.', 'ACCESS_DENIED'],
     ['AADSTS500011: Resource principal missing.', 'ACCESS_DENIED'],
+    ['AADSTS50105: User not assigned to a role for the application.', 'ACCESS_DENIED'],
+    ['AADSTS53003: Access has been blocked by Conditional Access policies.', 'ACCESS_DENIED'],
+    ['AADSTS90094: Admin consent is required.', 'ACCESS_DENIED'],
+    ['AADSTS650057: Invalid resource.', 'ACCESS_DENIED'],
     ['AADSTS700082: Refresh token expired.', 'AUTH_EXPIRED'],
     ['AADSTS50076: MFA required.', 'AUTH_EXPIRED'],
   ])('keeps Assignments refusal distinct from expired auth: %s', async (description, code) => {
