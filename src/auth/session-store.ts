@@ -13,57 +13,20 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
-import { encrypt, decrypt, isEncrypted } from './crypto.js';
+import { encrypt, decrypt } from './crypto.js';
 import { SESSION_EXPIRY_HOURS } from '../constants.js';
 import * as log from '../utils/logger.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 /**
- * Gets the user's home directory with fallback.
- * os.homedir() can throw in rare edge cases (missing env vars, broken passwd).
- */
-function getHomeDirSafe(): string | null {
-  try {
-    return os.homedir();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Gets the user-specific config directory for teams-mcp-server.
- * - Windows: %APPDATA%\teams-mcp-server\ (e.g., C:\Users\name\AppData\Roaming\teams-mcp-server\)
+ * User-specific config directory for teams-mcp-server.
+ * - Windows: %APPDATA%\teams-mcp-server\
  * - macOS/Linux: ~/.teams-mcp-server/
- * - Fallback: ./teams-mcp-server-data/ relative to package (legacy behaviour)
  */
-function getConfigDir(): string {
-  const homeDir = getHomeDirSafe();
-  
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || (homeDir ? path.join(homeDir, 'AppData', 'Roaming') : null);
-    if (appData) {
-      return path.join(appData, 'teams-mcp-server');
-    }
-  } else if (homeDir) {
-    return path.join(homeDir, '.teams-mcp-server');
-  }
-  
-  // Fallback to package-relative directory if home directory unavailable
-  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-  return path.join(projectRoot, 'teams-mcp-server-data');
-}
-
-export const PROJECT_ROOT = path.resolve(__dirname, '../..');
-export const CONFIG_DIR = getConfigDir();
-export const USER_DATA_DIR = path.join(CONFIG_DIR, '.user-data');
+export const CONFIG_DIR = process.platform === 'win32'
+  ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'teams-mcp-server')
+  : path.join(os.homedir(), '.teams-mcp-server');
 export const SESSION_STATE_PATH = path.join(CONFIG_DIR, 'session-state.json');
 export const TOKEN_CACHE_PATH = path.join(CONFIG_DIR, 'token-cache.json');
-
-// Legacy paths for migration
-const LEGACY_SESSION_PATH = path.join(PROJECT_ROOT, 'session-state.json');
-const LEGACY_TOKEN_CACHE_PATH = path.join(PROJECT_ROOT, 'token-cache.json');
 
 /** File permission mode: owner read/write only. */
 const SECURE_FILE_MODE = 0o600;
@@ -71,29 +34,8 @@ const SECURE_FILE_MODE = 0o600;
 /**
  * Ensures the config directory exists with secure permissions.
  */
-function ensureConfigDir(): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  }
-}
-
-/**
- * Migrates a file from legacy location to new config directory.
- * Only migrates if legacy exists and new location doesn't.
- */
-function migrateIfNeeded(legacyPath: string, newPath: string): void {
-  if (fs.existsSync(legacyPath) && !fs.existsSync(newPath)) {
-    ensureConfigDir();
-    try {
-      fs.copyFileSync(legacyPath, newPath);
-      fs.chmodSync(newPath, SECURE_FILE_MODE);
-      // Remove legacy file after successful copy
-      fs.unlinkSync(legacyPath);
-    } catch (error) {
-      // Log migration errors for debugging, but continue - will just create new session
-      log.warn('session-store', `Failed to migrate ${path.basename(legacyPath)}: ${error instanceof Error ? error.message : error}`);
-    }
-  }
+export function ensureConfigDir(): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
 }
 
 /** Session state as stored by Playwright. */
@@ -122,16 +64,6 @@ export interface TokenCache {
 }
 
 /**
- * Ensures the user data directory exists.
- */
-export function ensureUserDataDir(): void {
-  ensureConfigDir();
-  if (!fs.existsSync(USER_DATA_DIR)) {
-    fs.mkdirSync(USER_DATA_DIR, { recursive: true, mode: 0o700 });
-  }
-}
-
-/**
  * Writes data securely with encryption and file permissions.
  */
 function writeSecure(filePath: string, data: unknown): void {
@@ -145,29 +77,14 @@ function writeSecure(filePath: string, data: unknown): void {
 }
 
 /**
- * Reads data securely, handling both encrypted and legacy plaintext.
+ * Reads and decrypts data. Returns null if missing or undecryptable
+ * (different machine, corrupted).
  */
 function readSecure<T>(filePath: string): T | null {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-
+  if (!fs.existsSync(filePath)) return null;
   try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const parsed = JSON.parse(content);
-
-    // Check if this is encrypted data
-    if (isEncrypted(parsed)) {
-      const decrypted = decrypt(parsed);
-      return JSON.parse(decrypted) as T;
-    }
-
-    // Legacy plaintext - migrate to encrypted
-    writeSecure(filePath, parsed);
-    return parsed as T;
-
+    return JSON.parse(decrypt(JSON.parse(fs.readFileSync(filePath, 'utf8')))) as T;
   } catch (error) {
-    // If decryption fails (different machine, corrupted), return null
     log.error('session-store', `Failed to read ${filePath}: ${error instanceof Error ? error.message : error}`);
     return null;
   }
@@ -177,7 +94,6 @@ function readSecure<T>(filePath: string): T | null {
  * Checks if session state file exists.
  */
 export function hasSessionState(): boolean {
-  migrateIfNeeded(LEGACY_SESSION_PATH, SESSION_STATE_PATH);
   return fs.existsSync(SESSION_STATE_PATH);
 }
 
@@ -185,7 +101,6 @@ export function hasSessionState(): boolean {
  * Reads the session state.
  */
 export function readSessionState(): SessionState | null {
-  migrateIfNeeded(LEGACY_SESSION_PATH, SESSION_STATE_PATH);
   return readSecure<SessionState>(SESSION_STATE_PATH);
 }
 
@@ -232,7 +147,6 @@ export function isSessionLikelyExpired(): boolean {
  * Reads the token cache.
  */
 export function readTokenCache(): TokenCache | null {
-  migrateIfNeeded(LEGACY_TOKEN_CACHE_PATH, TOKEN_CACHE_PATH);
   return readSecure<TokenCache>(TOKEN_CACHE_PATH);
 }
 

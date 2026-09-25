@@ -4,7 +4,6 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import type { ToolContext } from './index.js';
 
 // Mock the MCP SDK
 vi.mock('@modelcontextprotocol/sdk/types.js', () => ({
@@ -105,25 +104,14 @@ describe('hasTool', () => {
 });
 
 describe('invokeTool', () => {
-  const mockContext: ToolContext = {
-    server: {
-      ensureBrowser: async () => ({} as never),
-      resetBrowserState: () => {},
-      getBrowserManager: () => null,
-      setBrowserManager: () => {},
-      markInitialised: () => {},
-      isInitialisedState: () => false,
-    },
-  };
-
   it('invokes a known tool', async () => {
-    const result = await invokeTool('teams_search_messages', { query: 'test' }, mockContext);
+    const result = await invokeTool('teams_search_messages', { query: 'test' });
     
     expect(result.success).toBe(true);
   });
 
   it('returns error for unknown tool', async () => {
-    const result = await invokeTool('nonexistent_tool', {}, mockContext);
+    const result = await invokeTool('nonexistent_tool', {});
     
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -133,7 +121,7 @@ describe('invokeTool', () => {
   });
 
   it('validates input against schema', async () => {
-    const result = await invokeTool('teams_search_messages', { query: 'test' }, mockContext);
+    const result = await invokeTool('teams_search_messages', { query: 'test' });
     
     expect(result).toBeDefined();
     expect(result.success).toBe(true);
@@ -141,7 +129,7 @@ describe('invokeTool', () => {
 
   it('returns validation error for invalid input', async () => {
     // teams_search_messages requires a string query
-    const result = await invokeTool('teams_search_messages', { query: 123 } as Record<string, unknown>, mockContext);
+    const result = await invokeTool('teams_search_messages', { query: 123 } as Record<string, unknown>);
     
     expect(result.success).toBe(false);
     if (!result.success) {

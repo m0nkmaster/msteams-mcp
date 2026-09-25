@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import {
   listMyAssignments,
@@ -122,8 +122,7 @@ const submissionActionToolDefinition: Tool = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleListAssignments(
-  input: z.infer<typeof ListAssignmentsInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof ListAssignmentsInputSchema>
 ): Promise<ToolResult> {
   const result = await listMyAssignments({
     statusFilter: input.statusFilter,
@@ -139,16 +138,14 @@ async function handleListAssignments(
 }
 
 async function handleGetAssignment(
-  input: z.infer<typeof GetAssignmentInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetAssignmentInputSchema>
 ): Promise<ToolResult> {
   const result = await getAssignment(input.classId, input.assignmentId);
   return handleApiResult(result, (value) => ({ assignment: value }));
 }
 
 async function handleSubmissionAction(
-  input: z.infer<typeof SubmissionActionInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SubmissionActionInputSchema>
 ): Promise<ToolResult> {
   const result = await actOnSubmission(
     input.action,

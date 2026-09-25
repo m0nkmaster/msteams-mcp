@@ -68,8 +68,7 @@ src/
 │   ├── teams.ts          # Teams data interfaces
 │   ├── errors.ts         # Error taxonomy with machine-readable codes
 │   ├── result.ts         # Result<T, E> type for explicit error handling
-│   ├── api-responses.ts  # Typed interfaces for raw API response shapes
-│   └── server.ts         # Server interface types (avoids server.ts <-> tools/index.ts cycle)
+│   └── api-responses.ts  # Typed interfaces for raw API response shapes
 ├── __fixtures__/
 │   └── api-responses.ts  # Mock API responses for testing
 ```
@@ -79,13 +78,13 @@ src/
 - **Result types**: API functions return `Result<T, McpError>` for explicit success/failure handling.
 - **Error taxonomy**: Errors use machine-readable codes (`ErrorCode` enum), `retryable` flags, and `suggestions` arrays so LLMs can understand failures and recover.
 - **HTTP utilities**: A centralised client (`utils/http.ts`) provides retry with exponential backoff, timeouts, and rate-limit tracking. Use `httpRequest()` for all new API calls.
-- **Server class**: `TeamsServer` encapsulates all state (browser manager, init flag), allowing multiple instances and simpler testing.
+- **Stateless server**: `TeamsServer` holds no browser; login and refresh open the persistent-profile browser, save the session, and close it. Tool handlers take only their validated input.
 - **Tool registry**: Tools are grouped by category (`search-tools.ts`, `message-tools.ts`, etc.) and wired through `tools/registry.ts`.
 - **Auth guards**: `utils/auth-guards.ts` provides reusable, `Result`-returning auth checks plus cached `getTenantId()`, `getRegion()`, and `getTeamsBaseUrl()` helpers.
 - **Shared constants**: Magic numbers (page sizes, timeouts, thresholds) live in `constants.ts`.
 - **MCP resources**: Passive resources (`teams://me/profile`, `teams://me/favorites`, `teams://status`) provide context discovery without tool calls.
 - **Markdown to Teams HTML**: `markdownToTeamsHtml()` in `utils/parsers.ts` converts markdown (bold, italic, code, code blocks, strikethrough, lists, newlines) to the `RichText/Html` Teams expects. Used by `sendMessage()` and `editMessage()`. When messages contain @mentions or links, `parseContentWithMentionsAndLinks()` applies the same conversion to text between inline elements.
-- **Auto-login on auth failure**: The `CallToolRequestSchema` handler in `server.ts` retries tool calls that fail with `AUTH_REQUIRED`/`AUTH_EXPIRED`, first attempting headless re-auth (token refresh, then full headless login). Auth tools (`teams_login`, `teams_status`) are excluded to avoid loops. Concurrent failures are deduplicated via a Promise-based mutex so only one auto-login runs at a time.
+- **Auto-login on auth failure**: The `CallToolRequestSchema` handler in `server.ts` retries tool calls that fail with `AUTH_REQUIRED`/`AUTH_EXPIRED`, after one core refresh (`refreshTokensViaBrowser()`: HTTP refresh, then headless browser SSO). Auth tools (`teams_login`, `teams_status`) are excluded to avoid loops. Concurrent failures share the same in-flight refresh, so only one runs at a time.
 
 ### Dynamic Configuration from Session
 
@@ -93,7 +92,6 @@ All tenant-specific config is extracted from the user's session localStorage, so
 
 - **Region & partition**: From `DISCOVER-REGION-GTM` (e.g. region `amer`, partition `02`), via cached `getRegion()`.
 - **Teams base URL**: From the `chatServiceAfd` URL in `DISCOVER-REGION-GTM` (e.g. `https://teams.microsoft.com`, or `https://teams.microsoft.us` for government clouds), via cached `getTeamsBaseUrl()`.
-- **User details**: From `DISCOVER-USER-DETAILS`, including user MRI, licence info, and user/tenant partitions.
 - **Service URLs**: Full chatsvc, CSA, and mt/part URLs are in the config and passed to endpoint builders.
 
 **Note**: The Substrate search URL (`substrate.office.com`) and the EDU Assignments URL (`assignments.edu.cloud.microsoft`) are hardcoded, as no config source has been found for them. These may need to become configurable if GCC/GCC-High/DoD users report issues.
@@ -151,7 +149,7 @@ Two layers work together:
 1. **Persistent browser profile** (`browser-profile/`): retains Microsoft session cookies, extensions, and autofill across launches; enables silent headless re-auth.
 2. **Encrypted session state** (`session-state.json`): Playwright `storageState()` output from which tokens are extracted for browserless API calls.
 
-Session state and token cache files are encrypted at rest with AES-256-GCM using a key derived from machine-specific values (hostname + username), stored with 0o600 permissions. Existing plaintext files are migrated to encrypted form on first read.
+Session state and token cache files are encrypted at rest with AES-256-GCM using a key derived from machine-specific values (hostname + username), stored with 0o600 permissions.
 
 ## MCP Tools
 
@@ -227,7 +225,7 @@ Session files live in a per-user config directory (consistent regardless of invo
 - **macOS/Linux**: `~/.teams-mcp-server/`
 - **Windows**: `%APPDATA%\teams-mcp-server\`
 
-Contents: `session-state.json` (encrypted session), `token-cache.json` (encrypted tokens), `browser-profile/` (persistent Chrome/Edge profile). Legacy files in the project root are migrated on first read. Dev-only: `./debug-output/` (gitignored screenshots/HTML). Reference docs: `docs/API-REFERENCE.md`, `docs/SESSION-DATA-REFERENCE.md`.
+Contents: `session-state.json` (encrypted session), `token-cache.json` (encrypted tokens), `browser-profile/` (persistent Chrome/Edge profile). Dev-only: `./debug-output/` (gitignored screenshots/HTML). Reference docs: `docs/API-REFERENCE.md`, `docs/SESSION-DATA-REFERENCE.md`.
 
 ### Message deep links
 

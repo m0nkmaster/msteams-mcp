@@ -17,21 +17,13 @@ import {
   extractSkypeSpacesToken,
   extractRegionConfig,
   getUserProfile,
-  clearTokenCache,
   type MessageAuthInfo,
   type RegionConfig,
 } from '../auth/token-extractor.js';
+import { clearTokenCache } from '../auth/session-store.js';
+import { DEFAULT_TEAMS_BASE_URL } from './api-config.js';
 import { TOKEN_REFRESH_THRESHOLD_MS, ASSIGNMENTS_UNAVAILABLE_TTL_MS } from '../constants.js';
 import { refreshTokensViaBrowser, refreshAssignmentsToken, refreshGraphToken } from '../auth/token-refresh.js';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Error Messages
-// ─────────────────────────────────────────────────────────────────────────────
-
-const AUTH_ERROR_MESSAGES = {
-  messageAuth: 'ACTION REQUIRED: No valid Teams authentication. You MUST call teams_login to authenticate before retrying.',
-  csaToken: 'ACTION REQUIRED: No valid authentication for favourites. You MUST call teams_login to authenticate before retrying.',
-} as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Guard Types
@@ -48,49 +40,23 @@ export interface CsaAuthInfo {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Checks if the Substrate token needs refresh (expired or approaching expiry).
- * 
- * @returns true if token is expired or will expire within the refresh threshold
- */
-function shouldRefreshSubstrateToken(): boolean {
-  const substrate = extractSubstrateToken();
-  if (!substrate) return true;
-
-  const timeRemaining = substrate.expiry.getTime() - Date.now();
-  // Refresh if expired (timeRemaining <= 0) OR approaching expiry
-  return timeRemaining < TOKEN_REFRESH_THRESHOLD_MS;
-}
-
-/**
- * Requires a valid Substrate token with proactive refresh.
- * 
- * This async version attempts to refresh tokens if they're approaching
- * expiry (within 10 minutes). Use this in tool handlers for better UX.
+ * Requires a valid Substrate token, refreshing first if it is expired or
+ * within the refresh threshold. A failed refresh still returns a token that
+ * has not yet expired.
  */
 export async function requireSubstrateTokenAsync(): Promise<Result<string, McpError>> {
-  // Check if we need to refresh proactively
-  if (shouldRefreshSubstrateToken()) {
-    const refreshResult = await refreshTokensViaBrowser();
-    if (refreshResult.ok) {
-      // Refresh succeeded, get the new token
-      const token = getValidSubstrateToken();
-      if (token) {
-        return ok(token);
-      }
-    }
-    // Refresh failed but token might still be valid, continue
+  const substrate = extractSubstrateToken();
+  if (!substrate || substrate.expiry.getTime() - Date.now() < TOKEN_REFRESH_THRESHOLD_MS) {
+    await refreshTokensViaBrowser();
   }
 
-  // Try to get existing token
   const token = getValidSubstrateToken();
   if (!token) {
-    // Token expired and refresh not available/failed
     return err(createError(
       ErrorCode.AUTH_EXPIRED,
       'ACTION REQUIRED: Teams token expired and automatic refresh failed. You MUST call teams_login to re-authenticate before retrying.',
     ));
   }
-
   return ok(token);
 }
 
@@ -156,7 +122,7 @@ export function requireGraphTokenAsync(): Promise<Result<string, McpError>> {
 export function requireMessageAuth(): Result<MessageAuthInfo, McpError> {
   const auth = extractMessageAuth();
   if (!auth) {
-    return err(createError(ErrorCode.AUTH_REQUIRED, AUTH_ERROR_MESSAGES.messageAuth));
+    return err(createError(ErrorCode.AUTH_REQUIRED, 'ACTION REQUIRED: No valid Teams authentication. You MUST call teams_login to authenticate before retrying.'));
   }
   return ok(auth);
 }
@@ -170,7 +136,7 @@ export function requireCsaAuth(): Result<CsaAuthInfo, McpError> {
   const csaToken = extractCsaToken();
 
   if (!auth?.skypeToken || !csaToken) {
-    return err(createError(ErrorCode.AUTH_REQUIRED, AUTH_ERROR_MESSAGES.csaToken));
+    return err(createError(ErrorCode.AUTH_REQUIRED, 'ACTION REQUIRED: No valid authentication for favourites. You MUST call teams_login to authenticate before retrying.'));
   }
 
   return ok({ auth, csaToken });
@@ -263,8 +229,6 @@ export function handleSubstrateError<T>(response: Result<T, McpError>): Result<T
 // Region Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { DEFAULT_TEAMS_BASE_URL } from './api-config.js';
-
 /** Default region when session config is unavailable. */
 const DEFAULT_REGION = 'amer';
 
@@ -272,30 +236,27 @@ const DEFAULT_REGION = 'amer';
 let cachedRegionConfig: RegionConfig | null | undefined = undefined;
 
 /**
- * Gets the user's region from session, with caching.
- * 
- * The region is extracted from the DISCOVER-REGION-GTM config in localStorage.
- * Falls back to 'amer' if not available (shouldn't happen with valid session).
+ * Gets the full region config (from DISCOVER-REGION-GTM) including partition
+ * and URLs, with caching. Returns null if no valid session.
  */
-export function getRegion(): string {
+export function getRegionConfig(): RegionConfig | null {
   if (cachedRegionConfig === undefined) {
     cachedRegionConfig = extractRegionConfig();
   }
-  return cachedRegionConfig?.region ?? DEFAULT_REGION;
+  return cachedRegionConfig;
+}
+
+/** Gets the user's region (e.g. "amer"), falling back to 'amer'. */
+export function getRegion(): string {
+  return getRegionConfig()?.region ?? DEFAULT_REGION;
 }
 
 /**
- * Gets the Teams base URL from session config.
- * 
- * Returns the base URL for API calls (e.g., "https://teams.microsoft.com" for
- * commercial cloud, or "https://teams.microsoft.us" for GCC).
- * Falls back to default if config not available.
+ * Gets the Teams base URL (e.g. "https://teams.microsoft.com", or
+ * "https://teams.microsoft.us" for GCC), falling back to the commercial default.
  */
 export function getTeamsBaseUrl(): string {
-  if (cachedRegionConfig === undefined) {
-    cachedRegionConfig = extractRegionConfig();
-  }
-  return cachedRegionConfig?.teamsBaseUrl ?? DEFAULT_TEAMS_BASE_URL;
+  return getRegionConfig()?.teamsBaseUrl ?? DEFAULT_TEAMS_BASE_URL;
 }
 
 /**
@@ -307,23 +268,8 @@ export function getTeamsBaseUrl(): string {
  * fall back to the chatsvc region when it is absent.
  */
 export function getCsaRegion(): string {
-  if (cachedRegionConfig === undefined) {
-    cachedRegionConfig = extractRegionConfig();
-  }
-  const match = cachedRegionConfig?.csaServiceUrl.match(/\/api\/csa\/([a-z]+)$/);
+  const match = getRegionConfig()?.csaServiceUrl.match(/\/api\/csa\/([a-z]+)$/);
   return match?.[1] ?? getRegion();
-}
-
-/**
- * Gets the full region config including partition and URLs.
- * 
- * Returns null if no valid session - caller should handle auth error.
- */
-export function getRegionConfig(): RegionConfig | null {
-  if (cachedRegionConfig === undefined) {
-    cachedRegionConfig = extractRegionConfig();
-  }
-  return cachedRegionConfig;
 }
 
 /** API config with region and base URL for constructing API endpoints. */

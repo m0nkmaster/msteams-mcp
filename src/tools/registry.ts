@@ -6,14 +6,14 @@
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
-import type { ToolContext, ToolResult } from './index.js';
+import type { ToolResult } from './index.js';
 import { ErrorCode, createError } from '../types/errors.js';
 
 /** Type-erased tool entry for the registry — avoids generic variance issues. */
 interface RegistryEntry {
   definition: Tool;
   schema: z.ZodTypeAny;
-  handler: (input: z.output<z.ZodTypeAny>, ctx: ToolContext) => Promise<ToolResult>;
+  handler: (input: z.output<z.ZodTypeAny>) => Promise<ToolResult>;
 }
 
 import { searchTools } from './search-tools.js';
@@ -65,13 +65,9 @@ export function getTool(name: string): RegistryEntry | undefined {
 }
 
 /**
- * Invokes a tool by name with the given arguments and context.
+ * Invokes a tool by name with the given arguments.
  */
-export async function invokeTool(
-  name: string,
-  args: unknown,
-  ctx: ToolContext
-): Promise<ToolResult> {
+export async function invokeTool(name: string, args: unknown): Promise<ToolResult> {
   const tool = toolsByName.get(name);
   
   if (!tool) {
@@ -91,7 +87,7 @@ export async function invokeTool(
   }
 
   // Invoke handler
-  return tool.handler(parseResult.data, ctx);
+  return tool.handler(parseResult.data);
 }
 
 /**

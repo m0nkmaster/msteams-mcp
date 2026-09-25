@@ -9,16 +9,6 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 import type { McpError } from '../types/errors.js';
 
-// Import and re-export TeamsServer from the shared types module
-import type { TeamsServer } from '../types/server.js';
-export type { TeamsServer };
-
-/** The context passed to tool handlers. */
-export interface ToolContext {
-  /** Reference to the server for browser operations. */
-  server: TeamsServer;
-}
-
 /** Result returned by tool handlers. */
 export type ToolResult = 
   | { success: true; data: Record<string, unknown> }
@@ -59,7 +49,7 @@ export interface RegisteredTool<TInput extends z.ZodType = z.ZodType> {
   /** Zod schema for input validation. */
   schema: TInput;
   /** Handler function. */
-  handler: (input: z.infer<TInput>, ctx: ToolContext) => Promise<ToolResult>;
+  handler: (input: z.infer<TInput>) => Promise<ToolResult>;
 }
 
 // Re-export tool registrations
