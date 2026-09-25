@@ -1885,11 +1885,17 @@ The Teams web client (`5e3ce6c0-…`) can mint the token directly with the norma
 
 Returns `{ value: [assignment…], "@odata.nextLink"? }`. Each assignment includes the caller's own submission with its grade outcomes.
 
-**Paging:** follow `@odata.nextLink` when present. Some responses omit it even when the page is full; the server then offers a `$skip` offset link. If following that link returns the same page again, the service ignored `$skip`, and the server returns an error instead of looping.
+`id` is not a sortable property (HTTP 400, error `20143`); sortable properties are `dueDateTime`, `status`, `createdDateTime`, `displayName`, `assignDateTime`, `assignedDateTime`, `lastModifiedDateTime`, `classworkModuleId` and `closeDateTime`.
+
+**Paging:** follow `@odata.nextLink` (an opaque `$skiptoken`) when present. `$top` is applied before the status filter, so filtered pages can be short or empty while more follow. Some responses omit it even when the page is full; the server then offers a `$skip` offset link. If following that link returns the same page again, the service ignored `$skip`, and the server returns an error instead of looping.
 
 ### Get Assignment
 
-**Endpoint:** `GET /edu/classes/{classId}/assignments/{assignmentId}?$expand=submissions($expand=outcomes)`
+**Endpoints (requested in parallel):**
+- `GET /edu/classes/{classId}/assignments/{assignmentId}`
+- `GET /edu/classes/{classId}/assignments/{assignmentId}/submissions?$expand=outcomes` (a student sees only their own)
+
+Grades need the second call: expanding `submissions($expand=outcomes)` on the assignment itself returns the submission with an empty `outcomes` array. An unknown class or assignment ID returns 403 rather than 404.
 
 ### Submission Actions
 

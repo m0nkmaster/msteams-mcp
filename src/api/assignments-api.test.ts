@@ -91,7 +91,7 @@ describe('listMyAssignments', () => {
     const qs = new URL(url).searchParams;
     expect(qs.get('$filter')).toBe("status eq microsoft.education.assignments.api.educationAssignmentStatus'assigned' and isCompleted eq false");
     expect(qs.get('$top')).toBe('25');
-    expect(qs.get('$orderby')).toBe('dueDateTime asc,id asc');
+    expect(qs.get('$orderby')).toBe('dueDateTime asc,createdDateTime asc');
     expect(qs.get('$expand')).toBe('submissions($expand=outcomes)');
   });
 
@@ -136,15 +136,29 @@ describe('listMyAssignments', () => {
 });
 
 describe('getAssignment', () => {
-  it('requests the assignment path with submissions expanded', async () => {
-    mockHttp.mockResolvedValue(httpOk({ id: 'a1', classId: 'c1', displayName: 'Detail' }));
+  it('reads grades from the submissions collection, not the assignment expand', async () => {
+    mockHttp.mockImplementation(async url => String(url).includes('/submissions')
+      ? httpOk({ value: [{ id: 's1', status: 'returned', outcomes: [
+        { '@odata.type': '#microsoft.education.assignments.api.educationPointsOutcome', points: { points: 8 } },
+      ] }] })
+      : httpOk({ id: 'a1', classId: 'c1', displayName: 'Detail', submissions: [{ id: 's1', status: 'returned', outcomes: [] }] }));
 
     const result = await getAssignment('c1', 'a1');
 
-    expect(result.ok).toBe(true);
-    const url = mockHttp.mock.calls[0][0] as string;
-    expect(url).toContain('/edu/classes/c1/assignments/a1');
-    expect(new URL(url).searchParams.get('$expand')).toBe('submissions($expand=outcomes)');
+    expect(result).toMatchObject({ ok: true, value: { submission: { id: 's1', status: 'returned', outcome: { points: 8 } } } });
+    const urls = mockHttp.mock.calls.map(call => new URL(call[0] as string));
+    expect(urls.map(u => u.pathname)).toEqual([
+      '/api/v1.0/edu/classes/c1/assignments/a1',
+      '/api/v1.0/edu/classes/c1/assignments/a1/submissions',
+    ]);
+    expect(urls[1].searchParams.get('$expand')).toBe('outcomes');
+  });
+
+  it('fails rather than hiding the submission when it cannot be read', async () => {
+    mockHttp.mockImplementation(async url => String(url).includes('/submissions')
+      ? err(createError(ErrorCode.API_ERROR, 'HTTP 500'))
+      : httpOk({ id: 'a1', classId: 'c1', displayName: 'Detail' }));
+    expect(await getAssignment('c1', 'a1')).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR } });
   });
 });
 
