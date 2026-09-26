@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchPeople, getFrequentContacts } from '../api/substrate-api.js';
 import { resolveProfiles } from '../api/profile-api.js';
@@ -102,8 +102,7 @@ const getPersonToolDefinition: Tool = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleGetMe(
-  _input: Record<string, never>,
-  _ctx: ToolContext
+  _input: Record<string, never>
 ): Promise<ToolResult> {
   const profile = getUserProfile();
 
@@ -124,8 +123,7 @@ async function handleGetMe(
 }
 
 async function handleSearchPeople(
-  input: z.infer<typeof SearchPeopleInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SearchPeopleInputSchema>
 ): Promise<ToolResult> {
   const result = await searchPeople(input.query, input.limit);
 
@@ -137,8 +135,7 @@ async function handleSearchPeople(
 }
 
 async function handleGetFrequentContacts(
-  input: z.infer<typeof FrequentContactsInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof FrequentContactsInputSchema>
 ): Promise<ToolResult> {
   const result = await getFrequentContacts(input.limit);
 
@@ -149,8 +146,7 @@ async function handleGetFrequentContacts(
 }
 
 async function handleGetPerson(
-  input: z.infer<typeof GetPersonInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetPersonInputSchema>
 ): Promise<ToolResult> {
   const result = await resolveProfiles(input.mris);
 

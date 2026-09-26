@@ -18,190 +18,113 @@
  * First login always requires a browser — there's no refresh token to use yet.
  */
 
-import { TOKEN_REFRESH_THRESHOLD_MS } from '../constants.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import {
   extractSubstrateToken,
-  clearTokenCache,
+  getValidAssignmentsToken,
+  getValidGraphToken,
 } from './token-extractor.js';
-import { refreshTokensViaHttp } from './token-refresh-http.js';
+import { clearTokenCache } from './session-store.js';
+import { refreshTokensViaHttp, type OnDemandResource } from './token-refresh-http.js';
+import { createBrowserContext, closeBrowser } from '../browser/context.js';
+import { ensureAuthenticated } from '../browser/auth.js';
 import * as log from '../utils/logger.js';
 
-/** Result of a successful token refresh. */
-export interface TokenRefreshResult {
-  /** New token expiry time. */
-  newExpiry: Date;
-  /** Previous expiry time (for comparison). */
-  previousExpiry: Date;
-  /** Minutes gained by refresh. */
-  minutesGained: number;
-  /** Whether a refresh was actually needed (token was close to expiry). */
-  refreshNeeded: boolean;
-  /** Which method was used: 'http' or 'browser'. */
-  method: 'http' | 'browser';
+/** Serialize refreshes because both HTTP and browser flows replace session state. */
+let refreshQueue: Promise<unknown> = Promise.resolve();
+let coreRefresh: Promise<Result<void>> | undefined;
+
+function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
+  const pending = refreshQueue.then(refresh, refresh);
+  refreshQueue = pending.then(() => undefined, () => undefined);
+  return pending;
 }
 
-/** Module-level flag to prevent concurrent refresh attempts. */
-let refreshInProgress = false;
+/** Refresh core Teams credentials, with browser fallback. */
+export function refreshTokensViaBrowser(): Promise<Result<void>> {
+  if (!coreRefresh) {
+    coreRefresh = serializeRefresh(refreshCoreTokens).finally(() => { coreRefresh = undefined; });
+  }
+  return coreRefresh;
+}
 
 /**
- * Refreshes tokens using HTTP-first strategy with browser fallback.
- * 
- * 1. Try direct HTTP refresh via OAuth2 token endpoint (~100ms)
- * 2. If HTTP fails, fall back to headless browser refresh (~8s)
- * 3. If both fail, return error directing to teams_login
+ * Acquire an optional resource's token on demand with a single HTTP exchange.
+ * Optional features never launch a browser, refresh core credentials, or return
+ * an error that would trigger the server's auto-login.
  */
-export async function refreshTokensViaBrowser(): Promise<Result<TokenRefreshResult>> {
-  // Prevent concurrent refresh attempts
-  if (refreshInProgress) {
-    return err(createError(
-      ErrorCode.UNKNOWN,
-      'Token refresh already in progress. Please wait and try again.',
-      { retryable: true, suggestions: ['Wait a moment and retry the request'] }
-    ));
-  }
-
-  // Get current token expiry for comparison
-  const beforeToken = extractSubstrateToken();
-  if (!beforeToken) {
-    log.warn('token-refresh', 'No Substrate token found in session - cannot refresh, browser login required');
-    return err(createError(
-      ErrorCode.AUTH_REQUIRED,
-      'ACTION REQUIRED: No token found in session. You MUST call teams_login to authenticate.',
-    ));
-  }
-
-  log.debug('token-refresh', `Current token expires at ${beforeToken.expiry.toISOString()} (${Math.round((beforeToken.expiry.getTime() - Date.now()) / 60000)} mins remaining)`);
-
-  const previousExpiry = beforeToken.expiry;
-  refreshInProgress = true;
-
-  try {
-    // ── Strategy 1: HTTP refresh (fast, no browser needed) ──────────────
-    const httpResult = await refreshTokensViaHttp();
-
-    if (httpResult.ok) {
-      log.info('token-refresh', `HTTP refresh succeeded: ${httpResult.value.tokensRefreshed} tokens refreshed` +
-        (httpResult.value.skypeTokenRefreshed ? ', skype token refreshed' : '') +
-        (httpResult.value.refreshTokenRotated ? ', refresh token rotated' : ''));
-
-      // Verify we now have a valid Substrate token
-      const afterToken = extractSubstrateToken();
-      if (afterToken && afterToken.expiry.getTime() > Date.now()) {
-        const minutesGained = Math.round(
-          (afterToken.expiry.getTime() - previousExpiry.getTime()) / 1000 / 60
-        );
-        const wasCloseToExpiry = previousExpiry.getTime() - Date.now() < TOKEN_REFRESH_THRESHOLD_MS;
-
-        return ok({
-          newExpiry: afterToken.expiry,
-          previousExpiry,
-          minutesGained,
-          refreshNeeded: wasCloseToExpiry,
-          method: 'http',
-        });
-      }
-
-      // HTTP refresh reported success but we can't extract a valid token — fall through
-      log.warn('token-refresh', 'HTTP refresh reported success but no valid Substrate token found, falling back to browser');
-    } else {
-      log.warn('token-refresh', `HTTP refresh failed: ${httpResult.error.message}, falling back to browser`);
-
-      // If the error is definitively an auth error (expired refresh token),
-      // don't bother with browser fallback — it won't help either
-      if (httpResult.error.code === ErrorCode.AUTH_EXPIRED) {
-        // Still try browser — the persistent profile's session cookies may work
-        log.info('token-refresh', 'Auth expired, but trying browser fallback (session cookies may still be valid)');
-      }
+function refreshOnDemandToken(resource: OnDemandResource, label: string, getValid: () => string | null): Promise<Result<string>> {
+  return serializeRefresh(async () => {
+    const result = await refreshTokensViaHttp(resource);
+    if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
+      return err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
+        `${label} could not be authorized: ${result.error.message}`,
+        { retryable: false }));
     }
+    if (!result.ok) return result;
+    const token = getValid();
+    return token ? ok(token) : err(createError(ErrorCode.API_ERROR,
+      `${label} token exchange did not return a valid token for the ${label} service.`,
+      { retryable: false }));
+  });
+}
 
-    // ── Strategy 2: Browser refresh (fallback) ──────────────────────────
-    return await refreshTokensViaBrowserImpl(previousExpiry);
+/** Acquire the optional EDU Assignments token. */
+export function refreshAssignmentsToken(): Promise<Result<string>> {
+  return refreshOnDemandToken('assignments', 'Assignments', getValidAssignmentsToken);
+}
 
-  } finally {
-    refreshInProgress = false;
-  }
+/** Acquire the optional Microsoft Graph token (used for file downloads). */
+export function refreshGraphToken(): Promise<Result<string>> {
+  return refreshOnDemandToken('graph', 'Microsoft Graph', getValidGraphToken);
+}
+
+async function refreshCoreTokens(): Promise<Result<void>> {
+  // ── Strategy 1: HTTP refresh (fast, no browser needed) ──────────────
+  // An expired access token does not block this: the MSAL refresh token in
+  // session state is sufficient to acquire new resource tokens.
+  const httpResult = await refreshTokensViaHttp();
+  if (httpResult.ok && extractSubstrateToken()) return ok(undefined);
+
+  log.warn('token-refresh', httpResult.ok
+    ? 'HTTP refresh reported success but no valid Substrate token found, falling back to browser'
+    : `HTTP refresh failed: ${httpResult.error.message}, falling back to browser (session cookies may still be valid)`);
+
+  // ── Strategy 2: Browser refresh (fallback) ──────────────────────────
+  return refreshViaHeadlessBrowser();
 }
 
 /**
- * Browser-based token refresh implementation.
- * Opens a headless browser with the persistent profile, lets MSAL
- * silently refresh tokens using session cookies.
+ * Opens a headless browser with the persistent profile and lets MSAL
+ * silently refresh tokens using its session cookies.
  */
-async function refreshTokensViaBrowserImpl(
-  previousExpiry: Date,
-): Promise<Result<TokenRefreshResult>> {
-  // Import browser functions dynamically to avoid circular dependencies
-  const { createBrowserContext, closeBrowser } = await import('../browser/context.js');
-
+async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
   let manager: Awaited<ReturnType<typeof createBrowserContext>> | null = null;
 
   try {
-    // Open headless browser with persistent profile
     manager = await createBrowserContext({ headless: true });
 
-    // Import auth functions
-    const { ensureAuthenticated } = await import('../browser/auth.js');
+    // headless: true fails fast if user interaction is required
+    await ensureAuthenticated(manager.page, manager.context,
+      msg => log.debug('token-refresh', msg), false, true);
 
-    // Use the same auth flow that works for login - this triggers token acquisition
-    // showOverlay: false since headless browser has no visible window
-    // headless: true to fail fast if user interaction is required
-    await ensureAuthenticated(manager.page, manager.context, (msg) => {
-      // Silent logging for headless refresh
-      log.debug('token-refresh', msg);
-    }, false, true);
-
-    // Close browser (ensureAuthenticated already saved the session)
+    // ensureAuthenticated already saved the session
     await closeBrowser(manager, false);
     manager = null;
-
-    // Clear our token cache to force re-extraction from the new session
     clearTokenCache();
 
-    // Extract the new token to verify we still have valid tokens
-    const afterToken = extractSubstrateToken();
-    if (!afterToken) {
+    if (!extractSubstrateToken()) {
       return err(createError(
         ErrorCode.AUTH_EXPIRED,
         'ACTION REQUIRED: Token refresh failed. You MUST call teams_login to re-authenticate.',
       ));
     }
-
-    const newExpiry = afterToken.expiry;
-    const minutesGained = Math.round(
-      (newExpiry.getTime() - previousExpiry.getTime()) / 1000 / 60
-    );
-
-    // Check if the token was close to expiry and needed refresh
-    const wasCloseToExpiry = previousExpiry.getTime() - Date.now() < TOKEN_REFRESH_THRESHOLD_MS;
-
-    // If we needed a refresh but didn't get one, that's an error
-    if (wasCloseToExpiry && newExpiry.getTime() <= previousExpiry.getTime()) {
-      return err(createError(
-        ErrorCode.AUTH_EXPIRED,
-        'ACTION REQUIRED: Token was not refreshed despite being close to expiry. You MUST call teams_login to re-authenticate.',
-      ));
-    }
-
-    return ok({
-      newExpiry,
-      previousExpiry,
-      minutesGained,
-      refreshNeeded: wasCloseToExpiry,
-      method: 'browser',
-    });
-
+    return ok(undefined);
   } catch (error) {
-    // Clean up browser if still open
     if (manager) {
-      try {
-        await closeBrowser(manager, false);
-      } catch {
-        // Ignore cleanup errors
-      }
+      await closeBrowser(manager, false).catch(() => {});
     }
-
     const message = error instanceof Error ? error.message : 'Unknown error';
     return err(createError(
       ErrorCode.UNKNOWN,

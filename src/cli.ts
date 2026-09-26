@@ -146,7 +146,7 @@ function parseArgs(): ParsedArgs {
       
       // Only parse booleans and specific numeric fields
       // Don't coerce messageId, conversationId etc. - they're strings
-      const numericFields = new Set(['from', 'size', 'limit']);
+      const numericFields = new Set(['from', 'size', 'limit', 'top']);
       if (value === 'true') value = true;
       else if (value === 'false') value = false;
       else if (numericFields.has(key) && /^\d+$/.test(value as string)) {

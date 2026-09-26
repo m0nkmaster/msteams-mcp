@@ -7,21 +7,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// We need to mock the session-store and token-extractor modules
+// We need to mock the session-store module
 // before importing the module under test.
 vi.mock('./session-store.js', () => ({
   readSessionState: vi.fn(),
   writeSessionState: vi.fn(),
+  clearTokenCache: vi.fn(),
   getTeamsOrigin: vi.fn(),
 }));
 
-vi.mock('./token-extractor.js', () => ({
-  clearTokenCache: vi.fn(),
-}));
-
 import { refreshTokensViaHttp } from './token-refresh-http.js';
-import { readSessionState, writeSessionState, getTeamsOrigin } from './session-store.js';
-import { clearTokenCache } from './token-extractor.js';
+import { readSessionState, writeSessionState, clearTokenCache, getTeamsOrigin } from './session-store.js';
 import type { SessionState } from './session-store.js';
 
 // ============================================================================
@@ -120,6 +116,19 @@ function makeMockSessionState(): SessionState {
 }
 
 /** Creates a mock Azure AD token response. */
+/** Access token entries in the last written session state. */
+function savedAccessTokens() {
+  const saved = vi.mocked(writeSessionState).mock.calls.at(-1)![0];
+  return saved.origins[0].localStorage.map(item => JSON.parse(item.value))
+    .filter(entry => entry.credentialType === 'AccessToken');
+}
+
+/** Whether the last written session state carries the new skype token. */
+function savedNewSkypeToken(): boolean {
+  const saved = vi.mocked(writeSessionState).mock.calls.at(-1)![0];
+  return saved.cookies.some(cookie => cookie.name === 'skypetoken_asm' && cookie.value === 'new-skype-token');
+}
+
 function makeTokenResponse(scope: string, expiresIn = 3600) {
   return {
     access_token: `new-access-token-for-${scope}`,
@@ -209,11 +218,8 @@ describe('refreshTokensViaHttp', () => {
     const result = await refreshTokensViaHttp();
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.tokensRefreshed).toBe(3);
-      expect(result.value.skypeTokenRefreshed).toBe(true);
-      expect(result.value.refreshTokenRotated).toBe(true);
-    }
+    expect(savedAccessTokens().filter(entry => entry.secret.startsWith('new-access-token'))).toHaveLength(3);
+    expect(savedNewSkypeToken()).toBe(true);
 
     // Verify session state was written back
     expect(writeSessionState).toHaveBeenCalledOnce();
@@ -281,6 +287,48 @@ describe('refreshTokensViaHttp', () => {
     }
   });
 
+  it.each([400, 401])('core refresh never requests Assignments even when it would fail with HTTP %s', async (status) => {
+    const state = makeMockSessionState();
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+
+    vi.mocked(fetch).mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).includes('login.microsoftonline.com')) {
+        const scope = new URLSearchParams(String(init?.body)).get('scope')!;
+        if (scope.includes('8f348934-64be-4bb2-bc16-c54c96789f43')) {
+          return new Response(JSON.stringify({
+            error: 'invalid_grant',
+            error_description: 'AADSTS65001: Consent required for Assignments.',
+          }), { status });
+        }
+        return new Response(JSON.stringify(makeTokenResponse(scope)), { status: 200 });
+      }
+      if (String(url).includes('authsvc.teams.microsoft.com')) {
+        return new Response(JSON.stringify({
+          tokens: { skypeToken: 'new-skype-token', expiresIn: 86400 },
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected URL: ${String(url)}`);
+    });
+
+    const result = await refreshTokensViaHttp();
+
+    expect(result).toEqual({ ok: true, value: undefined });
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => String(init?.body).includes('8f348934'))).toBe(false);
+    expect(writeSessionState).toHaveBeenCalledOnce();
+    const saved = vi.mocked(writeSessionState).mock.calls[0][0];
+    const entries = saved.origins[0].localStorage.map(item => JSON.parse(item.value));
+    const accessTokens = entries.filter(entry => entry.credentialType === 'AccessToken');
+    expect(accessTokens).toHaveLength(3);
+    for (const entry of accessTokens) {
+      expect(entry.secret).toBe(`new-access-token-for-${entry.target}`);
+    }
+    expect(entries.find(entry => entry.credentialType === 'RefreshToken').secret).toBe('new-refresh-token');
+    expect(saved.cookies.filter(cookie => cookie.name === 'skypetoken_asm')
+      .every(cookie => cookie.value === 'new-skype-token')).toBe(true);
+    expect(clearTokenCache).toHaveBeenCalledOnce();
+  });
+
   it('continues with remaining scopes if one fails with network error', async () => {
     const state = makeMockSessionState();
     vi.mocked(readSessionState).mockReturnValue(state);
@@ -312,10 +360,8 @@ describe('refreshTokensViaHttp', () => {
     const result = await refreshTokensViaHttp();
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      // 2 of 3 scopes succeeded (first one failed with network error)
-      expect(result.value.tokensRefreshed).toBe(2);
-    }
+    // 2 of 3 scopes succeeded (first one failed with network error)
+    expect(savedAccessTokens().filter(entry => entry.secret.startsWith('new-access-token'))).toHaveLength(2);
   });
 
   it('handles skype token exchange failure gracefully', async () => {
@@ -340,10 +386,8 @@ describe('refreshTokensViaHttp', () => {
 
     // Should still succeed — skype token failure is non-fatal
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.tokensRefreshed).toBe(3);
-      expect(result.value.skypeTokenRefreshed).toBe(false);
-    }
+    expect(savedAccessTokens().filter(entry => entry.secret.startsWith('new-access-token'))).toHaveLength(3);
+    expect(savedNewSkypeToken()).toBe(false);
   });
 
   it('updates MSAL access token cache entries in localStorage', async () => {
@@ -435,4 +479,77 @@ describe('refreshTokensViaHttp', () => {
     const parsed = JSON.parse(rtEntry!.value);
     expect(parsed.secret).toBe('rotated-refresh-token');
   });
+  it.each([
+    ['AADSTS65001: Consent required.', 'ACCESS_DENIED'],
+    ['AADSTS500011: Resource principal missing.', 'ACCESS_DENIED'],
+    ['AADSTS50105: User not assigned to a role for the application.', 'ACCESS_DENIED'],
+    ['AADSTS53003: Access has been blocked by Conditional Access policies.', 'ACCESS_DENIED'],
+    ['AADSTS90094: Admin consent is required.', 'ACCESS_DENIED'],
+    ['AADSTS650057: Invalid resource.', 'ACCESS_DENIED'],
+    ['AADSTS700082: Refresh token expired.', 'AUTH_EXPIRED'],
+    ['AADSTS50076: MFA required.', 'AUTH_EXPIRED'],
+  ])('keeps Assignments refusal distinct from expired auth: %s', async (description, code) => {
+    const state = makeMockSessionState();
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ error_description: description }), { status: 400 }));
+    expect(await refreshTokensViaHttp('assignments')).toMatchObject({ ok: false, error: { code } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(writeSessionState).not.toHaveBeenCalled();
+  });
+
+  it('refreshes only Assignments and preserves Graph credentials with the same scopes', async () => {
+    const state = makeMockSessionState();
+    const graphEntry = makeAccessTokenEntry('graph', 'EduAssignments.ReadWrite');
+    state.origins[0].localStorage.push(graphEntry);
+    graphEntry.value = JSON.stringify({ ...JSON.parse(graphEntry.value), secret: `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ aud: '00000003-0000-0000-c000-000000000000' })).toString('base64url')}.sig` });
+    const originalGraph = graphEntry.value;
+    const accessToken = `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ aud: '8f348934-64be-4bb2-bc16-c54c96789f43', exp: Date.now() / 1000 + 3600 })).toString('base64url')}.sig`;
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
+      ...makeTokenResponse('EduAssignments.ReadWrite'), access_token: accessToken,
+    }), { status: 200 }));
+    expect(await refreshTokensViaHttp('assignments')).toEqual({ ok: true, value: undefined });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(graphEntry.value).toBe(originalGraph);
+    const saved = vi.mocked(writeSessionState).mock.calls[0][0];
+    expect(saved.origins[0].localStorage.some(item => JSON.parse(item.value).secret === accessToken)).toBe(true);
+    expect(saved.cookies[0].value).toBe('old-skype-token');
+    expect(clearTokenCache).not.toHaveBeenCalled();
+  });
+
+  it('refreshes only Graph on demand, updating the Graph entry in place', async () => {
+    const state = makeMockSessionState();
+    const jwt = (claims: object) => `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`;
+    const graphEntry = makeAccessTokenEntry('graph', 'Files.ReadWrite.All');
+    graphEntry.value = JSON.stringify({ ...JSON.parse(graphEntry.value), secret: jwt({ aud: 'https://graph.microsoft.com', exp: 1 }) });
+    state.origins[0].localStorage.push(graphEntry);
+    const assignmentsEntry = makeAccessTokenEntry('assignments', 'EduAssignments.ReadWrite');
+    assignmentsEntry.value = JSON.stringify({ ...JSON.parse(assignmentsEntry.value), secret: jwt({ aud: '8f348934-64be-4bb2-bc16-c54c96789f43' }) });
+    state.origins[0].localStorage.push(assignmentsEntry);
+    const originalAssignments = assignmentsEntry.value;
+    const accessToken = jwt({ aud: 'https://graph.microsoft.com', exp: Date.now() / 1000 + 3600 });
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
+      ...makeTokenResponse('Files.ReadWrite.All'), access_token: accessToken,
+    }), { status: 200 }));
+
+    expect(await refreshTokensViaHttp('graph')).toEqual({ ok: true, value: undefined });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(new URLSearchParams(vi.mocked(fetch).mock.calls[0][1]!.body as string).get('scope')).toBe('https://graph.microsoft.com/.default offline_access');
+    expect(JSON.parse(graphEntry.value).secret).toBe(accessToken);
+    expect(assignmentsEntry.value).toBe(originalAssignments);
+  });
+
+  it('reports a Graph consent refusal as access denied, not an expired login', async () => {
+    const state = makeMockSessionState();
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ error_description: 'AADSTS65001: Consent required.' }), { status: 400 }));
+    expect(await refreshTokensViaHttp('graph')).toMatchObject({ ok: false, error: { code: 'ACCESS_DENIED', message: expect.stringContaining('Microsoft Graph') } });
+  });
+
 });

@@ -11,6 +11,10 @@ export enum ErrorCode {
   AUTH_REQUIRED = 'AUTH_REQUIRED',
   /** Token has expired and needs refresh. */
   AUTH_EXPIRED = 'AUTH_EXPIRED',
+  /** A resource requires interaction beyond refreshing the core Teams session. */
+  AUTH_INTERACTION_REQUIRED = 'AUTH_INTERACTION_REQUIRED',
+  /** Authenticated account lacks permission or consent for this resource. */
+  ACCESS_DENIED = 'ACCESS_DENIED',
   /** Rate limited by the API. */
   RATE_LIMITED = 'RATE_LIMITED',
   /** Requested resource was not found. */
@@ -85,6 +89,13 @@ function getDefaultSuggestions(code: ErrorCode): string[] {
       ];
     case ErrorCode.RATE_LIMITED:
       return ['Wait before retrying', 'Reduce request frequency'];
+    case ErrorCode.AUTH_INTERACTION_REQUIRED:
+      return [
+        'Assignments is optional (education tenants only); all other Teams tools are unaffected',
+        'On an education account, open Assignments in Teams and complete any sign-in or consent prompt, then use teams_login to capture the updated session',
+      ];
+    case ErrorCode.ACCESS_DENIED:
+      return ['Check your access and required consent with the tenant administrator'];
     case ErrorCode.NOT_FOUND:
       return ['Check the ID/query is correct', 'Verify the resource exists'];
     case ErrorCode.INVALID_INPUT:

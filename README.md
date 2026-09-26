@@ -8,14 +8,13 @@
 
 Give AI access to Microsoft Teams easily with your standard Teams login. 
 
-> [!NOTE]
 > ### No Azure setup, app registration, Graph permissions or IT support required.
 Search messages and email, catch up on unread chats, read threads, send replies, retrieve meeting transcripts and more.
 
 
 ## Why msteams-mcp?
 
-- **Do real work** - search, unread chats, threads, replies, people, channels, meetings, transcripts, files, reactions and more.
+- **Do real work** - search, unread chats, threads, replies, people, channels, meetings, transcripts, files, reactions, and assignments on education tenants.
 - **Sign in once** - tokens refresh automatically and the browser stays out of routine operations.
 - **Secure** - the assistant has only your existing Teams permissions, with encrypted session data stored locally.
 - **Use it anywhere** - every capability works through both MCP clients and the included `msteams` CLI.
@@ -222,9 +221,26 @@ See [CLI Usage](#cli-usage) for commands.
 | Tool                     | Description                                                        |
 | ------------------------ | ------------------------------------------------------------------ |
 | `teams_get_shared_files` | Get files and links shared in a conversation (supports pagination) |
+| `teams_download_file`    | Download a shared file or assignment attachment to a local path    |
 
 
-Returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
+`teams_get_shared_files` returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
+
+`teams_download_file` takes a file's `webUrl` from `teams_get_shared_files`, or an attachment's `fileUrl` from `teams_get_assignment`. It downloads through Microsoft Graph using the Teams client's own access, so no extra sign-in is needed. Files stream straight to disk, never overwrite an existing file, and are removed if the download fails part-way. Links and Microsoft Forms aren't files and can't be downloaded.
+
+### Assignments (education tenants only)
+
+
+| Tool                      | Description                                                                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `teams_list_assignments`  | List your assignments across classes (`active`, `completed` or `all`), with due dates, grades and your submission state |
+| `teams_get_assignment`    | Get one assignment's full detail, including instructions, attachments and your submission (with your own copies of files) |
+| `teams_submission_action` | Turn in, undo turn-in, or mark viewed on your own submission                                   |
+
+
+Assignments is optional. It only works on education tenants that use Teams Assignments, and its token is requested separately, on demand, so other accounts pay no extra cost. If Assignments isn't available, or its authorisation fails, only these tools return an error: the rest of Teams keeps working, and no browser or re-login is triggered.
+
+Download attachments (Word, PowerPoint and other files) with `teams_download_file`. Microsoft Forms quizzes and links are returned as URLs instead.
 
 ### Session
 
@@ -334,6 +350,7 @@ npm run cli -- send "Hi" --to "conversation-id"
 - **Token expiry** - Tokens expire after ~1 hour; headless refresh is attempted or run `teams_login` again when needed
 - **Undocumented APIs** - Uses Microsoft's internal APIs which may change without notice
 - **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (but LLM will likely use `teams_get_thread` for full context)
+- **Assignments** - Education tenants only. Turn-in and undo turn-in act on your real account; handing in again records a new hand-in date that your teacher sees
 
 
 

@@ -5,7 +5,7 @@
 import { createRequire } from 'module';
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../../package.json') as { version: string };
@@ -13,17 +13,18 @@ import {
   hasSessionState,
   isSessionLikelyExpired,
   clearSessionState,
+  clearTokenCache,
 } from '../auth/session-store.js';
 import {
   getSubstrateTokenStatus,
   getMessageAuthStatus,
   extractMessageAuth,
   extractCsaToken,
-  clearTokenCache,
 } from '../auth/token-extractor.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import * as log from '../utils/logger.js';
-import { ensureAuthenticated, forceNewLogin, getAuthStatus } from '../browser/auth.js';
+import { resetAssignmentsAvailability } from '../utils/auth-guards.js';
+import { ensureAuthenticated } from '../browser/auth.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -69,28 +70,17 @@ const TOKEN_VALID_THRESHOLD_MINUTES = 10;
 
 async function handleLogin(
   input: z.infer<typeof LoginInputSchema>,
-  ctx: ToolContext
 ): Promise<ToolResult> {
-  // Close existing browser if any
-  const existingManager = ctx.server.getBrowserManager();
-  if (existingManager) {
-    await closeBrowser(existingManager, !input.forceNew);
-    ctx.server.resetBrowserState();
-  }
+  // A fresh login may have changed what the account can access (e.g. new consent)
+  resetAssignmentsAvailability();
 
   if (input.forceNew) {
     clearSessionState();
     clearTokenCache();
-  }
-
-  // Fast path: if tokens are still valid, skip browser entirely
-  // This is more reliable than browser-based auth detection
-  if (!input.forceNew) {
+  } else {
+    // Fast path: if tokens are still valid, skip browser entirely
     const tokenStatus = getSubstrateTokenStatus();
-    if (tokenStatus.hasToken && 
-        tokenStatus.minutesRemaining !== undefined && 
-        tokenStatus.minutesRemaining >= TOKEN_VALID_THRESHOLD_MINUTES) {
-      ctx.server.markInitialised();
+    if (tokenStatus.hasToken && tokenStatus.minutesRemaining! >= TOKEN_VALID_THRESHOLD_MINUTES) {
       return {
         success: true,
         data: {
@@ -108,74 +98,44 @@ async function handleLogin(
   // The persistent browser profile retains Microsoft's long-lived session cookies,
   // so headless SSO can succeed even without a session-state file. Always try
   // headless first — even for forceNew. Most recovery scenarios complete silently.
-  {
-    const headlessManager = await createBrowserContext({ headless: true });
-    ctx.server.setBrowserManager(headlessManager);
-
-    try {
-      if (input.forceNew && headlessManager.attached) {
-        // The context belongs to the user's running browser — never wipe its cookies
-        log.warn('login:headless', 'forceNew ignored: attached over CDP, sign out in the browser instead');
-      } else if (input.forceNew) {
-        // Clear persistent profile cookies to force fresh authentication
-        await headlessManager.context.clearCookies();
-      }
-
-      await ensureAuthenticated(
-        headlessManager.page,
-        headlessManager.context,
-        (msg) => log.info('login:headless', msg),
-        false, // No overlay in headless
-        true   // Headless mode - throw immediately if user interaction required
-      );
-
-      await closeBrowser(headlessManager, true);
-      ctx.server.resetBrowserState();
-      ctx.server.markInitialised();
-
-      return {
-        success: true,
-        data: {
-          message: 'Login completed silently via SSO. Session has been saved.',
-        },
-      };
-    } catch (error) {
-      // Headless attempt failed - fall through to visible browser
-      log.warn('login:headless', `Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
-      try {
-        await closeBrowser(headlessManager, false);
-      } catch {
-        // Ignore cleanup errors
-      }
-      ctx.server.resetBrowserState();
+  const headless = await createBrowserContext({ headless: true });
+  try {
+    if (input.forceNew && headless.browser) {
+      // The context belongs to the user's running browser — never wipe its cookies
+      log.warn('login:headless', 'forceNew ignored: attached over CDP, sign out in the browser instead');
+    } else if (input.forceNew) {
+      // Clear persistent profile cookies to force fresh authentication
+      await headless.context.clearCookies();
     }
+
+    await ensureAuthenticated(
+      headless.page,
+      headless.context,
+      (msg) => log.info('login:headless', msg),
+      false, // No overlay in headless
+      true   // Headless mode - throw immediately if user interaction required
+    );
+    await closeBrowser(headless, true);
+
+    return {
+      success: true,
+      data: {
+        message: 'Login completed silently via SSO. Session has been saved.',
+      },
+    };
+  } catch (error) {
+    log.warn('login:headless', `Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
+    await closeBrowser(headless, false).catch(() => {});
   }
 
   // Open visible browser for user interaction
-  const browserManager = await createBrowserContext({ headless: false });
-  ctx.server.setBrowserManager(browserManager);
-
+  const visible = await createBrowserContext({ headless: false });
   try {
-    if (input.forceNew && !browserManager.attached) {
-      await forceNewLogin(
-        browserManager.page,
-        browserManager.context,
-        (msg) => log.info('login', msg)
-      );
-    } else {
-      await ensureAuthenticated(
-        browserManager.page,
-        browserManager.context,
-        (msg) => log.info('login', msg)
-      );
-    }
+    await ensureAuthenticated(visible.page, visible.context, (msg) => log.info('login', msg));
   } finally {
     // Close browser after login - we only need the saved session/tokens
-    await closeBrowser(browserManager, true);
-    ctx.server.resetBrowserState();
+    await closeBrowser(visible, true);
   }
-
-  ctx.server.markInitialised();
 
   return {
     success: true,
@@ -185,22 +145,9 @@ async function handleLogin(
   };
 }
 
-async function handleStatus(
-  _input: Record<string, never>,
-  ctx: ToolContext
-): Promise<ToolResult> {
-  const sessionExists = hasSessionState();
-  const sessionExpired = isSessionLikelyExpired();
+async function handleStatus(): Promise<ToolResult> {
   const tokenStatus = getSubstrateTokenStatus();
   const messageAuthStatus = getMessageAuthStatus();
-  const messageAuth = extractMessageAuth();
-  const csaToken = extractCsaToken();
-
-  let authStatus = null;
-  const browserManager = ctx.server.getBrowserManager();
-  if (browserManager && ctx.server.isInitialisedState()) {
-    authStatus = await getAuthStatus(browserManager.page);
-  }
 
   return {
     success: true,
@@ -217,17 +164,12 @@ async function handleStatus(
         minutesRemaining: messageAuthStatus.minutesRemaining,
       },
       favorites: {
-        available: messageAuth !== null && csaToken !== null,
+        available: extractMessageAuth() !== null && extractCsaToken() !== null,
       },
       session: {
-        exists: sessionExists,
-        likelyExpired: sessionExpired,
+        exists: hasSessionState(),
+        likelyExpired: isSessionLikelyExpired(),
       },
-      browser: {
-        running: browserManager !== null,
-        initialised: ctx.server.isInitialisedState(),
-      },
-      authentication: authStatus,
     },
   };
 }

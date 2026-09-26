@@ -79,18 +79,3 @@ export function decrypt(data: EncryptedData): string {
   
   return decrypted;
 }
-
-/**
- * Checks if data looks like encrypted format.
- */
-export function isEncrypted(data: unknown): data is EncryptedData {
-  if (!data || typeof data !== 'object') return false;
-  
-  const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.iv === 'string' &&
-    typeof obj.content === 'string' &&
-    typeof obj.tag === 'string' &&
-    typeof obj.version === 'number'
-  );
-}

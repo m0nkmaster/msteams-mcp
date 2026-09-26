@@ -12,9 +12,6 @@
 /** Minimum content length to be considered valid (characters). */
 export const MIN_CONTENT_LENGTH = 5;
 
-/** Maximum length for config values in debug output (characters). */
-export const MAX_DEBUG_CONFIG_VALUE_LENGTH = 5000;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Pagination Defaults
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,8 +50,8 @@ export const MAX_CHANNEL_LIMIT = 50;
 // Timeouts (milliseconds)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Default HTTP request timeout. */
-export const HTTP_REQUEST_TIMEOUT_MS = 30000;
+/** Cancel a file download after this long without receiving any data. */
+export const DOWNLOAD_INACTIVITY_TIMEOUT_MS = 30000;
 
 /** Pause after showing progress overlay step (ms). */
 export const OVERLAY_STEP_PAUSE_MS = 1500;
@@ -68,19 +65,6 @@ export const OVERLAY_COMPLETE_PAUSE_MS = 2000;
 
 /** Session expiry threshold in hours. */
 export const SESSION_EXPIRY_HOURS = 12;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Retry Configuration
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Default maximum retry attempts for HTTP requests. */
-export const DEFAULT_MAX_RETRIES = 3;
-
-/** Base delay for exponential backoff (milliseconds). */
-export const RETRY_BASE_DELAY_MS = 1000;
-
-/** Maximum delay between retries (milliseconds). */
-export const RETRY_MAX_DELAY_MS = 10000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Conversation IDs
@@ -115,9 +99,6 @@ export const FOLLOWED_THREADS_ID = '48:threads';
 
 /** Default limit for activity feed items. */
 export const DEFAULT_ACTIVITY_LIMIT = 50;
-
-/** Maximum limit for activity feed items. */
-export const MAX_ACTIVITY_LIMIT = 200;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wait for reply
@@ -165,6 +146,12 @@ export const MAX_FILES_PAGE_SIZE = 100;
 
 /** Threshold for proactive token refresh (10 minutes before expiry). */
 export const TOKEN_REFRESH_THRESHOLD_MS = 10 * 60 * 1000;
+
+/**
+ * How long to remember that an account can't get an optional token (EDU
+ * Assignments, Microsoft Graph) before trying to mint one again.
+ */
+export const ASSIGNMENTS_UNAVAILABLE_TTL_MS = 30 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // User Identity
@@ -259,3 +246,9 @@ export const STANDARD_EMOJIS: readonly StandardEmoji[] = [
   { key: 'makeup', description: 'Make-up 💄', category: 'other' },
   { key: 'snowangel', description: 'Snow angel', category: 'other' },
 ];
+
+/** OAuth audience of the Teams EDU Assignments service. */
+export const ASSIGNMENTS_APP_ID = '8f348934-64be-4bb2-bc16-c54c96789f43';
+
+/** Microsoft Graph token audiences: MSAL caches either the URL or the app ID. */
+export const GRAPH_AUDIENCES: readonly string[] = ['https://graph.microsoft.com', '00000003-0000-0000-c000-000000000000'];
