@@ -1,126 +1,160 @@
 /**
  * Markdown to Teams HTML conversion utilities.
+ *
+ * Uses `marked` for block/inline parsing (GFM: tables, nested lists, task
+ * lists, blockquotes, headings, etc.) with a renderer that emits the shapes
+ * the Teams client accepts:
+ *  - Tables → bare <table><tbody><tr><td><p>…</p></td>… (no <thead>/<th>,
+ *    every cell wrapped in <p> — verified against raw chatsvc content of a
+ *    manually composed table message).
+ *  - No alignment attributes (Teams ignores them).
+ *  - **bold** → <b>, *italic* → <i> (not <strong>/<em> — Teams renders these).
+ *  - All raw HTML is stripped/escaped: model-authored content must never be
+ *    injected as markup (marked v18 passes HTML through even with html:false,
+ *    and emits javascript: hrefs, so sanitizing here is load-bearing).
+ *  - Code blocks → <pre><code> without language class (Teams has no syntax
+ *    highlighter; the language tag is dropped).
  */
 
-import { escapeHtmlChars } from './parsers-html.js';
+import { Marked, type Tokens } from 'marked';
+import { escapeHtmlChars, sanitizeLinkUrl } from './parsers-html.js';
 
-/**
- * Converts inline markdown formatting to Teams HTML within a single line.
- * Handles: bold, italic, strikethrough, inline code.
- * Text outside of formatting markers is HTML-escaped.
- */
-function convertInlineFormatting(line: string): string {
-  // Process inline code first (to prevent other formatting inside code spans)
-  // Split on `code` patterns, escape and format alternately
-  const codeParts = line.split(/`([^`]+)`/);
-  let result = '';
-  
-  for (let i = 0; i < codeParts.length; i++) {
-    if (i % 2 === 1) {
-      // Inside backticks - render as code, only escape HTML
-      result += `<code>${escapeHtmlChars(codeParts[i])}</code>`;
-    } else {
-      // Outside backticks - process other inline formatting
-      let segment = escapeHtmlChars(codeParts[i]);
-      
-      // Bold: **text** or __text__
-      segment = segment.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-      segment = segment.replace(/__(.+?)__/g, '<b>$1</b>');
-      
-      // Italic: *text* or _text_ (but not inside words for underscore)
-      segment = segment.replace(/\*(.+?)\*/g, '<i>$1</i>');
-      segment = segment.replace(/(?<!\w)_(.+?)_(?!\w)/g, '<i>$1</i>');
-      
-      // Strikethrough: ~~text~~
-      segment = segment.replace(/~~(.+?)~~/g, '<s>$1</s>');
-      
-      result += segment;
+const md = new Marked({ gfm: true, breaks: true });
+
+/** Renders inline tokens to Teams HTML with full escaping. */
+function renderInline(tokens: Tokens.Generic[] | undefined): string {
+  if (!tokens) return '';
+  let out = '';
+  for (const tok of tokens) {
+    switch (tok.type) {
+      case 'strong':
+        out += `<b>${renderInline(tok.tokens)}</b>`;
+        break;
+      case 'em':
+        out += `<i>${renderInline(tok.tokens)}</i>`;
+        break;
+      case 'del':
+        out += `<s>${renderInline(tok.tokens)}</s>`;
+        break;
+      case 'codespan':
+        out += `<code>${escapeHtmlChars(tok.text)}</code>`;
+        break;
+      case 'link': {
+        const safeUrl = sanitizeLinkUrl(tok.href).replace(/"/g, '&quot;');
+        out += `<a href="${safeUrl}">${renderInline(tok.tokens)}</a>`;
+        break;
+      }
+      case 'image':
+        // Teams chat doesn't render agent-supplied <img>; keep alt text.
+        out += escapeHtmlChars(tok.text ?? '');
+        break;
+      case 'br':
+        out += '<br>';
+        break;
+      case 'escape':
+        out += escapeHtmlChars(tok.text);
+        break;
+      default:
+        out += escapeHtmlChars(tok.raw ?? '');
     }
   }
-  
-  return result;
+  return out;
+}
+
+/** Renders block tokens (paragraphs, lists, tables, code, quotes, headings). */
+function renderBlocks(tokens: Tokens.Generic[]): string {
+  let out = '';
+  for (const tok of tokens) {
+    switch (tok.type) {
+      case 'paragraph':
+        out += `<p>${renderInline(tok.tokens)}</p>`;
+        break;
+      case 'heading':
+        out += `<p><b>${renderInline(tok.tokens)}</b></p>`;
+        break;
+      case 'code':
+        out += `<pre><code>${escapeHtmlChars(tok.text.replace(/\n$/, ''))}</code></pre>`;
+        break;
+      case 'blockquote':
+        out += renderBlocks(tok.tokens ?? []);
+        break;
+      case 'hr':
+        out += '<hr>';
+        break;
+      case 'space':
+        break;
+      case 'list':
+        out += renderList(tok as Tokens.List);
+        break;
+      case 'table':
+        out += renderTable(tok as Tokens.Table);
+        break;
+      case 'html':
+        // Raw HTML block from the source: strip entirely (never inject).
+        break;
+      default:
+        // Unknown block: render children if any, else drop raw.
+        if ('tokens' in tok && Array.isArray((tok as { tokens?: Tokens.Generic[] }).tokens)) {
+          out += renderBlocks((tok as { tokens: Tokens.Generic[] }).tokens);
+        }
+        break;
+    }
+  }
+  return out;
+}
+
+/** Renders a list token (recursive for nested lists). */
+function renderList(tok: Tokens.List): string {
+  const tag = tok.ordered ? 'ol' : 'ul';
+  let items = '';
+  for (const item of tok.items) {
+    let inner = '';
+    for (const child of item.tokens) {
+      if (child.type === 'text') {
+        // 'text' tokens at item level carry the inline content (with 'tokens')
+        const t = child as Tokens.Text;
+        inner += renderInline(t.tokens ?? [{ type: 'text', raw: t.text }]);
+      } else if (child.type === 'list') {
+        inner += renderList(child as Tokens.List);
+      } else {
+        // Block child inside a list item (rare: code, paragraph...)
+        inner += renderBlocks([child]);
+      }
+    }
+    items += `<li>${inner}</li>`;
+  }
+  return `<${tag}>${items}</${tag}>`;
+}
+
+/**
+ * Renders a table token in the Teams-client shape:
+ * bare <tbody>, no <thead>/<th>, every cell wrapped in <p>.
+ */
+function renderTable(tok: Tokens.Table): string {
+  const rows = [tok.header, ...tok.rows];
+  const trs = rows
+    .map(
+      cells =>
+        `<tr>${cells
+          .map(c => `<td><p>${renderInline(c.tokens)}</p></td>`)
+          .join('')}</tr>`
+    )
+    .join('');
+  return `<table><tbody>${trs}</tbody></table>`;
 }
 
 /**
  * Converts markdown-formatted text to Teams-compatible HTML.
- * 
- * Supports:
- * - **bold** / __bold__ → <b>
- * - *italic* / _italic_ → <i>
- * - ~~strikethrough~~ → <s>
- * - `inline code` → <code>
- * - ```code blocks``` → <pre><code>
- * - Newlines → paragraph breaks
- * - Ordered lists (1. item) → <ol><li>
- * - Unordered lists (- item, * item) → <ul><li>
- * 
- * Plain text without any formatting is returned as-is (HTML-escaped).
+ * Supports the GFM feature set via marked: bold/italic/strikethrough,
+ * inline code, fenced code blocks, nested/ordered/task lists, blockquotes,
+ * headings (rendered as bold paragraphs), and tables — all emitted in the
+ * shapes the Teams client accepts. Raw HTML in the source is stripped.
+ * Plain text without any formatting is wrapped in a paragraph.
  */
 export function markdownToTeamsHtml(text: string): string {
-  // Handle fenced code blocks first (```...```)
-  // Split text into code blocks and non-code-block segments
-  const segments: { type: 'text' | 'codeblock'; content: string; lang?: string }[] = [];
-  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match;
-  
-  while ((match = codeBlockRegex.exec(text)) !== null) {
-    // Text before this code block
-    if (match.index > lastIndex) {
-      segments.push({ type: 'text', content: text.substring(lastIndex, match.index) });
-    }
-    segments.push({ type: 'codeblock', content: match[2], lang: match[1] || undefined });
-    lastIndex = match.index + match[0].length;
-  }
-  // Remaining text after last code block
-  if (lastIndex < text.length) {
-    segments.push({ type: 'text', content: text.substring(lastIndex) });
-  }
-  
-  const htmlParts: string[] = [];
-  
-  for (const segment of segments) {
-    if (segment.type === 'codeblock') {
-      // Code blocks: escape HTML but preserve whitespace
-      const escaped = escapeHtmlChars(segment.content.replace(/\n$/, ''));
-      htmlParts.push(`<pre><code>${escaped}</code></pre>`);
-      continue;
-    }
-    
-    // Process text segments: split into paragraphs on double newlines
-    const paragraphs = segment.content.split(/\n{2,}/);
-    
-    for (const para of paragraphs) {
-      const trimmed = para.trim();
-      if (!trimmed) continue;
-      
-      const lines = trimmed.split('\n');
-      
-      // Check if this paragraph is a list
-      const isUnorderedList = lines.every(l => /^\s*[-*]\s+/.test(l));
-      const isOrderedList = lines.every(l => /^\s*\d+[.)]\s+/.test(l));
-      
-      if (isUnorderedList) {
-        const items = lines.map(l => {
-          const content = l.replace(/^\s*[-*]\s+/, '');
-          return `<li>${convertInlineFormatting(content)}</li>`;
-        });
-        htmlParts.push(`<ul>${items.join('')}</ul>`);
-      } else if (isOrderedList) {
-        const items = lines.map(l => {
-          const content = l.replace(/^\s*\d+[.)]\s+/, '');
-          return `<li>${convertInlineFormatting(content)}</li>`;
-        });
-        htmlParts.push(`<ol>${items.join('')}</ol>`);
-      } else {
-        // Regular paragraph - join lines with <br>
-        const htmlLines = lines.map(l => convertInlineFormatting(l));
-        htmlParts.push(`<p>${htmlLines.join('<br>')}</p>`);
-      }
-    }
-  }
-  
-  return htmlParts.join('') || '<p></p>';
+  const tokens = md.lexer(text);
+  const html = renderBlocks(tokens as Tokens.Generic[]);
+  return html || '<p></p>';
 }
 
 /**
@@ -141,8 +175,23 @@ export function hasMarkdownFormatting(text: string): boolean {
   // Lists
   if (/^\s*[-*]\s+/m.test(text)) return true;
   if (/^\s*\d+[.)]\s+/m.test(text)) return true;
+  // Blockquote, heading, or image
+  if (/^\s*>|^\s*#{1,6}\s|!\[[^\]]*\]\(/m.test(text)) return true;
+  // Tables (header row + |---| separator)
+  if (hasMarkdownTable(text)) return true;
   // Multiple newlines (paragraph breaks)
   if (/\n/.test(text)) return true;
-  
+
+  return false;
+}
+
+/** True if the text contains a GFM table (header row followed by a separator row). */
+function hasMarkdownTable(text: string): boolean {
+  const lines = text.split('\n').map(l => l.trim());
+  for (let i = 0; i < lines.length - 1; i++) {
+    const isRow = /^\|.*\|$/.test(lines[i]) && lines[i].includes('|', 1);
+    const isSep = /^\|[\s:|-]+\|$/.test(lines[i + 1]) && lines[i + 1].includes('-', 1);
+    if (isRow && isSep) return true;
+  }
   return false;
 }
