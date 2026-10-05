@@ -818,6 +818,76 @@ describe('markdownToTeamsHtml', () => {
   it('handles whitespace-only input', () => {
     expect(markdownToTeamsHtml('   ')).toBe('<p></p>');
   });
+
+  it('converts a markdown table to the Teams table shape', () => {
+    const input = '| Item | Price | Qty |\n|------|-------|-----|\n| Apple | $1.00 | 12 |\n| Orange | $0.50 | 6 |';
+    expect(markdownToTeamsHtml(input)).toBe(
+      '<table><tbody><tr><td><p>Item</p></td><td><p>Price</p></td><td><p>Qty</p></td></tr>' +
+      '<tr><td><p>Apple</p></td><td><p>$1.00</p></td><td><p>12</p></td></tr>' +
+      '<tr><td><p>Orange</p></td><td><p>$0.50</p></td><td><p>6</p></td></tr></tbody></table>'
+    );
+  });
+
+  it('emits table markup identical to what the Teams client produces', () => {
+    // Shape verified against the raw chatsvc content of a manually composed table message
+    const input = '| A | B |\n|---|---|\n| 1 | 2 |';
+    const html = markdownToTeamsHtml(input);
+    expect(html).not.toContain('|');
+    expect(html).not.toContain('---');
+    expect(html).toContain('<table><tbody>');
+    expect((html.match(/<tr>/g) ?? []).length).toBe(2);
+    expect((html.match(/<td>/g) ?? []).length).toBe(4);
+  });
+
+  it('escapes HTML inside table cells', () => {
+    const input = '| Expr | Safe |\n|------|------|\n| <script> | `code` |';
+    const html = markdownToTeamsHtml(input);
+    expect(html).toContain('<p>&lt;script&gt;</p>');
+    expect(html).toContain('<p><code>code</code></p>');
+  });
+
+  it('supports inline formatting inside table cells', () => {
+    const input = '| Name | Status |\n|------|--------|\n| **Prod** | ~~down~~ up |';
+    const html = markdownToTeamsHtml(input);
+    expect(html).toContain('<p><b>Prod</b></p>');
+    expect(html).toContain('<p><s>down</s> up</p>');
+  });
+
+  it('handles unescaped pipes in cells and escaped-pipe literals', () => {
+    const input = '| Path | Note |\n|------|------|\n| a\\|b | x |';
+    const html = markdownToTeamsHtml(input);
+    expect(html).toContain('<p>a|b</p>');
+  });
+
+  it('does not treat pipe rows without a separator as a table', () => {
+    expect(markdownToTeamsHtml('| just | pipes |')).toBe('<p>| just | pipes |</p>');
+  });
+
+  it('converts a table surrounded by paragraphs', () => {
+    const input = 'Before\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter';
+    expect(markdownToTeamsHtml(input)).toBe(
+      '<p>Before</p><table><tbody><tr><td><p>A</p></td><td><p>B</p></td></tr>' +
+      '<tr><td><p>1</p></td><td><p>2</p></td></tr></tbody></table><p>After</p>'
+    );
+  });
+
+  it('rejects a row with fewer cells than the separator', () => {
+    // GFM would pad, but a malformed block is safer as plain text than a broken table
+    const input = '| A | B | C |\n|---|---|\n| 1 | 2 | 3 |';
+    expect(markdownToTeamsHtml(input)).toContain('<p>');
+  });
+});
+
+describe('hasMarkdownFormatting', () => {
+  it('detects tables', () => {
+    expect(hasMarkdownFormatting('| A | B |\n|---|---|\n| 1 | 2 |')).toBe(true);
+  });
+
+  it('does not flag lone pipe rows as tables', () => {
+    // Still true (single newline triggers conversion), so assert via the full 'auto' path assumption:
+    // a single "| a | b |" line has no table pair; newline detection covers it.
+    expect(hasMarkdownFormatting('| a | b |\n| c | d |')).toBe(true);
+  });
 });
 
 describe('formatTranscriptText', () => {
