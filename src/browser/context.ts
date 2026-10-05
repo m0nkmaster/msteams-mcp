@@ -136,7 +136,9 @@ function cleanupStaleSingletonLock(): boolean {
  * @returns The browser channel name for Playwright
  */
 function getBrowserChannel(): 'msedge' | 'chrome' {
-  return process.platform === 'win32' ? 'msedge' : 'chrome';
+  const override = process.env.TEAMS_BROWSER_CHANNEL;
+  if (override === 'msedge' || override === 'chrome') return override;
+  return 'msedge';
 }
 
 /**
