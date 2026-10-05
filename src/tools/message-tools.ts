@@ -138,13 +138,13 @@ export const WaitForReplyInputSchema = z.object({
 
 const sendMessageToolDefinition: Tool = {
   name: 'teams_send_message',
-  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, and newlines. Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation.',
+  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, newlines, and tables. Tables use standard markdown table syntax:\n| Item | Price |\n|------|-------|\n| Apple | $1.00 |\n(with a header row, a |---|---| separator row, then data rows — they render as a real table in Teams). Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation.',
   inputSchema: {
     type: 'object',
     properties: {
       content: {
         type: 'string',
-        description: 'The message content in markdown (not HTML). Supports: **bold**, *italic*, ~~strikethrough~~, `inline code`, ```code blocks```, bullet lists (- item), numbered lists (1. item), and newlines. Do NOT send raw HTML tags (unless contentType is "html"). For people @mentions use @[DisplayName](mri) (MRI from teams_search_people). For channel tag @mentions use @[DisplayName](tag:tagId) (tag IDs from teams_get_tags). Markdown links [text](url) are supported (http/https/mailto).',
+        description: 'The message content in markdown (not HTML). Supports: **bold**, *italic*, ~~strikethrough~~, `inline code`, ```code blocks```, bullet lists (- item), numbered lists (1. item), markdown tables (header row, then a |---|---| separator row, then data rows; render as a real table), and newlines. Do NOT send raw HTML tags (unless contentType is "html"). For people @mentions use @[DisplayName](mri) (MRI from teams_search_people). For channel tag @mentions use @[DisplayName](tag:tagId) (tag IDs from teams_get_tags). Markdown links [text](url) are supported (http/https/mailto).',
       },
       conversationId: {
         type: 'string',
@@ -309,7 +309,7 @@ const editMessageToolDefinition: Tool = {
       },
       content: {
         type: 'string',
-        description: 'New content in markdown (not raw HTML): **bold**, *italic*, lists, code, @[Person](mri), @[Tag](tag:id), [text](url) — same as teams_send_message.',
+        description: 'New content in markdown (not raw HTML): **bold**, *italic*, lists, code, markdown tables (header row, then a |---|---| separator row, then data rows), @[Person](mri), @[Tag](tag:id), [text](url) — same as teams_send_message.',
       },
       contentType: {
         type: 'string',
