@@ -819,9 +819,15 @@ Drafts use a slightly different endpoint:
       "from": "8:orgid:ab76f827-27e2-4c67-a765-f1a53145fa24",
       "imdisplayname": "Smith, John"
     }
-  ]
+  ],
+  "_metadata": {
+    "backwardLink": "<full URL of the next-older page, with startTime and syncState>",
+    "syncState": "..."
+  }
 }
 ```
+
+A page holds at most 200 messages. `_metadata.backwardLink` points at the next-older page, so following it walks a conversation back to its start (verified on a busy channel: three contiguous pages back to five weeks ago). `teams_get_thread` returns its query parameters as `olderCursor` and replays them against its own messages URL, so the authenticated request never leaves the configured host.
 
 ---
 

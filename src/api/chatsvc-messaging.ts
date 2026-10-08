@@ -60,6 +60,8 @@ export interface ThreadMessage {
 export interface GetThreadResult {
   conversationId: string;
   messages: ThreadMessage[];
+  /** Opaque cursor for the next-older page; absent when there is no older history. */
+  olderCursor?: string;
 }
 
 /** Result of editing a message. */
@@ -425,10 +427,11 @@ export async function getMessage(
  * @param options.startTime - Fetch messages from this timestamp onwards
  * @param options.order - Sort order: 'desc' (newest-first, default) or 'asc' (oldest-first)
  * @param options.replyToMessageId - For channels: scope to replies of a specific top-level post
+ * @param options.cursor - olderCursor from a previous call, to fetch the next-older page
  */
 export async function getThreadMessages(
   conversationId: string,
-  options: { limit?: number; startTime?: number; order?: 'asc' | 'desc'; replyToMessageId?: string } = {}
+  options: { limit?: number; startTime?: number; order?: 'asc' | 'desc'; replyToMessageId?: string; cursor?: string } = {}
 ): Promise<Result<GetThreadResult>> {
   const authResult = requireMessageAuthWithConfig();
   if (!authResult.ok) {
@@ -437,14 +440,12 @@ export async function getThreadMessages(
   const { auth, region, baseUrl } = authResult.value;
   const limit = options.limit ?? 50;
 
-  let url = CHATSVC_API.messages(region, conversationId, options.replyToMessageId, baseUrl);
-  url += `?view=msnp24Equivalent|supportsMessageProperties&pageSize=${limit}`;
+  const url = buildThreadMessagesUrl(
+    CHATSVC_API.messages(region, conversationId, options.replyToMessageId, baseUrl),
+    { limit, startTime: options.startTime, cursor: options.cursor }
+  );
 
-  if (options.startTime) {
-    url += `&startTime=${options.startTime}`;
-  }
-
-  const response = await httpRequest<{ messages?: unknown[] }>(
+  const response = await httpRequest<{ messages?: unknown[]; _metadata?: { backwardLink?: string } }>(
     url,
     {
       method: 'GET',
@@ -457,12 +458,13 @@ export async function getThreadMessages(
   }
 
   const rawMessages = response.value.data.messages;
-  if (!Array.isArray(rawMessages)) {
+  if (!Array.isArray(rawMessages) || rawMessages.length === 0) {
     return ok({
       conversationId,
       messages: [],
     });
   }
+  const olderCursor = cursorFromBackwardLink(response.value.data._metadata?.backwardLink);
 
   const messages: ThreadMessage[] = [];
 
@@ -558,7 +560,38 @@ export async function getThreadMessages(
   return ok({
     conversationId,
     messages,
+    olderCursor,
   });
+}
+
+/**
+ * Builds the chatsvc messages URL. A cursor only contributes query parameters, so it can never
+ * redirect the authenticated request to another host or conversation.
+ */
+export function buildThreadMessagesUrl(
+  baseUrl: string,
+  options: { limit: number; startTime?: number; cursor?: string }
+): string {
+  const params = new URLSearchParams(options.cursor ?? '');
+  params.delete('view');
+  params.set('pageSize', String(options.limit));
+  if (!options.cursor && options.startTime) {
+    params.set('startTime', String(options.startTime));
+  }
+  return `${baseUrl}?view=msnp24Equivalent|supportsMessageProperties&${params}`;
+}
+
+/** Reduces chatsvc's _metadata.backwardLink (a full URL) to an opaque cursor of its query parameters. */
+export function cursorFromBackwardLink(backwardLink: string | undefined): string | undefined {
+  if (!backwardLink) return undefined;
+  try {
+    const params = new URL(backwardLink).searchParams;
+    params.delete('view');
+    params.delete('pageSize');
+    return params.toString() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

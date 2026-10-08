@@ -117,7 +117,7 @@ See [CLI Usage](#cli-usage) for commands.
 | `teams_search_email` | Search emails in your mailbox (same auth as Teams - no extra login)                                                                                   |
 | `teams_list_chats`   | List recent conversations (1:1, group, meeting, channel) with a last-message preview                                                                  |
 | `teams_get_message`  | Get a single message by ID with full content (any age); includes reactions                                                                            |
-| `teams_get_thread`   | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread; `fromUrl` accepts a Teams message deep link |
+| `teams_get_thread`   | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread; `fromUrl` accepts a Teams message deep link; `cursor` pages back through older history |
 | `teams_find_channel` | Find channels by name (your teams + org-wide discovery)                                                                                               |
 | `teams_get_tags`     | List a team's channel tags for tag @mentions                                                                                                          |
 | `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications)                                                                                       |
