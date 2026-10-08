@@ -100,7 +100,10 @@ async function handleLogin(
   // headless first — even for forceNew. Most recovery scenarios complete silently.
   const headless = await createBrowserContext({ headless: true });
   try {
-    if (input.forceNew) {
+    if (input.forceNew && headless.browser) {
+      // The context belongs to the user's running browser — never wipe its cookies
+      log.warn('login:headless', 'forceNew ignored: attached over CDP, sign out in the browser instead');
+    } else if (input.forceNew) {
       // Clear persistent profile cookies to force fresh authentication
       await headless.context.clearCookies();
     }
