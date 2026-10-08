@@ -19,6 +19,8 @@ import {
   selectNewMessages,
   resolveWaitBaseline,
   generateClientMessageId,
+  buildThreadMessagesUrl,
+  cursorFromBackwardLink,
 } from './chatsvc-messaging.js';
 import { MAX_WAIT_SECONDS } from '../constants.js';
 
@@ -397,5 +399,35 @@ describe('resolveWaitBaseline', () => {
 
   it('returns 0 for an empty thread', () => {
     expect(resolveWaitBaseline([])).toBe(0);
+  });
+});
+
+describe('thread history cursor', () => {
+  const base = 'https://teams.microsoft.com/api/chatsvc/amer/v1/users/ME/conversations/19%3Aabc%40thread.tacv2/messages';
+
+  it('builds the first page unchanged', () => {
+    expect(buildThreadMessagesUrl(base, { limit: 50, startTime: 123 }))
+      .toBe(`${base}?view=msnp24Equivalent|supportsMessageProperties&pageSize=50&startTime=123`);
+  });
+
+  it('round-trips a backwardLink into the next request', () => {
+    const cursor = cursorFromBackwardLink(
+      'https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/19:abc@thread.tacv2/messages?startTime=1&syncState=abc%3D&pageSize=200&view=msnp24Equivalent'
+    );
+    expect(cursor).toBe('startTime=1&syncState=abc%3D');
+    expect(buildThreadMessagesUrl(base, { limit: 200, startTime: 999, cursor }))
+      .toBe(`${base}?view=msnp24Equivalent|supportsMessageProperties&startTime=1&syncState=abc%3D&pageSize=200`);
+  });
+
+  it('keeps the request on the base host and path whatever the cursor holds', () => {
+    const url = buildThreadMessagesUrl(base, { limit: 10, cursor: 'x=1#@evil.example/path&view=other' });
+    expect(new URL(url).origin + new URL(url).pathname).toBe(base);
+    expect(new URL(url).searchParams.getAll('view')).toEqual(['msnp24Equivalent|supportsMessageProperties']);
+  });
+
+  it('has no cursor when there is no usable backwardLink', () => {
+    expect(cursorFromBackwardLink(undefined)).toBeUndefined();
+    expect(cursorFromBackwardLink('not a url')).toBeUndefined();
+    expect(cursorFromBackwardLink('https://x/messages?view=a&pageSize=5')).toBeUndefined();
   });
 });
