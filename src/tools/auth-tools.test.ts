@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../auth/session-store.js', () => ({
   hasSessionState: vi.fn(() => true),
   isSessionLikelyExpired: vi.fn(() => false),
-  clearSessionState: vi.fn(),
-  clearTokenCache: vi.fn(),
+  clearAllLocalData: vi.fn(),
 }));
 
 vi.mock('../auth/token-extractor.js', () => ({
@@ -19,9 +18,10 @@ vi.mock('../auth/token-extractor.js', () => ({
 vi.mock('../auth/token-refresh-http.js', () => ({ refreshTokensViaHttp: vi.fn() }));
 vi.mock('../browser/context.js', () => ({ createBrowserContext: vi.fn(), closeBrowser: vi.fn() }));
 vi.mock('../browser/auth.js', () => ({ ensureAuthenticated: vi.fn() }));
-vi.mock('../utils/auth-guards.js', () => ({ resetAssignmentsAvailability: vi.fn() }));
+vi.mock('../utils/auth-guards.js', () => ({ resetAssignmentsAvailability: vi.fn(), clearRegionCache: vi.fn() }));
 
 import { loginTool } from './auth-tools.js';
+import { clearAllLocalData } from '../auth/session-store.js';
 import {
   getSubstrateTokenStatus,
   extractMessageAuth,
@@ -68,13 +68,30 @@ describe('teams_login core credential top-up', () => {
 
   it('tops up after a forced browser login leaves the CSA token behind', async () => {
     sessionMissingCsaToken();
-    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: { clearCookies: vi.fn() } } as never);
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
     vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
 
     const result = await loginTool.handler({ forceNew: true });
 
     expect(result.success).toBe(true);
     expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
+  });
+
+  it('forceNew wipes all previous login data and signs in from scratch in a visible browser', async () => {
+    sessionMissingCsaToken();
+    vi.mocked(extractCsaToken).mockReturnValue('csa');
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+    vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
+
+    await loginTool.handler({ forceNew: true });
+
+    expect(clearAllLocalData).toHaveBeenCalledOnce();
+    expect(vi.mocked(clearAllLocalData).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(createBrowserContext).mock.invocationCallOrder[0]);
+    // Valid-looking tokens from the old session must not short-circuit the login,
+    // and a wiped profile has nothing for headless SSO to use.
+    expect(createBrowserContext).toHaveBeenCalledOnce();
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: false });
   });
 
   it('still reports success when the top-up fails', async () => {

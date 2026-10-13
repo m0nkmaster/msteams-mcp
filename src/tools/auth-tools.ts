@@ -12,8 +12,7 @@ const pkg = require('../../package.json') as { version: string };
 import {
   hasSessionState,
   isSessionLikelyExpired,
-  clearSessionState,
-  clearTokenCache,
+  clearAllLocalData,
 } from '../auth/session-store.js';
 import {
   getSubstrateTokenStatus,
@@ -26,7 +25,7 @@ import {
 import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import * as log from '../utils/logger.js';
-import { resetAssignmentsAvailability } from '../utils/auth-guards.js';
+import { resetAssignmentsAvailability, clearRegionCache } from '../utils/auth-guards.js';
 import { ensureAuthenticated } from '../browser/auth.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,7 +48,7 @@ const loginToolDefinition: Tool = {
     properties: {
       forceNew: {
         type: 'boolean',
-        description: 'Force a new login even if a session exists (default: false)',
+        description: 'Delete all previous login data (browser profile, cookies, saved session, every previously signed-in account) and sign in from scratch in a visible browser. Use to switch accounts or recover a broken session (default: false)',
       },
     },
   },
@@ -105,37 +104,34 @@ async function handleLogin(
   resetAssignmentsAvailability();
 
   if (input.forceNew) {
-    clearSessionState();
-    clearTokenCache();
-  } else {
-    // Fast path: if tokens are still valid, skip browser entirely
-    const tokenStatus = getSubstrateTokenStatus();
-    if (tokenStatus.hasToken && tokenStatus.minutesRemaining! >= TOKEN_VALID_THRESHOLD_MINUTES) {
-      await fillCoreCredentialGaps();
-      return {
-        success: true,
-        data: {
-          message: `Already authenticated. Token valid for ${tokenStatus.minutesRemaining} more minutes.`,
-          tokenStatus: {
-            expiresAt: tokenStatus.expiresAt,
-            minutesRemaining: tokenStatus.minutesRemaining,
-          },
+    // Start from nothing: no profile, cookies, MSAL cache or session from any
+    // earlier account can survive to be mixed into the new login.
+    clearAllLocalData();
+    clearRegionCache();
+    return loginInVisibleBrowser();
+  }
+
+  // Fast path: if tokens are still valid, skip browser entirely
+  const tokenStatus = getSubstrateTokenStatus();
+  if (tokenStatus.hasToken && tokenStatus.minutesRemaining! >= TOKEN_VALID_THRESHOLD_MINUTES) {
+    await fillCoreCredentialGaps();
+    return {
+      success: true,
+      data: {
+        message: `Already authenticated. Token valid for ${tokenStatus.minutesRemaining} more minutes.`,
+        tokenStatus: {
+          expiresAt: tokenStatus.expiresAt,
+          minutesRemaining: tokenStatus.minutesRemaining,
         },
-      };
-    }
+      },
+    };
   }
 
   // Headless-first strategy:
   // The persistent browser profile retains Microsoft's long-lived session cookies,
-  // so headless SSO can succeed even without a session-state file. Always try
-  // headless first — even for forceNew. Most recovery scenarios complete silently.
+  // so headless SSO can succeed even without a session-state file.
   const headless = await createBrowserContext({ headless: true });
   try {
-    if (input.forceNew) {
-      // Clear persistent profile cookies to force fresh authentication
-      await headless.context.clearCookies();
-    }
-
     await ensureAuthenticated(
       headless.page,
       headless.context,
@@ -157,7 +153,11 @@ async function handleLogin(
     await closeBrowser(headless, false).catch(() => {});
   }
 
-  // Open visible browser for user interaction
+  return loginInVisibleBrowser();
+}
+
+/** Opens a visible browser for the user to sign in, then saves the session. */
+async function loginInVisibleBrowser(): Promise<ToolResult> {
   const visible = await createBrowserContext({ headless: false });
   try {
     await ensureAuthenticated(visible.page, visible.context, (msg) => log.info('login', msg));

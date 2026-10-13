@@ -122,6 +122,14 @@ export function clearSessionState(): void {
 }
 
 /**
+ * Deletes everything stored locally: browser profile (cookies, MSAL caches,
+ * every account ever signed in), session state and token cache.
+ */
+export function clearAllLocalData(): void {
+  fs.rmSync(CONFIG_DIR, { recursive: true, force: true });
+}
+
+/**
  * Gets the age of the session state in hours.
  */
 export function getSessionAge(): number | null {
