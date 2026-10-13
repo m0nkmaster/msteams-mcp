@@ -471,7 +471,7 @@ export async function ensureAuthenticated(
   const status = await navigateToTeams(page);
 
   if (status.isAuthenticated) {
-    log('Already authenticated — saving session state.');
+    log('Teams loaded — saving session state.');
     await saveSessionState(context);
     
     // Check if the saved tokens are actually valid
@@ -498,9 +498,11 @@ export async function ensureAuthenticated(
       throw new Error('Headless SSO failed: MSAL token refresh timed out');
     }
     
-    // In visible mode, the tokens might refresh while user interacts, or they can
-    // manually complete any prompts. We've saved what we have.
-    log('Session state saved (tokens may need refresh).');
+    // No redirect to login does not mean signed in: Teams can render with the
+    // Microsoft SSO session gone and only a dead SPA refresh token in its cache.
+    // Keep the window open until a live token appears (silently or by sign-in).
+    log('Tokens expired. Sign in in the browser window if prompted.');
+    await waitForManualLogin(page, context, onProgress, showOverlay);
     return;
   }
 

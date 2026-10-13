@@ -4,7 +4,7 @@ import type { Page } from 'playwright';
 vi.mock('./context.js', () => ({ saveSessionState: vi.fn() }));
 vi.mock('../auth/token-extractor.js', () => ({ extractSubstrateToken: vi.fn() }));
 
-import { getAuthStatus, isTeamsUrl } from './auth.js';
+import { ensureAuthenticated, getAuthStatus, isTeamsUrl } from './auth.js';
 
 /** A page on `url` with no Teams DOM markers and `tokenMinutes` left on MSAL. */
 function fakePage(url: string, tokenMinutes: number): Page {
@@ -53,5 +53,27 @@ describe('getAuthStatus', () => {
     const status = await getAuthStatus(fakePage('https://login.microsoftonline.com/common/oauth2', 99));
 
     expect(status).toMatchObject({ isAuthenticated: false, isOnLoginPage: true });
+  });
+});
+
+describe('ensureAuthenticated', () => {
+  it('keeps a visible browser open for sign-in when Teams loads with expired tokens', async () => {
+    // Teams can render without redirecting to login while the Microsoft SSO
+    // session is gone; only a fresh MSAL token proves the user has signed in.
+    const tokenMinutes = [-1, -1, 55];
+    const page = {
+      goto: async () => null,
+      waitForURL: async () => { throw new Error('timeout'); },
+      url: () => 'https://teams.cloud.microsoft/',
+      evaluate: async () => tokenMinutes.length > 1 ? tokenMinutes.shift()! : tokenMinutes[0],
+      waitForTimeout: async () => {},
+    } as unknown as Page;
+    const messages: string[] = [];
+
+    await ensureAuthenticated(page, {} as never, msg => messages.push(msg), false, false);
+
+    expect(messages).toContain('Waiting for manual login...');
+    expect(messages).toContain('Authentication successful!');
+    expect(tokenMinutes).toEqual([55]);
   });
 });
