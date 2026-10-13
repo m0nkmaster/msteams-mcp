@@ -111,9 +111,9 @@ All operations use direct API calls. A persistent browser profile (`~/.teams-mcp
 3. **Session fully expired**: Falls back to a visible browser for manual re-login (with extensions and saved form data available).
 4. **All API operations**: Use cached tokens, no browser.
 
-`teams_login` always tries headless SSO before showing a visible browser. Long-lived Microsoft session cookies (days/weeks) mean users rarely re-authenticate manually, even though MSAL tokens expire after ~1 hour.
+`teams_login` tries headless SSO before showing a visible browser. The exception is `forceNew`, which deletes the whole config directory (browser profile, cookies, MSAL caches, session state, token cache) and goes straight to a visible sign-in. The server supports one account at a time, and a shared profile let a previously signed-in account leak in: Teams kept offering it, and tokens from both accounts sat side by side in the saved session. Long-lived Microsoft session cookies (days/weeks) mean users rarely re-authenticate manually, even though MSAL tokens expire after ~1 hour.
 
-A saved session holds only the tokens the browser itself had acquired, and Teams JS mints some lazily — the CSA (chatsvcagg) token behind favorites is routinely absent right after SSO, and `forceNew` compounds it by clearing a session state that HTTP refresh had already filled in. `teams_login` therefore tops up: if any core credential (Substrate, Skype Spaces, CSA, messaging cookies) is missing it runs one HTTP refresh before returning, so `teams_status` is accurate immediately after login instead of recovering on some later call. The top-up is skipped when the session is already complete, and a failure is logged but never fails the login.
+A saved session holds only the tokens the browser itself had acquired, and Teams JS mints some lazily — the CSA (chatsvcagg) token behind favorites is routinely absent right after SSO, including after a `forceNew` sign-in from scratch. `teams_login` therefore tops up: if any core credential (Substrate, Skype Spaces, CSA, messaging cookies) is missing it runs one HTTP refresh before returning, so `teams_status` is accurate immediately after login instead of recovering on some later call. The top-up is skipped when the session is already complete, and a failure is logged but never fails the login.
 
 Microsoft redirects Teams users to new hosts without warning (`teams.cloud.microsoft`, then `teams.chat.microsoft.com`), so every host check reads one list: `TEAMS_HOSTS` in `constants.ts`. A host missing from it makes `getAuthStatus()` report an unknown page on a session that is in fact signed in, and manual login then hangs with the window open until the 5-minute timeout. Login detection treats a live MSAL token as the proof of sign-in: new Teams renders none of the `data-tid` elements earlier versions exposed, so waiting on the DOM never completes.
 
@@ -242,7 +242,7 @@ When a roadmap item is completed, remove it entirely from `ROADMAP.md` - do not 
 
 ## Troubleshooting
 
-**Session/token expired**: call `teams_login` with `forceNew: true`, or delete the config directory and run `npm run cli -- login`.
+**Session/token expired**: call `teams_login` with `forceNew: true` (deletes the config directory and signs in from scratch), or `npm run cli -- login --force`.
 
 **Browser won't launch (login)**: ensure Chrome (macOS/Linux) or Edge (Windows) is installed; as a fallback run `npx playwright install chromium`; check for browser processes holding the profile lock.
 
