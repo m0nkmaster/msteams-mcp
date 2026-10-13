@@ -4,7 +4,7 @@
 [![npm version](https://img.shields.io/npm/v/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
 
 Give AI access to Microsoft Teams easily with your standard Teams login. 
 
@@ -27,7 +27,7 @@ Search messages and email, catch up on unread chats, read threads, send replies,
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - A Microsoft account with Teams access
 - Google Chrome, Microsoft Edge, or Chromium browser installed
 

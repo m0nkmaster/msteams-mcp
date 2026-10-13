@@ -21,7 +21,7 @@
     "url": "https://github.com/m0nkmaster/msteams-mcp/issues"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc",
