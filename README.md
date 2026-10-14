@@ -84,7 +84,9 @@ Then configure your MCP client:
 }
 ```
 
-The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authentication.
+The server uses your system's Chrome or Edge for authentication, whichever it can launch. It tries Edge first on Windows and Chrome first on macOS/Linux, then the other, then Playwright's bundled Chromium if you have installed it (`npx playwright install chromium`) - so a machine with only one of them, or with a browser that fails to start, still works. Set `TEAMS_BROWSER_CHANNEL=chrome` or `msedge` to force a specific one and skip the fallback.
+
+Your own default browser is not used or touched: login runs in a dedicated profile under `~/.teams-mcp-server/browser-profile/`. Safari is not supported (Playwright cannot drive it).
 
 ### CLI
 

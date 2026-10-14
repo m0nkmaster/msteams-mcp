@@ -114,21 +114,62 @@ function cleanupStaleSingletonLock(): boolean {
 }
 
 /**
- * Determines the browser channel to use based on the platform.
- * - Windows: Use Microsoft Edge (always installed on Windows 10+)
- * - macOS/Linux: Use Chrome
- * 
- * @returns The browser channel name for Playwright
+ * A Playwright Chromium channel, or `undefined` for Playwright's bundled Chromium.
  */
-function getBrowserChannel(): 'msedge' | 'chrome' {
-  return process.platform === 'win32' ? 'msedge' : 'chrome';
+export type BrowserChannel = 'msedge' | 'chrome' | undefined;
+
+/**
+ * The browser channels to try, in order, until one launches.
+ *
+ * Nothing here depends on the user's default browser: we always launch into our
+ * own profile dir, so the only question is which Chromium build exists on the
+ * machine. Ordering puts the one most likely to be installed first:
+ * - Windows: Edge ships with Windows 10+
+ * - macOS/Linux: Chrome is the common install, Edge is available on both
+ *
+ * Bundled Chromium is last, so `npx playwright install chromium` is a real
+ * remedy for a machine with neither (e.g. a Mac with only Safari) rather than
+ * advice that does nothing.
+ *
+ * Falling through on failure also covers a browser that is installed but cannot
+ * start - Chrome SIGTRAP-crashes on launch on some macOS machines.
+ *
+ * `TEAMS_BROWSER_CHANNEL=chrome|msedge` forces a single channel and disables
+ * the fallback.
+ *
+ * @returns Channels to attempt, in order
+ */
+export function browserChannels(): BrowserChannel[] {
+  const override = process.env.TEAMS_BROWSER_CHANNEL;
+  if (override === 'msedge' || override === 'chrome') return [override];
+
+  return process.platform === 'win32'
+    ? ['msedge', 'chrome', undefined]
+    : ['chrome', 'msedge', undefined];
+}
+
+/**
+ * Human-readable name for a channel, for logs and errors.
+ */
+function browserLabel(channel: BrowserChannel): string {
+  if (channel === 'msedge') return 'Microsoft Edge';
+  if (channel === 'chrome') return 'Google Chrome';
+  return "Playwright's bundled Chromium";
+}
+
+/** True if the error is a Chromium profile lock rather than a missing browser. */
+function isProfileLockError(message: string): boolean {
+  return message.includes('ProcessSingleton') || message.includes('SingletonLock');
 }
 
 /**
  * Creates a browser context using a persistent profile.
  *
  * Uses the system's installed Chrome or Edge browser rather than downloading
- * Playwright's bundled Chromium (~180MB savings).
+ * Playwright's bundled Chromium (~180MB savings). Channels are tried in the
+ * order given by browserChannels() until one launches, so the server works on
+ * Windows, macOS and Linux whichever of the two is installed, and falls back to
+ * bundled Chromium if neither can start.
  *
  * The persistent profile at ~/.teams-mcp-server/browser-profile/ is shared
  * between headless and visible modes. This provides:
@@ -136,25 +177,27 @@ function getBrowserChannel(): 'msedge' | 'chrome' {
  * - Extensions (e.g. Bitwarden) and form autofill for visible login
  * - No storageState temp file management needed
  *
+ * The profile is standard Chromium user data and is reused across channels. If
+ * switching channels ever leaves it unusable, delete browser-profile/ and log
+ * in again.
+ *
  * Note: Only one process can use the profile at a time (Chromium profile lock).
  * The MCP server serialises tool calls, and token-refresh checks for an active
  * browser before attempting refresh to avoid lock contention.
  *
  * @param options.headless - Run without a visible window (default: true)
  * @returns Browser manager with context and page
- * @throws Error if system browser is not found (with helpful suggestions)
+ * @throws Error if no browser could be launched (with helpful suggestions)
  */
 export async function createBrowserContext(
   { headless = true }: { headless?: boolean } = {}
 ): Promise<BrowserManager> {
   ensureConfigDir();
 
-  const channel = getBrowserChannel();
-
   // Clean up any stale lock files before attempting to launch
   cleanupStaleSingletonLock();
 
-  const launchBrowser = async (): Promise<BrowserManager> => {
+  const launchBrowser = async (channel: BrowserChannel): Promise<BrowserManager> => {
     const context = await chromium.launchPersistentContext(BROWSER_PROFILE_DIR, {
       headless,
       channel,
@@ -168,37 +211,45 @@ export async function createBrowserContext(
     return { context, page };
   };
 
-  try {
-    return await launchBrowser();
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    
-    // Check if this is a profile lock error and try to recover
-    if (errorMessage.includes('ProcessSingleton') || errorMessage.includes('SingletonLock')) {
-      log.warn('browser', 'Profile lock detected, attempting to clean up and retry...');
-      
-      // Force remove the lock file and retry once
-      try {
-        if (fs.existsSync(SINGLETON_LOCK_PATH)) {
-          fs.unlinkSync(SINGLETON_LOCK_PATH);
-          log.info('browser', 'Removed SingletonLock file, retrying browser launch...');
-          return await launchBrowser();
+  const channels = browserChannels();
+  let lastError = 'no browser channels were attempted';
+
+  for (const channel of channels) {
+    try {
+      return await launchBrowser(channel);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+
+      // A profile lock says nothing about this channel, so clear it and retry
+      // the same one rather than falling through to the next.
+      if (isProfileLockError(lastError)) {
+        log.warn('browser', 'Profile lock detected, attempting to clean up and retry...');
+
+        try {
+          if (fs.existsSync(SINGLETON_LOCK_PATH)) {
+            fs.unlinkSync(SINGLETON_LOCK_PATH);
+            log.info('browser', 'Removed SingletonLock file, retrying browser launch...');
+            return await launchBrowser(channel);
+          }
+        } catch (retryError) {
+          lastError = retryError instanceof Error ? retryError.message : String(retryError);
+          log.error('browser', `Retry after SingletonLock cleanup failed: ${lastError}`);
         }
-      } catch (cleanupError) {
-        log.error('browser', `Failed to clean up SingletonLock: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
       }
+
+      log.warn('browser', `Could not launch ${browserLabel(channel)}: ${lastError}`);
     }
-
-    const browserName = channel === 'msedge' ? 'Microsoft Edge' : 'Google Chrome';
-    const installHint = channel === 'msedge'
-      ? 'Edge should be pre-installed on Windows. Try updating Windows or reinstalling Edge.'
-      : 'Install Chrome from https://www.google.com/chrome/ or run: npx playwright install chromium';
-
-    throw new Error(
-      `Could not launch ${browserName}. ${installHint}\n\n` +
-      `Original error: ${errorMessage}`
-    );
   }
+
+  const tried = channels.map(browserLabel).join(', ');
+
+  throw new Error(
+    `Could not launch a browser for Teams login. Tried: ${tried}.\n\n` +
+    'Install Google Chrome (https://www.google.com/chrome/) or Microsoft Edge ' +
+    '(https://www.microsoft.com/edge), or run "npx playwright install chromium" ' +
+    'to use the bundled browser. Set TEAMS_BROWSER_CHANNEL=chrome or msedge to ' +
+    `force a specific one.\n\nLast error: ${lastError}`
+  );
 }
 
 /**

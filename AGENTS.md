@@ -117,7 +117,9 @@ A saved session holds only the tokens the browser itself had acquired, and Teams
 
 Microsoft redirects Teams users to new hosts without warning (`teams.cloud.microsoft`, then `teams.chat.microsoft.com`), so every host check reads one list: `TEAMS_HOSTS` in `constants.ts`. A host missing from it makes `getAuthStatus()` report an unknown page on a session that is in fact signed in, and manual login then hangs with the window open until the 5-minute timeout. Login detection treats a live MSAL token as the proof of sign-in: new Teams renders none of the `data-tid` elements earlier versions exposed, so waiting on the DOM never completes.
 
-The server uses the system browser via Playwright's `launchPersistentContext()` (Edge on Windows, Chrome on macOS/Linux; ~180MB saved vs bundled Chromium). Only one process can use the profile at a time (Chromium lock); the token-refresh module serializes refreshes to prevent concurrent access and session-state overwrites. If no system browser is found, the error suggests installing Chrome or running `npx playwright install chromium`.
+The server uses the system browser via Playwright's `launchPersistentContext()` (~180MB saved vs bundled Chromium). The user's default browser is irrelevant - login always runs in our own profile dir - so the only question is which Chromium build is on the machine. `browserChannels()` in `browser/context.ts` returns the channels to try in order: Edge first on Windows, Chrome first on macOS/Linux, then the other, then `undefined` (bundled Chromium). `createBrowserContext()` walks that list until one launches. The fallback covers both a missing browser and an installed one that cannot start (Chrome SIGTRAP-crashes on launch on some macOS machines). `TEAMS_BROWSER_CHANNEL=chrome|msedge` forces one channel and disables the fallback. Bundled Chromium must be last, not merely suggested in the error text: `channel` is passed on every launch, so a channel-only list makes `npx playwright install chromium` useless advice. Safari can never be a channel - Playwright cannot drive it, and token extraction assumes a Chromium profile.
+
+Only one process can use the profile at a time (Chromium lock); the token-refresh module serializes refreshes to prevent concurrent access and session-state overwrites. A profile lock is retried on the same channel rather than falling through, or a lock would silently demote the user to bundled Chromium.
 
 ### Token refresh
 
@@ -244,7 +246,7 @@ When a roadmap item is completed, remove it entirely from `ROADMAP.md` - do not 
 
 **Session/token expired**: call `teams_login` with `forceNew: true` (deletes the config directory and signs in from scratch), or `npm run cli -- login --force`.
 
-**Browser won't launch (login)**: ensure Chrome (macOS/Linux) or Edge (Windows) is installed; as a fallback run `npx playwright install chromium`; check for browser processes holding the profile lock.
+**Browser won't launch (login)**: the error lists every channel tried. Install Chrome or Edge, or run `npx playwright install chromium` for the bundled fallback; check for browser processes holding the profile lock. `TEAMS_BROWSER_CHANNEL=chrome|msedge` pins one channel. If switching channels leaves the shared profile unusable, delete `browser-profile/` and log in again.
 
 **Login timeout with MFA**: MCP clients have request timeouts (2-5 min). If SSO/MFA takes longer, the request times out but login continues in the background - completing MFA in the browser saves the session and later calls work. This is rare because headless SSO is tried first and a visible browser only opens when credentials are actually required.
 
