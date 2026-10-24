@@ -194,6 +194,17 @@ See [CLI Usage](#cli-usage) for commands, or run `msteams` for the command list.
 
 `teams_get_meetings` returns: subject, times, organiser, join URL, `threadId` for meeting chat. Use `threadId` with `teams_get_thread` to read meeting chat, or with `teams_get_transcript` to get the full transcript with speakers and timestamps.
 
+### Out of office
+
+
+| Tool                      | Description                                             |
+| ------------------------- | ------------------------------------------------------- |
+| `teams_get_out_of_office` | Get the out-of-office status and reply messages         |
+| `teams_set_out_of_office` | Turn out-of-office on, optionally until a time, or off  |
+
+
+Both tools read and write Outlook automatic replies through Microsoft Graph with the Teams client's own token. Teams shows the same setting as your out-of-office note.
+
 ### Files
 
 

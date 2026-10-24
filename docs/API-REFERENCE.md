@@ -32,7 +32,7 @@ Teams uses multiple authentication mechanisms depending on the API surface:
 | **Bearer (Spaces)** | `Authorization: Bearer {spacesToken}` | MSAL, `api.spaces.skype.com` audience | Calendar/Meetings |
 | **Skype Token** | `Authentication: skypetoken={token}` | Cookie `skypetoken_asm` | Messaging, Threads, Calendar |
 | **Bearer (Substrate + Prefer)** | `Authorization: Bearer {token}` + `Prefer` header | Same as Substrate search token | Transcripts (WorkingSetFiles) |
-| **Bearer (Graph)** | `Authorization: Bearer {token}` | MSAL, audience `https://graph.microsoft.com` (requested on demand) | File downloads (shared files, assignment attachments) |
+| **Bearer (Graph)** | `Authorization: Bearer {token}` | MSAL, audience `https://graph.microsoft.com` (requested on demand) | File downloads (shared files, assignment attachments), out-of-office |
 | **Bearer (Assignments)** | `Authorization: Bearer {token}` + `MS-Int-AppID: assignments-ui` | MSAL, audience `8f348934-64be-4bb2-bc16-c54c96789f43` (requested on demand) | EDU Assignments |
 
 ### Required Headers
@@ -1658,6 +1658,28 @@ GET /api/mt/part/{region}/v2.0/me/calendars/default/calendarView
   "emailAddress": "USER@COMPANY.COM"
 }
 ```
+
+---
+
+### Out of Office (Microsoft Graph)
+
+Teams shows the mailbox's Outlook automatic replies as the out-of-office note. The Delve endpoint above only reads it; `teams_get_out_of_office` and `teams_set_out_of_office` use Microsoft Graph with the Graph token from [Downloading a File](#downloading-a-file-microsoft-graph).
+
+```
+GET   https://graph.microsoft.com/v1.0/me/mailboxSettings
+PATCH https://graph.microsoft.com/v1.0/me/mailboxSettings
+Authorization: Bearer {graphToken}
+
+{ "automaticRepliesSetting": {
+    "status": "alwaysEnabled",          // "disabled" | "alwaysEnabled" | "scheduled"
+    "externalAudience": "all",          // "none" | "contactsOnly" | "all"
+    "internalReplyMessage": "...",
+    "externalReplyMessage": "...",
+    "scheduledStartDateTime": { "dateTime": "2026-10-24T15:00:00", "timeZone": "UTC" },
+    "scheduledEndDateTime":   { "dateTime": "2026-10-25T15:00:00", "timeZone": "UTC" } } }
+```
+
+`teams_set_out_of_office` with `until` sends `scheduled` from now until that time; without it, `alwaysEnabled`. The scheduled window is only meaningful when `status` is `scheduled`. Verified live: the Teams client's Graph token reads mailbox settings without a separate sign-in.
 
 ---
 

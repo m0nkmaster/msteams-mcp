@@ -110,7 +110,7 @@ export function requireAssignmentsTokenAsync(): Promise<Result<string, McpError>
   return assignmentsGuard.require();
 }
 
-/** Require a Microsoft Graph token (optional; used for file downloads). */
+/** Require a Microsoft Graph token (optional; used for file downloads and out-of-office). */
 export function requireGraphTokenAsync(): Promise<Result<string, McpError>> {
   return graphGuard.require();
 }
