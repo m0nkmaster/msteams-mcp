@@ -27,6 +27,7 @@ import { toolCategories } from './tools/registry.js';
 import { UsageError, parseToolArgs, resolveToolName, shortName } from './cli/resolve.js';
 import { printFailure, printResponse } from './cli/render.js';
 import { renderIndex, renderToolHelp } from './cli/help.js';
+import { exitAfterFlush } from './cli/exit.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -122,12 +123,12 @@ async function run(argv: string[]): Promise<number> {
 }
 
 run(process.argv.slice(2))
-  .then(code => process.exit(code))
+  .then(exitAfterFlush)
   .catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(message);
     if (!(error instanceof UsageError) && error instanceof Error && process.env.LOG_LEVEL === 'debug') {
       console.error(error.stack);
     }
-    process.exit(error instanceof UsageError ? 2 : 1);
+    exitAfterFlush(error instanceof UsageError ? 2 : 1);
   });
