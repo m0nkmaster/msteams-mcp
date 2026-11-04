@@ -17,11 +17,15 @@ import {
 // Local schema definitions to avoid circular imports through registry
 // These MUST match the actual schemas in search-tools.ts and message-tools.ts
 const GetThreadInputSchema = z.object({
-  conversationId: z.string().min(1, 'Conversation ID cannot be empty'),
+  conversationId: z.string().min(1, 'Conversation ID cannot be empty').optional(),
+  fromUrl: z.string().min(1).optional(),
+  threadRootId: z.string().optional(),
   limit: z.number().min(1).max(MAX_THREAD_LIMIT).optional().default(DEFAULT_THREAD_LIMIT),
   markRead: z.boolean().optional().default(false),
   order: z.enum(['asc', 'desc']).optional().default('desc'),
   since: z.string().optional(),
+}).refine(d => d.conversationId || d.fromUrl, {
+  message: 'Provide either conversationId or fromUrl',
 });
 
 const GetActivityInputSchema = z.object({
@@ -65,6 +69,18 @@ describe('GetThreadInputSchema', () => {
 
   it('rejects empty conversationId', () => {
     expect(() => GetThreadInputSchema.parse({ conversationId: '' })).toThrow();
+  });
+
+  it('accepts fromUrl instead of conversationId', () => {
+    const result = GetThreadInputSchema.parse({
+      fromUrl: 'https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/170',
+    });
+    expect(result.fromUrl).toContain('/l/message/');
+    expect(result.conversationId).toBeUndefined();
+  });
+
+  it('rejects when neither conversationId nor fromUrl is provided', () => {
+    expect(() => GetThreadInputSchema.parse({ limit: 10 })).toThrow();
   });
 
   it('rejects limit exceeding max', () => {

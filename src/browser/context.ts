@@ -17,7 +17,7 @@ import { chromium, type BrowserContext, type Page } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  ensureUserDataDir,
+  ensureConfigDir,
   CONFIG_DIR,
   writeSessionState,
 } from '../auth/session-store.js';
@@ -25,24 +25,9 @@ import { clearRegionCache } from '../utils/auth-guards.js';
 import * as log from '../utils/logger.js';
 
 export interface BrowserManager {
-  /** Always null — persistent contexts have no separate Browser object. */
-  browser: null;
   context: BrowserContext;
   page: Page;
-  isNewSession: boolean;
-  /** Always true — all contexts use the persistent browser profile. */
-  persistent: true;
 }
-
-export interface CreateBrowserOptions {
-  headless?: boolean;
-  viewport?: { width: number; height: number };
-}
-
-const DEFAULT_OPTIONS: Required<CreateBrowserOptions> = {
-  headless: true,
-  viewport: { width: 1280, height: 800 },
-};
 
 /**
  * Directory for the persistent browser profile.
@@ -155,16 +140,14 @@ function getBrowserChannel(): 'msedge' | 'chrome' {
  * The MCP server serialises tool calls, and token-refresh checks for an active
  * browser before attempting refresh to avoid lock contention.
  *
- * @param options - Browser configuration options
+ * @param options.headless - Run without a visible window (default: true)
  * @returns Browser manager with context and page
  * @throws Error if system browser is not found (with helpful suggestions)
  */
 export async function createBrowserContext(
-  options: CreateBrowserOptions = {}
+  { headless = true }: { headless?: boolean } = {}
 ): Promise<BrowserManager> {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
-
-  ensureUserDataDir();
+  ensureConfigDir();
 
   const channel = getBrowserChannel();
 
@@ -173,22 +156,16 @@ export async function createBrowserContext(
 
   const launchBrowser = async (): Promise<BrowserManager> => {
     const context = await chromium.launchPersistentContext(BROWSER_PROFILE_DIR, {
-      headless: opts.headless,
+      headless,
       channel,
-      viewport: opts.viewport,
+      viewport: { width: 1280, height: 800 },
       acceptDownloads: false,
     });
 
     // Persistent contexts start with one page; use it or create one
     const page = context.pages()[0] ?? await context.newPage();
 
-    return {
-      browser: null,
-      context,
-      page,
-      isNewSession: true,
-      persistent: true,
-    };
+    return { context, page };
   };
 
   try {

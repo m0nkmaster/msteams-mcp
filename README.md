@@ -1,32 +1,39 @@
-# Teams MCP Server
+# Microsoft Teams MCP Server & CLI
 
 [![CI](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/m0nkmaster/msteams-mcp/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/msteams-mcp.svg)](https://www.npmjs.com/package/msteams-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
 
-An MCP (Model Context Protocol) server that enables AI assistants to interact with Microsoft Teams. Search messages, send replies, manage favourites, and more.
+Give AI access to Microsoft Teams easily with your standard Teams login. 
 
-## How It Works
+> ### No Azure setup, app registration, Graph permissions or IT support required.
+Search messages and email, catch up on unread chats, read threads, send replies, retrieve meeting transcripts and more.
 
-This server calls Microsoft's Teams APIs directly (Substrate, chatsvc, CSA)  - the same APIs the Teams web app uses. No Azure AD app registration or admin consent required.
 
-**Authentication flow:**
-1. AI runs `teams_login` to open a browser for you to log in
-2. OAuth tokens are extracted and cached
-3. All operations use cached tokens directly (no browser needed)
-4. Automatic token refresh (~1 hour)
+## Why msteams-mcp?
 
-**Security:** Uses the same authentication as the Teams web client - your access is limited to what your account can already do.
+- **Do real work** - search, unread chats, threads, replies, people, channels, meetings, transcripts, files, reactions, and assignments on education tenants.
+- **Sign in once** - tokens refresh automatically and the browser stays out of routine operations.
+- **Secure** - the assistant has only your existing Teams permissions, with encrypted session data stored locally.
+- **Use it anywhere** - every capability works through both MCP clients and the included `msteams` CLI.
 
-## Installation
+
+
+## Quick start
+
+
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - A Microsoft account with Teams access
 - Google Chrome, Microsoft Edge, or Chromium browser installed
 
-### Configure Your MCP Client
+
+
+### Configure your MCP client
 
 Add to your MCP client configuration (e.g., Claude Desktop, Windsurf, Cursor):
 
@@ -41,7 +48,18 @@ Add to your MCP client configuration (e.g., Claude Desktop, Windsurf, Cursor):
 }
 ```
 
-That's it. `npx` will automatically download and run the latest version.
+That is it. `npx` downloads and runs the latest version. Ask your assistant to call `teams_login` once, complete the normal Microsoft sign-in in the browser, and then start using Teams.
+
+## How it works
+
+This server calls Microsoft's Teams services directly (Substrate, chatsvc, CSA), using the authenticated session created by the Teams web app.
+
+1. `teams_login` opens a browser for your normal Microsoft sign-in.
+2. The resulting OAuth tokens and session data are encrypted and cached locally.
+3. Routine operations use those tokens directly, without browser automation.
+4. Expiring tokens are refreshed automatically over HTTP, with headless browser SSO as a fallback.
+
+Your access remains limited to what your Teams account can already see and do.
 
 ### From Source (alternative)
 
@@ -68,84 +86,151 @@ Then configure your MCP client:
 
 The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authentication.
 
+### CLI
+
+The same functionality is also available as a standalone command-line tool, `msteams`. This is useful when you want Teams from a shell or script instead of an MCP client.
+
+Install it globally from npm:
+
+```bash
+npm install -g msteams-mcp
+```
+
+This installs two binaries: `msteams-mcp` (the MCP server) and `msteams` (the CLI wrapper). Or run it without installing:
+
+```bash
+npx -y msteams-mcp msteams status
+```
+
+See [CLI Usage](#cli-usage) for commands, or run `msteams` for the command list.
+
 ## Available Tools
+
+
 
 ### Search & Discovery
 
-| Tool | Description |
-|------|-------------|
-| `teams_search` | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.) |
-| `teams_search_email` | Search emails in your mailbox (same auth as Teams — no extra login) |
-| `teams_get_message` | Get a single message by ID with full content (any age) |
-| `teams_get_thread` | Get messages from a conversation/thread |
-| `teams_find_channel` | Find channels by name (your teams + org-wide discovery) |
-| `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications) |
+
+| Tool                 | Description                                                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `teams_search`       | Search Teams messages with operators (`from:`, `sent:`, `in:`, `hasattachment:`, etc.)                                                                |
+| `teams_search_email` | Search emails in your mailbox (same auth as Teams - no extra login)                                                                                   |
+| `teams_list_chats`   | List recent conversations (1:1, group, meeting, channel) with a last-message preview                                                                  |
+| `teams_get_message`  | Get a single message by ID with full content (any age); includes reactions                                                                            |
+| `teams_get_thread`   | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread; `fromUrl` accepts a Teams message deep link; `cursor` pages back through older history |
+| `teams_find_channel` | Find channels by name (your teams + org-wide discovery)                                                                                               |
+| `teams_get_tags`     | List a team's channel tags for tag @mentions                                                                                                          |
+| `teams_get_activity` | Get activity feed (mentions, reactions, replies, notifications)                                                                                       |
+
+
+
 
 ### Messaging
 
-| Tool | Description |
-|------|-------------|
-| `teams_send_message` | Send a message (default: self-chat/notes). Use `replyToMessageId` for thread replies |
-| `teams_edit_message` | Edit one of your own messages |
-| `teams_delete_message` | Delete one of your own messages (soft delete) |
+
+| Tool                   | Description                                                                                                                                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `teams_send_message`   | Send a message (default: self-chat/notes). `replyToMessageId` for thread replies, `subject` for a new channel thread, `scheduleAt` to schedule, `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
+| `teams_wait_for_reply` | Block until a new message arrives (server-side poll, capped ~110s); idempotent `after`/`nextAfter` cursor - pair with `teams_send_message`                                                                            |
+| `teams_edit_message`   | Edit one of your own messages (`contentType` supported)                                                                                                                                                               |
+| `teams_delete_message` | Delete one of your own messages (soft delete)                                                                                                                                                                         |
+
+
+
 
 ### People & Contacts
 
-| Tool | Description |
-|------|-------------|
-| `teams_get_me` | Get current user profile (email, name, ID) |
-| `teams_search_people` | Search for people by name or email |
-| `teams_get_frequent_contacts` | Get frequently contacted people (useful for name resolution) |
-| `teams_get_chat` | Get conversation ID for 1:1 chat with a person |
-| `teams_create_group_chat` | Create a new group chat with multiple people (2+ others) |
+
+| Tool                          | Description                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------ |
+| `teams_get_me`                | Get current user profile (email, name, ID)                                     |
+| `teams_search_people`         | Search for people by name or email                                             |
+| `teams_get_frequent_contacts` | Get frequently contacted people (useful for name resolution)                   |
+| `teams_get_person`            | Resolve one or more MRIs to full profiles (name, email, job title, department) |
+| `teams_get_chat`              | Get conversation ID for 1:1 chat with a person                                 |
+| `teams_create_group_chat`     | Create a new group chat with multiple people (2+ others)                       |
+
+
+
 
 ### Organisation
 
-| Tool | Description |
-|------|-------------|
-| `teams_get_favorites` | Get pinned/favourite conversations |
-| `teams_add_favorite` | Pin a conversation |
-| `teams_remove_favorite` | Unpin a conversation |
-| `teams_save_message` | Bookmark a message |
-| `teams_unsave_message` | Remove bookmark from a message |
-| `teams_get_saved_messages` | Get list of saved/bookmarked messages with source references |
-| `teams_get_followed_threads` | Get list of followed threads with source references |
-| `teams_get_unread` | Get unread counts (aggregate or per-conversation) |
-| `teams_mark_read` | Mark a conversation as read up to a message |
+
+| Tool                         | Description                                                  |
+| ---------------------------- | ------------------------------------------------------------ |
+| `teams_get_favorites`        | Get pinned/favourite conversations                           |
+| `teams_add_favorite`         | Pin a conversation                                           |
+| `teams_remove_favorite`      | Unpin a conversation                                         |
+| `teams_save_message`         | Bookmark a message                                           |
+| `teams_unsave_message`       | Remove bookmark from a message                               |
+| `teams_get_saved_messages`   | Get list of saved/bookmarked messages with source references |
+| `teams_get_followed_threads` | Get list of followed threads with source references          |
+| `teams_get_unread`           | Get unread counts (aggregate or per-conversation)            |
+| `teams_mark_read`            | Mark a conversation as read up to a message                  |
+
+
+
 
 ### Reactions
 
-| Tool | Description |
-|------|-------------|
-| `teams_search_emoji` | Search for emojis by name (standard + custom org emojis) |
-| `teams_add_reaction` | Add an emoji reaction to a message |
-| `teams_remove_reaction` | Remove an emoji reaction from a message |
+
+| Tool                    | Description                                              |
+| ----------------------- | -------------------------------------------------------- |
+| `teams_search_emoji`    | Search for emojis by name (standard + custom org emojis) |
+| `teams_add_reaction`    | Add an emoji reaction to a message                       |
+| `teams_remove_reaction` | Remove an emoji reaction from a message                  |
+
 
 **Quick reactions:** `like`, `heart`, `laugh`, `surprised`, `sad`, `angry` can be used directly without searching.
 
 ### Calendar & Meetings
 
-| Tool | Description |
-|------|-------------|
-| `teams_get_meetings` | Get meetings from calendar (defaults to next 7 days) |
+
+| Tool                   | Description                                                            |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `teams_get_meetings`   | Get meetings from calendar (defaults to next 7 days)                   |
 | `teams_get_transcript` | Get meeting transcript (requires `threadId` from `teams_get_meetings`) |
+
 
 `teams_get_meetings` returns: subject, times, organiser, join URL, `threadId` for meeting chat. Use `threadId` with `teams_get_thread` to read meeting chat, or with `teams_get_transcript` to get the full transcript with speakers and timestamps.
 
 ### Files
 
-| Tool | Description |
-|------|-------------|
-| `teams_get_shared_files` | Get files and links shared in a conversation (supports pagination) |
 
-Returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
+| Tool                     | Description                                                        |
+| ------------------------ | ------------------------------------------------------------------ |
+| `teams_get_shared_files` | Get files and links shared in a conversation (supports pagination) |
+| `teams_download_file`    | Download a shared file or assignment attachment to a local path    |
+
+
+`teams_get_shared_files` returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
+
+`teams_download_file` takes a file's `webUrl` from `teams_get_shared_files`, or an attachment's `fileUrl` from `teams_get_assignment`. It downloads through Microsoft Graph using the Teams client's own access, so no extra sign-in is needed. Files stream straight to disk, never overwrite an existing file, and are removed if the download fails part-way. Links and Microsoft Forms aren't files and can't be downloaded.
+
+### Assignments (education tenants only)
+
+
+| Tool                      | Description                                                                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `teams_list_assignments`  | List your assignments across classes (`active`, `completed` or `all`), with due dates, grades and your submission state |
+| `teams_get_assignment`    | Get one assignment's full detail, including instructions, attachments and your submission (with your own copies of files) |
+| `teams_submission_action` | Turn in, undo turn-in, or mark viewed on your own submission                                   |
+
+
+Assignments is optional. It only works on education tenants that use Teams Assignments, and its token is requested separately, on demand, so other accounts pay no extra cost. If Assignments isn't available, or its authorisation fails, only these tools return an error: the rest of Teams keeps working, and no browser or re-login is triggered.
+
+Download attachments (Word, PowerPoint and other files) with `teams_download_file`. Microsoft Forms quizzes and links are returned as URLs instead.
 
 ### Session
 
-| Tool | Description |
-|------|-------------|
-| `teams_login` | Trigger manual login (opens browser) |
+
+| Tool           | Description                            |
+| -------------- | -------------------------------------- |
+| `teams_login`  | Trigger manual login (opens browser)   |
 | `teams_status` | Check authentication and session state |
+
+
+
 
 ### Search Operators
 
@@ -171,54 +256,77 @@ Combine operators: `from:sarah@co.com sent:>=2026-01-18 hasattachment:true`
 
 The server also exposes passive resources for context discovery:
 
-| Resource URI | Description |
-|--------------|-------------|
-| `teams://me/profile` | Current user's profile |
-| `teams://me/favorites` | Pinned conversations |
-| `teams://status` | Authentication status |
 
-## CLI Tools (Development)
+| Resource URI           | Description            |
+| ---------------------- | ---------------------- |
+| `teams://me/profile`   | Current user's profile |
+| `teams://me/favorites` | Pinned conversations   |
+| `teams://status`       | Authentication status  |
 
-For local development, CLI tools are available for testing and debugging:
+
+
+
+## CLI Usage
+
+`msteams` exposes every tool the MCP server does - full parity, same authentication, same session files. Commands, flags and help are generated from the tool definitions, so the CLI never lags behind the server.
+
+If you installed globally (`npm install -g msteams-mcp`), invoke it directly:
 
 ```bash
+# The command list, one line each
+msteams
+msteams --version
+
+# What one command does, and all of its flags
+msteams help send_message
+msteams search --help
+
 # Check authentication status
-npm run cli -- status
+msteams status
+
+# Log in (opens a browser; tries silent SSO first)
+msteams login
+msteams login --force        # clear session and re-login
 
 # Search messages
-npm run cli -- search "meeting notes"
-npm run cli -- search "project" --from 0 --size 50
+msteams search "meeting notes"
+msteams search "project" --from 0 --size 50
 
 # Search emails
-npm run cli -- teams_search_email --query "from:sarah@company.com"
+msteams email "from:sarah@company.com"
 
-# Send messages (default: your own notes/self-chat)
-npm run cli -- send "Hello from Teams MCP!"
-npm run cli -- send "Message" --to "conversation-id"
+# Send a message (default: your own self-chat, 48:notes)
+msteams send "Hello from Teams MCP!"
+msteams send "Message" --to "conversation-id"
 
-# Force login
-npm run cli -- login --force
+# People, contacts, favourites, activity, unread
+msteams people "john smith"
+msteams favorites
+msteams activity
+msteams unread
 
-# Output as JSON
-npm run cli -- search "query" --json
+# Machine-readable output, on stdout, for scripts
+msteams search "query" --json | jq '.results[0].conversationId'
 ```
 
-### MCP Test Harness
+**Command form:** `msteams <command> [value] [--flag value]`.
 
-Test the server through the actual MCP protocol:
+- **Commands** are the tool names without the `teams_`/`get_` prefix (`search`, `send_message`, `thread`, `meetings`). Any unambiguous abbreviation works, so `send` reaches `send_message`; the full tool name always works too.
+- **Flags** are the tool's own parameters, in camelCase (`--conversationId`, `--threadRootId`, `--fromUrl`). A few short aliases exist where they read better: `--to`, `--msg`, `--reply`, `--user`, `--force`. Booleans work bare (`--markRead`) or with a value (`--markRead false`). Unknown flags are rejected with the list of valid ones.
+- **The first bare value** goes to the command's main parameter: `msteams search "query"` is `--query "query"`.
+- **Output** goes to stdout, diagnostics to stderr, so pipes and redirects behave. Colour and emoji appear only on a terminal, and `NO_COLOR` turns them off.
+- **Exit codes:** `0` success, `1` the tool failed, `2` the command was malformed.
+- **`--json`** prints the tool's JSON payload, ready for `jq`.
+
+### From a repo clone
+
+If you're working from source, the same CLI is wired to `npm run cli` (runs via `tsx`, no build needed):
 
 ```bash
-# List available tools
-npm run cli
-
-# Call any tool
+npm run cli                          # command list
 npm run cli -- search "your query"
 npm run cli -- status
-npm run cli -- people "john smith"
-npm run cli -- favorites
-npm run cli -- activity              # Get activity feed
-npm run cli -- unread                # Check unread counts
-npm run cli -- teams_search_emoji --query "heart"  # Search emojis
+npm run cli -- send "Hi" --to "conversation-id"
 ```
 
 ## Limitations
@@ -226,8 +334,10 @@ npm run cli -- teams_search_emoji --query "heart"  # Search emojis
 - **Login required** - Run `teams_login` to authenticate (opens browser)
 - **Token expiry** - Tokens expire after ~1 hour; headless refresh is attempted or run `teams_login` again when needed
 - **Undocumented APIs** - Uses Microsoft's internal APIs which may change without notice
-- **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (use `teams_get_thread` for full context)
-- **Own messages only** - Edit/delete only works on your own messages
+- **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (but LLM will likely use `teams_get_thread` for full context)
+- **Assignments** - Education tenants only. Turn-in and undo turn-in act on your real account; handing in again records a new hand-in date that your teacher sees
+
+
 
 ## Session Files
 
@@ -257,7 +367,6 @@ Development commands:
 npm run dev          # Run MCP server in dev mode
 npm run build        # Compile TypeScript
 npm run lint         # Run ESLint
-npm run research     # Explore Teams APIs (logs network calls)
 npm test             # Run unit tests
 npm run typecheck    # TypeScript type checking
 ```
@@ -279,6 +388,3 @@ See [AGENTS.md](AGENTS.md) for detailed architecture and contribution guidelines
 
 ---
 
-## Teams Chat Export Bookmarklet
-
-This repo also includes a standalone bookmarklet for exporting Teams chat messages to Markdown. See [teams-bookmarklet/README.md](teams-bookmarklet/README.md).

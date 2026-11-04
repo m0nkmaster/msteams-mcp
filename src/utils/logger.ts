@@ -2,6 +2,8 @@
  * Lightweight logger for consistent log output.
  * 
  * All production logging goes through this module so that:
+ * - Everything goes to stderr: stdout is the MCP stdio protocol channel, and
+ *   the CLI's data output
  * - Output is consistently prefixed with `[module]` context
  * - Log levels can be controlled via LOG_LEVEL environment variable
  * - Future structured logging can be added in one place
@@ -53,13 +55,13 @@ export function warn(context: string, message: string): void {
 /** Log an informational message. */
 export function info(context: string, message: string): void {
   if (shouldLog('info')) {
-    console.log(`[${context}] ${message}`);
+    console.error(`[${context}] ${message}`);
   }
 }
 
 /** Log a debug message. Only shown when LOG_LEVEL=debug. */
 export function debug(context: string, message: string): void {
   if (shouldLog('debug')) {
-    console.debug(`[${context}] ${message}`);
+    console.error(`[${context}] ${message}`);
   }
 }

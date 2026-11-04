@@ -19,6 +19,16 @@ export const DEFAULT_TEAMS_BASE_URL = 'https://teams.microsoft.com';
 /** Default Substrate base URL (commercial cloud). */
 export const DEFAULT_SUBSTRATE_BASE_URL = 'https://substrate.office.com';
 
+/**
+ * EDU Assignments API base URL.
+ *
+ * The Teams Assignments tab is an embedded web app served from this host; its
+ * data is backed by OneNote EDU. Hardcoded like the Substrate URL — no session
+ * config source has been found for it. May need to become configurable if
+ * government-cloud (GCC/GCC-High/DoD) users report issues.
+ */
+export const DEFAULT_ASSIGNMENTS_BASE_URL = 'https://assignments.edu.cloud.microsoft';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Substrate API
 // ─────────────────────────────────────────────────────────────────────────────
@@ -115,6 +125,10 @@ export const CHATSVC_API = {
   /** List all recent conversations with inline properties. */
   conversations: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=200`,
+
+  /** Create a scheduled draft (future-dated message). */
+  drafts: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/api/chatsvc/${region}/v1/users/ME/drafts`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,6 +156,24 @@ export const CALENDAR_API = {
     hasPartition
       ? `${baseUrl}/api/mt/part/${regionPartition}/v2.1/me/calendars/calendarView`
       : `${baseUrl}/api/mt/${regionPartition}/v2.1/me/calendars/calendarView`,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MiddleTier (MT) API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * MiddleTier API endpoints (mt/part pattern).
+ *
+ * Uses the same partitioned region pattern as Calendar and Tags APIs.
+ * The correct URL format is extracted from DISCOVER-REGION-GTM in session config.
+ */
+export const MT_API = {
+  /** Batch resolve MRIs to user profiles (fetchShortProfile). */
+  fetchShortProfile: (regionPartition: string, hasPartition: boolean, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    hasPartition
+      ? `${baseUrl}/api/mt/part/${regionPartition}/beta/users/fetchShortProfile?isMailAddress=false&enableGuest=true&skypeTeamsInfo=true`
+      : `${baseUrl}/api/mt/${regionPartition}/beta/users/fetchShortProfile?isMailAddress=false&enableGuest=true&skypeTeamsInfo=true`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,6 +213,48 @@ export const CSA_API = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// EDU Assignments API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * EDU Assignments API endpoint builders (assignments.edu.cloud.microsoft).
+ *
+ * Not region-partitioned — a single global host. The API is OData v4 and mirrors
+ * the Microsoft Graph `education` data model. Paths verified against a captured
+ * Teams web session; submission actions (submit/unsubmit) follow Graph education
+ * parity and share the assignment/submission path shape confirmed in the capture.
+ */
+export const ASSIGNMENTS_API = {
+  /** All of the signed-in user's assignments across classes (student "work" view). */
+  myWork: (baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/me/work`,
+
+  /** A single assignment's full detail within a class. */
+  assignment: (classId: string, assignmentId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}`,
+
+  /** Submissions visible to the caller (a student sees only their own). */
+  submissions: (classId: string, assignmentId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions`,
+
+  /** Read one submission to verify an action. */
+  submission: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}`,
+
+  /** Mark a submission as viewed by the student (PATCH). */
+  submissionView: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/view`,
+
+  /** Turn in (submit) a submission (POST). */
+  submissionSubmit: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/submit`,
+
+  /** Undo turn-in (unsubmit) a submission (POST). */
+  submissionUnsubmit: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
+    `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/unsubmit`,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Request Headers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -199,6 +273,21 @@ export function getBearerHeaders(token: string, baseUrl = DEFAULT_TEAMS_BASE_URL
   return {
     ...getTeamsHeaders(baseUrl),
     'Authorization': `Bearer ${token}`,
+  };
+}
+
+/**
+ * Headers for the EDU Assignments API.
+ *
+ * Bearer token plus the `MS-Int-AppID: assignments-ui` header the service
+ * expects from the Assignments web client.
+ */
+export function getAssignmentsHeaders(token: string): Record<string, string> {
+  return {
+    'Authorization': `Bearer ${token}`,
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'MS-Int-AppID': 'assignments-ui',
   };
 }
 

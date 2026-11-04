@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { encrypt, decrypt, isEncrypted, type EncryptedData } from './crypto.js';
+import { encrypt, decrypt, type EncryptedData } from './crypto.js';
 
 describe('encrypt/decrypt round-trip', () => {
   it('encrypts and decrypts a simple string', () => {
@@ -40,26 +40,6 @@ describe('encrypt/decrypt round-trip', () => {
     // IVs should differ, so ciphertext differs
     expect(encrypted1.iv).not.toBe(encrypted2.iv);
     expect(encrypted1.content).not.toBe(encrypted2.content);
-  });
-});
-
-describe('isEncrypted', () => {
-  it('returns true for encrypted data structure', () => {
-    const encrypted = encrypt('test');
-    expect(isEncrypted(encrypted)).toBe(true);
-  });
-
-  it('returns false for plain objects', () => {
-    expect(isEncrypted({})).toBe(false);
-    expect(isEncrypted({ content: 'abc' })).toBe(false);
-    expect(isEncrypted({ iv: 'abc' })).toBe(false);
-    expect(isEncrypted(null)).toBe(false);
-    expect(isEncrypted(undefined)).toBe(false);
-    expect(isEncrypted('string')).toBe(false);
-  });
-
-  it('returns true for object with all required fields', () => {
-    expect(isEncrypted({ content: 'x', iv: 'y', tag: 'z', version: 1 })).toBe(true);
   });
 });
 

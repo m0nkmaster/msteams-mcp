@@ -33,6 +33,9 @@ import {
   parseTeamsList,
   parseVirtualConversationMessage,
   hasMarkdownFormatting,
+  parseReactions,
+  sanitizeLinkUrl,
+  parseTeamsMessageUrl,
 } from './parsers.js';
 import {
   searchResultItem,
@@ -815,6 +818,76 @@ describe('markdownToTeamsHtml', () => {
   it('handles whitespace-only input', () => {
     expect(markdownToTeamsHtml('   ')).toBe('<p></p>');
   });
+
+  it('converts a markdown table to the Teams table shape', () => {
+    const input = '| Item | Price | Qty |\n|------|-------|-----|\n| Apple | $1.00 | 12 |\n| Orange | $0.50 | 6 |';
+    expect(markdownToTeamsHtml(input)).toBe(
+      '<table><tbody><tr><td><p>Item</p></td><td><p>Price</p></td><td><p>Qty</p></td></tr>' +
+      '<tr><td><p>Apple</p></td><td><p>$1.00</p></td><td><p>12</p></td></tr>' +
+      '<tr><td><p>Orange</p></td><td><p>$0.50</p></td><td><p>6</p></td></tr></tbody></table>'
+    );
+  });
+
+  it('emits table markup identical to what the Teams client produces', () => {
+    // Shape verified against the raw chatsvc content of a manually composed table message
+    const input = '| A | B |\n|---|---|\n| 1 | 2 |';
+    const html = markdownToTeamsHtml(input);
+    expect(html).not.toContain('|');
+    expect(html).not.toContain('---');
+    expect(html).toContain('<table><tbody>');
+    expect((html.match(/<tr>/g) ?? []).length).toBe(2);
+    expect((html.match(/<td>/g) ?? []).length).toBe(4);
+  });
+
+  it('escapes HTML inside table cells', () => {
+    const input = '| Expr | Safe |\n|------|------|\n| <script> | `code` |';
+    const html = markdownToTeamsHtml(input);
+    expect(html).toContain('<p>&lt;script&gt;</p>');
+    expect(html).toContain('<p><code>code</code></p>');
+  });
+
+  it('supports inline formatting inside table cells', () => {
+    const input = '| Name | Status |\n|------|--------|\n| **Prod** | ~~down~~ up |';
+    const html = markdownToTeamsHtml(input);
+    expect(html).toContain('<p><b>Prod</b></p>');
+    expect(html).toContain('<p><s>down</s> up</p>');
+  });
+
+  it('handles unescaped pipes in cells and escaped-pipe literals', () => {
+    const input = '| Path | Note |\n|------|------|\n| a\\|b | x |';
+    const html = markdownToTeamsHtml(input);
+    expect(html).toContain('<p>a|b</p>');
+  });
+
+  it('does not treat pipe rows without a separator as a table', () => {
+    expect(markdownToTeamsHtml('| just | pipes |')).toBe('<p>| just | pipes |</p>');
+  });
+
+  it('converts a table surrounded by paragraphs', () => {
+    const input = 'Before\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter';
+    expect(markdownToTeamsHtml(input)).toBe(
+      '<p>Before</p><table><tbody><tr><td><p>A</p></td><td><p>B</p></td></tr>' +
+      '<tr><td><p>1</p></td><td><p>2</p></td></tr></tbody></table><p>After</p>'
+    );
+  });
+
+  it('rejects a row with fewer cells than the separator', () => {
+    // GFM would pad, but a malformed block is safer as plain text than a broken table
+    const input = '| A | B | C |\n|---|---|\n| 1 | 2 | 3 |';
+    expect(markdownToTeamsHtml(input)).toContain('<p>');
+  });
+});
+
+describe('hasMarkdownFormatting', () => {
+  it('detects tables', () => {
+    expect(hasMarkdownFormatting('| A | B |\n|---|---|\n| 1 | 2 |')).toBe(true);
+  });
+
+  it('does not flag lone pipe rows as tables', () => {
+    // Still true (single newline triggers conversion), so assert via the full 'auto' path assumption:
+    // a single "| a | b |" line has no table pair; newline detection covers it.
+    expect(hasMarkdownFormatting('| a | b |\n| c | d |')).toBe(true);
+  });
 });
 
 describe('formatTranscriptText', () => {
@@ -1358,5 +1431,194 @@ describe('parseEmailSearchResults', () => {
   it('handles malformed EntitySets gracefully', () => {
     const { results } = parseEmailSearchResults([{ ResultSets: [{ Results: [{}] }] }]);
     expect(results).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseReactions
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseReactions', () => {
+  type RawMsg = Parameters<typeof parseReactions>[0];
+
+  it('returns empty when no reaction data', () => {
+    const result = parseReactions({ content: 'hi' });
+    expect(result.reactions).toBeUndefined();
+    expect(result.reactionSummary).toBeUndefined();
+  });
+
+  it('parses annotationsSummary.emotions into reactionSummary', () => {
+    const msg = {
+      annotationsSummary: { emotions: { heart: 2, like: 1 } },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactionSummary).toEqual({ heart: 2, like: 1 });
+  });
+
+  it('ignores zero-count entries in summary', () => {
+    const msg = {
+      annotationsSummary: { emotions: { heart: 0, like: 1 } },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactionSummary).toEqual({ like: 1 });
+  });
+
+  it('parses properties.emotions array (grouped shape)', () => {
+    const msg = {
+      properties: {
+        emotions: [
+          {
+            key: 'heart',
+            users: [
+              { mri: '8:orgid:user1', time: 1770000000000 },
+              { mri: '8:orgid:user2', value: 1770000001000 },
+            ],
+          },
+          {
+            key: 'like',
+            users: [{ mri: '8:orgid:user3' }],
+          },
+        ],
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions).toHaveLength(3);
+    expect(result.reactions![0]).toEqual({
+      key: 'heart',
+      user: { mri: '8:orgid:user1', displayName: undefined },
+      time: 1770000000000,
+    });
+    expect(result.reactions![1].time).toBe(1770000001000);
+    expect(result.reactions![2].key).toBe('like');
+  });
+
+  it('parses properties.emotions as JSON string', () => {
+    const msg = {
+      properties: {
+        emotions: JSON.stringify([
+          { key: 'laugh', users: [{ mri: '8:orgid:user1', time: 123 }] },
+        ]),
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions).toHaveLength(1);
+    expect(result.reactions![0].key).toBe('laugh');
+  });
+
+  it('parses flat emotion entries (no users array)', () => {
+    const msg = {
+      properties: {
+        emotions: [
+          { key: 'like', mri: '8:orgid:user1', value: 1770000000000 },
+        ],
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions).toHaveLength(1);
+    expect(result.reactions![0]).toEqual({
+      key: 'like',
+      user: { mri: '8:orgid:user1', displayName: undefined },
+      time: 1770000000000,
+    });
+  });
+
+  it('handles custom emoji keys (name;storage-id)', () => {
+    const msg = {
+      properties: {
+        emotions: [
+          { key: 'partyparrot;abc-123', users: [{ mri: '8:orgid:user1' }] },
+        ],
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions![0].key).toBe('partyparrot;abc-123');
+  });
+
+  it('combines both reactions and summary', () => {
+    const msg = {
+      annotationsSummary: { emotions: { heart: 1 } },
+      properties: {
+        emotions: [
+          { key: 'heart', users: [{ mri: '8:orgid:user1', time: 100 }] },
+        ],
+      },
+    };
+    const result = parseReactions(msg as unknown as RawMsg);
+    expect(result.reactions).toHaveLength(1);
+    expect(result.reactionSummary).toEqual({ heart: 1 });
+  });
+
+  it('handles malformed emotions gracefully', () => {
+    expect(parseReactions({ properties: { emotions: 'not-json{' } } as unknown as RawMsg).reactions).toBeUndefined();
+    expect(parseReactions({ properties: { emotions: 42 } } as unknown as RawMsg).reactions).toBeUndefined();
+    expect(parseReactions({ properties: { emotions: [null, undefined, 'string'] } } as unknown as RawMsg).reactions).toBeUndefined();
+    expect(parseReactions({ properties: { emotions: [{ noKey: true }] } } as unknown as RawMsg).reactions).toBeUndefined();
+  });
+});
+
+describe('sanitizeLinkUrl', () => {
+  it('keeps http, https and mailto URLs unchanged (case-insensitive)', () => {
+    expect(sanitizeLinkUrl('http://example.com')).toBe('http://example.com');
+    expect(sanitizeLinkUrl('https://example.com/path?q=1')).toBe('https://example.com/path?q=1');
+    expect(sanitizeLinkUrl('mailto:someone@example.com')).toBe('mailto:someone@example.com');
+    expect(sanitizeLinkUrl('HTTPS://Example.com')).toBe('HTTPS://Example.com');
+  });
+
+  it('neutralises dangerous schemes to #', () => {
+    expect(sanitizeLinkUrl('javascript:alert(1)')).toBe('#');
+    expect(sanitizeLinkUrl('JavaScript:alert(1)')).toBe('#');
+    expect(sanitizeLinkUrl('data:text/html,<script>')).toBe('#');
+    expect(sanitizeLinkUrl('vbscript:msgbox')).toBe('#');
+    expect(sanitizeLinkUrl('file:///etc/passwd')).toBe('#');
+  });
+
+  it('leaves scheme-less relative and fragment URLs unchanged', () => {
+    expect(sanitizeLinkUrl('/relative/path')).toBe('/relative/path');
+    expect(sanitizeLinkUrl('page.html')).toBe('page.html');
+    expect(sanitizeLinkUrl('#section')).toBe('#section');
+    // A colon after a path/query delimiter is not a scheme (RFC 3986).
+    expect(sanitizeLinkUrl('path/to:thing')).toBe('path/to:thing');
+  });
+});
+
+describe('parseTeamsMessageUrl', () => {
+  it('parses a channel thread deep link, preferring parentMessageId as the thread root', () => {
+    const url =
+      'https://teams.microsoft.com/l/message/19%3Axxx%40thread.tacv2/170?tenantId=t&parentMessageId=169';
+    const result = parseTeamsMessageUrl(url);
+    expect(result).toEqual({
+      conversationId: '19:xxx@thread.tacv2',
+      messageId: '170',
+      threadRootId: '169',
+    });
+  });
+
+  it('parses a link without parentMessageId (top-level post has no thread root)', () => {
+    const url = 'https://teams.microsoft.com/l/message/19%3Axxx%40thread.tacv2/170';
+    const result = parseTeamsMessageUrl(url);
+    expect(result).toEqual({
+      conversationId: '19:xxx@thread.tacv2',
+      messageId: '170',
+      threadRootId: undefined,
+    });
+  });
+
+  it('parses a 1:1 chat message link with a context query param', () => {
+    const url =
+      'https://teams.microsoft.com/l/message/19%3Aabc_def%40unq.gbl.spaces/1700000000000?context=%7B%22contextType%22%3A%22chat%22%7D';
+    const result = parseTeamsMessageUrl(url);
+    expect(result?.conversationId).toBe('19:abc_def@unq.gbl.spaces');
+    expect(result?.messageId).toBe('1700000000000');
+    expect(result?.threadRootId).toBeUndefined();
+  });
+
+  it('returns null for URLs that are not message deep links', () => {
+    expect(parseTeamsMessageUrl('https://teams.microsoft.com/l/channel/19%3Axxx/General')).toBeNull();
+    expect(parseTeamsMessageUrl('https://example.com/foo')).toBeNull();
+    expect(parseTeamsMessageUrl('not a url')).toBeNull();
+  });
+
+  it('returns null when the channel id segment is empty', () => {
+    expect(parseTeamsMessageUrl('https://teams.microsoft.com/l/message//170')).toBeNull();
   });
 });

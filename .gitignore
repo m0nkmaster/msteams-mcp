@@ -29,6 +29,9 @@ debug-output/
 research-findings.json
 search-api-findings.json
 
+# Browser network captures (contain cookies, tokens and personal data)
+*.har
+
 # SSO research output (contains sensitive auth data)
 scripts/
 

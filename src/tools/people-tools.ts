@@ -4,9 +4,10 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchPeople, getFrequentContacts } from '../api/substrate-api.js';
+import { resolveProfiles } from '../api/profile-api.js';
 import { getUserProfile } from '../auth/token-extractor.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import {
@@ -27,6 +28,10 @@ export const SearchPeopleInputSchema = z.object({
 
 export const FrequentContactsInputSchema = z.object({
   limit: z.number().min(1).max(MAX_CONTACTS_LIMIT).optional().default(DEFAULT_CONTACTS_LIMIT),
+});
+
+export const GetPersonInputSchema = z.object({
+  mris: z.array(z.string().min(1)).min(1, 'At least one MRI is required'),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,13 +80,29 @@ const frequentContactsToolDefinition: Tool = {
   },
 };
 
+const getPersonToolDefinition: Tool = {
+  name: 'teams_get_person',
+  description: 'Get one or more people\'s profiles by MRI (e.g. "8:orgid:uuid"). Returns display name, email, job title, department, and company. Useful for resolving MRIs (e.g. from reactions or activity) to real identities. Pass multiple MRIs for batch lookup.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      mris: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'One or more MRIs to look up (e.g. ["8:orgid:abc-123", "8:orgid:def-456"]).',
+        minItems: 1,
+      },
+    },
+    required: ['mris'],
+  },
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleGetMe(
-  _input: Record<string, never>,
-  _ctx: ToolContext
+  _input: Record<string, never>
 ): Promise<ToolResult> {
   const profile = getUserProfile();
 
@@ -102,8 +123,7 @@ async function handleGetMe(
 }
 
 async function handleSearchPeople(
-  input: z.infer<typeof SearchPeopleInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SearchPeopleInputSchema>
 ): Promise<ToolResult> {
   const result = await searchPeople(input.query, input.limit);
 
@@ -115,8 +135,7 @@ async function handleSearchPeople(
 }
 
 async function handleGetFrequentContacts(
-  input: z.infer<typeof FrequentContactsInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof FrequentContactsInputSchema>
 ): Promise<ToolResult> {
   const result = await getFrequentContacts(input.limit);
 
@@ -124,6 +143,21 @@ async function handleGetFrequentContacts(
     returned: value.returned,
     contacts: value.results,
   }));
+}
+
+async function handleGetPerson(
+  input: z.infer<typeof GetPersonInputSchema>
+): Promise<ToolResult> {
+  const result = await resolveProfiles(input.mris);
+
+  return handleApiResult(result, (value) => {
+    const profiles = [...value.profiles.values()];
+    return {
+      returned: profiles.length,
+      unresolved: value.unresolved,
+      profiles,
+    };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,5 +182,11 @@ export const frequentContactsTool: RegisteredTool<typeof FrequentContactsInputSc
   handler: handleGetFrequentContacts,
 };
 
+export const getPersonTool: RegisteredTool<typeof GetPersonInputSchema> = {
+  definition: getPersonToolDefinition,
+  schema: GetPersonInputSchema,
+  handler: handleGetPerson,
+};
+
 /** All people-related tools. */
-export const peopleTools = [getMeTool, searchPeopleTool, frequentContactsTool];
+export const peopleTools = [getMeTool, searchPeopleTool, frequentContactsTool, getPersonTool];
