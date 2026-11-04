@@ -342,17 +342,13 @@ export function extractRegionConfig(state?: SessionState): RegionConfig | null {
 }
 
 /**
- * Extracts authentication info needed for messaging API.
- * Unlike other APIs, messaging uses cookies rather than localStorage tokens.
- */
-/**
  * True when a cookie domain sits on a known Teams host (leading '.'
  * stripped, exact or suffix match - keeps '.asyncgw.teams.microsoft.com').
  */
 function domainMatchesTeamsHosts(domain: string | undefined): boolean {
   if (!domain) return false;
   const d = domain.startsWith('.') ? domain.slice(1) : domain;
-  return TEAMS_HOSTS.some(host => d === host || d.endsWith('.' + host) || d.endsWith(host));
+  return TEAMS_HOSTS.some(host => d === host || d.endsWith('.' + host));
 }
 
 /**
@@ -395,6 +391,10 @@ function pickTeamsCookie(
   return best;
 }
 
+/**
+ * Extracts authentication info needed for messaging API.
+ * Unlike other APIs, messaging uses cookies rather than localStorage tokens.
+ */
 export function extractMessageAuth(state?: SessionState): MessageAuthInfo | null {
   const sessionState = state ?? readSessionState();
   if (!sessionState) return null;
