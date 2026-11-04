@@ -1,11 +1,12 @@
 {
   "name": "msteams-mcp",
-  "version": "0.23.1",
+  "version": "0.30.2",
   "description": "MCP server for Microsoft Teams - search messages, send replies, manage favourites",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "msteams-mcp": "dist/index.js"
+    "msteams-mcp": "dist/index.js",
+    "msteams": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -20,19 +21,16 @@
     "url": "https://github.com/m0nkmaster/msteams-mcp/issues"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "research": "tsx src/research/explore.ts",
-    "research:search": "tsx src/research/search-research.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "cli": "tsx src/test/mcp-harness.ts",
-    "debug:search": "tsx src/test/debug-search.ts",
+    "cli": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"
@@ -47,6 +45,7 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "marked": "^18.0.14",
     "playwright": "^1.40.0",
     "zod": "~3.23.0"
   },

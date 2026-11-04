@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import { listTeamTags } from '../api/tags-api.js';
 import { handleApiResult } from './index.js';
 
@@ -47,8 +47,7 @@ To @mention a tag in a message, use the tag MRI format: @[TagName](tag:{tagId}).
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleGetTags(
-  input: z.infer<typeof GetTagsInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetTagsInputSchema>
 ): Promise<ToolResult> {
   const result = await listTeamTags(input.teamId);
 

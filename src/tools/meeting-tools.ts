@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { getCalendarView } from '../api/calendar-api.js';
 import { getTranscriptContent } from '../api/transcript-api.js';
@@ -60,8 +60,7 @@ const getMeetingsToolDefinition: Tool = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleGetMeetings(
-  input: z.infer<typeof GetMeetingsInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetMeetingsInputSchema>
 ): Promise<ToolResult> {
   const result = await getCalendarView({
     startDate: input.startDate,
@@ -99,8 +98,7 @@ const getTranscriptToolDefinition: Tool = {
 };
 
 async function handleGetTranscript(
-  input: z.infer<typeof GetTranscriptInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetTranscriptInputSchema>
 ): Promise<ToolResult> {
   const result = await getTranscriptContent(input.threadId, input.meetingDate);
 

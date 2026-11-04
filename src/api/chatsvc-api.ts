@@ -10,6 +10,7 @@
  * - chatsvc-reactions: add/remove emoji reactions
  * - chatsvc-virtual: saved messages, followed threads, save/unsave
  * - chatsvc-readstatus: consumption horizons, mark as read, unread counts
+ * - chatsvc-conversations: recent conversation list (chats, groups, channels)
  * - chatsvc-common: shared utilities (date formatting)
  */
 
@@ -19,4 +20,5 @@ export * from './chatsvc-activity.js';
 export * from './chatsvc-reactions.js';
 export * from './chatsvc-virtual.js';
 export * from './chatsvc-readstatus.js';
+export * from './chatsvc-conversations.js';
 export * from './chatsvc-common.js';

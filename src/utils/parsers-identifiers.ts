@@ -93,6 +93,58 @@ export function buildMessageLink(opts: MessageLinkOptions): string {
   return qs ? `${linkUrl}?${qs}` : linkUrl;
 }
 
+/** Result of parsing a Teams message deep link. */
+export interface ParsedMessageUrl {
+  /** The conversation/channel/chat ID (percent-decoded). */
+  conversationId: string;
+  /** The specific message ID from the URL path (percent-decoded). */
+  messageId?: string;
+  /** For channel threads: the thread root ID (the `parentMessageId` query param). */
+  threadRootId?: string;
+}
+
+/**
+ * Parses a Microsoft Teams message deep link into its conversation, message and
+ * thread-root IDs — the inverse of {@link buildMessageLink}.
+ *
+ * Handles the standard `.../l/message/{conversationId}/{messageId}?...` link
+ * Teams produces. The conversation and message IDs are percent-decoded. When a
+ * `parentMessageId` query param is present (a channel thread reply) it is
+ * returned as `threadRootId`, so callers can scope to that thread. Returns
+ * `null` for anything that is not a `/l/message/` deep link (e.g. channel links
+ * or non-Teams URLs).
+ */
+export function parseTeamsMessageUrl(url: string): ParsedMessageUrl | null {
+  const marker = '/l/message/';
+  const markerIndex = url.indexOf(marker);
+  if (markerIndex === -1) return null;
+
+  const rest = url.slice(markerIndex + marker.length);
+  const queryStart = rest.indexOf('?');
+  const path = queryStart === -1 ? rest : rest.slice(0, queryStart);
+  const query = queryStart === -1 ? '' : rest.slice(queryStart + 1);
+
+  const [rawConversationId = '', rawMessageId = ''] = path.split('/');
+  const conversationId = safeDecode(rawConversationId);
+  if (!conversationId) return null;
+
+  const messageId = safeDecode(rawMessageId) || undefined;
+
+  const parentMessageId = new URLSearchParams(query).get('parentMessageId');
+  const threadRootId = parentMessageId ? safeDecode(parentMessageId) : undefined;
+
+  return { conversationId, messageId, threadRootId: threadRootId || undefined };
+}
+
+/** Percent-decodes a URL component, returning the raw value if decoding fails. */
+function safeDecode(component: string): string {
+  try {
+    return decodeURIComponent(component);
+  } catch {
+    return component;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Message Timestamps
 // ─────────────────────────────────────────────────────────────────────────────

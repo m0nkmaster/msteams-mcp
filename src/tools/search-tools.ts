@@ -4,10 +4,11 @@
 
 import { z } from 'zod';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolContext, ToolResult } from './index.js';
+import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchMessages, searchEmails, searchChannels } from '../api/substrate-api.js';
 import { getThreadMessages, getConsumptionHorizon, markAsRead } from '../api/chatsvc-api.js';
+import { parseTeamsMessageUrl } from '../utils/parsers.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import {
   DEFAULT_PAGE_SIZE,
@@ -30,11 +31,16 @@ export const SearchInputSchema = z.object({
 });
 
 export const GetThreadInputSchema = z.object({
-  conversationId: z.string().min(1, 'Conversation ID cannot be empty'),
+  conversationId: z.string().min(1, 'Conversation ID cannot be empty').optional(),
+  fromUrl: z.string().min(1).optional(),
+  threadRootId: z.string().optional(),
   limit: z.number().min(1).max(MAX_THREAD_LIMIT).optional().default(DEFAULT_THREAD_LIMIT),
   markRead: z.boolean().optional().default(false),
   order: z.enum(['asc', 'desc']).optional().default('desc'),
   since: z.string().optional(),
+  cursor: z.string().min(1).optional(),
+}).refine(d => d.conversationId || d.fromUrl, {
+  message: 'Provide either conversationId or fromUrl',
 });
 
 export const FindChannelInputSchema = z.object({
@@ -82,13 +88,21 @@ const searchToolDefinition: Tool = {
 
 const getThreadToolDefinition: Tool = {
   name: 'teams_get_thread',
-  description: 'Get messages from a Teams conversation/thread. Default: newest-first (latest messages at top). For channels: messages include isThreadReply (true for replies) and threadRootId (ID of the post being replied to). Messages without threadRootId are top-level posts. Use threadRootId to group related messages. Each message includes a "when" field with the day of week (e.g., "Friday, January 30, 2026, 10:45 AM UTC"). Returns unread count and can optionally mark as read.',
+  description: 'Get messages from a Teams conversation/thread. Default: newest-first (latest messages at top). For channels: messages include isThreadReply (true for replies) and threadRootId (ID of the post being replied to). Messages without threadRootId are top-level posts. Use threadRootId to group related messages. Messages include reactions (individual reactors, names resolved where possible) and reactionSummary (counts per emoji) when present. Each message includes a "when" field with the day of week (e.g., "Friday, January 30, 2026, 10:45 AM UTC"). Returns unread count and can optionally mark as read. Pass olderCursor back as cursor to page through older history.',
   inputSchema: {
     type: 'object',
     properties: {
       conversationId: {
         type: 'string',
-        description: 'The conversation ID to get messages from (e.g., "19:abc@thread.tacv2" from search results)',
+        description: 'The conversation ID to get messages from (e.g., "19:abc@thread.tacv2" from search results). Either this or fromUrl is required.',
+      },
+      fromUrl: {
+        type: 'string',
+        description: 'A Teams message deep link (https://teams.microsoft.com/l/message/...). Parsed into the conversation ID automatically, so you can paste a link directly. If it points to a channel thread reply, the thread is scoped automatically. Use instead of conversationId.',
+      },
+      threadRootId: {
+        type: 'string',
+        description: 'For channels: the message ID of a top-level post. When provided, returns only the replies to that specific thread instead of all channel messages.',
       },
       limit: {
         type: 'number',
@@ -107,8 +121,11 @@ const getThreadToolDefinition: Tool = {
         type: 'string',
         description: 'ISO 8601 timestamp (e.g., "2026-02-26T00:00:00Z"). When provided, only returns messages after this time.',
       },
+      cursor: {
+        type: 'string',
+        description: 'The olderCursor from a previous response, to fetch the next-older page of history. Repeat until olderCursor is absent to walk a conversation back to its start. Overrides since.',
+      },
     },
-    required: ['conversationId'],
   },
 };
 
@@ -163,8 +180,7 @@ const searchEmailToolDefinition: Tool = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleSearch(
-  input: z.infer<typeof SearchInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SearchInputSchema>
 ): Promise<ToolResult> {
   const result = await searchMessages(input.query, {
     maxResults: input.maxResults,
@@ -197,9 +213,34 @@ async function handleSearch(
 }
 
 async function handleGetThread(
-  input: z.infer<typeof GetThreadInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof GetThreadInputSchema>
 ): Promise<ToolResult> {
+  // Resolve conversation and thread root from a deep link when fromUrl is given.
+  let conversationId = input.conversationId;
+  let threadRootId = input.threadRootId;
+  if (input.fromUrl) {
+    const parsed = parseTeamsMessageUrl(input.fromUrl);
+    if (!parsed) {
+      return {
+        success: false,
+        error: createError(
+          ErrorCode.INVALID_INPUT,
+          `Could not parse a Teams message deep link from fromUrl: "${input.fromUrl}". Expected a "/l/message/..." link.`
+        ),
+      };
+    }
+    conversationId = parsed.conversationId;
+    // A link into a channel thread reply carries the thread root as parentMessageId.
+    threadRootId = threadRootId ?? parsed.threadRootId;
+  }
+
+  if (!conversationId) {
+    return {
+      success: false,
+      error: createError(ErrorCode.INVALID_INPUT, 'Provide either conversationId or fromUrl.'),
+    };
+  }
+
   // Validate since parameter if provided
   let startTime: number | undefined;
   if (input.since) {
@@ -216,10 +257,12 @@ async function handleGetThread(
     startTime = parsed;
   }
 
-  const result = await getThreadMessages(input.conversationId, { 
+  const result = await getThreadMessages(conversationId, { 
     limit: input.limit,
     order: input.order,
     startTime,
+    replyToMessageId: threadRootId,
+    cursor: input.cursor,
   });
 
   if (!result.ok) {
@@ -230,7 +273,7 @@ async function handleGetThread(
   let unreadCount: number | undefined;
   let lastReadMessageId: string | undefined;
   
-  const horizonResult = await getConsumptionHorizon(input.conversationId);
+  const horizonResult = await getConsumptionHorizon(conversationId);
   if (horizonResult.ok) {
     lastReadMessageId = horizonResult.value.lastReadMessageId;
     
@@ -263,7 +306,7 @@ async function handleGetThread(
       ? result.value.messages[result.value.messages.length - 1]
       : result.value.messages[0];
     if (latestMessage) {
-      const markResult = await markAsRead(input.conversationId, latestMessage.id);
+      const markResult = await markAsRead(conversationId, latestMessage.id);
       markedAsRead = markResult.ok;
     }
   }
@@ -277,13 +320,13 @@ async function handleGetThread(
       lastReadMessageId,
       markedAsRead: input.markRead ? markedAsRead : undefined,
       messages: result.value.messages,
+      olderCursor: result.value.olderCursor,
     },
   };
 }
 
 async function handleSearchEmail(
-  input: z.infer<typeof SearchEmailInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof SearchEmailInputSchema>
 ): Promise<ToolResult> {
   const result = await searchEmails(input.query, {
     maxResults: input.maxResults,
@@ -320,8 +363,7 @@ async function handleSearchEmail(
 }
 
 async function handleFindChannel(
-  input: z.infer<typeof FindChannelInputSchema>,
-  _ctx: ToolContext
+  input: z.infer<typeof FindChannelInputSchema>
 ): Promise<ToolResult> {
   const result = await searchChannels(input.query, input.limit);
 

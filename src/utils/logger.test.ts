@@ -69,10 +69,10 @@ describe('logger', () => {
   });
 
   describe('info', () => {
-    it('logs info messages with context', () => {
+    it('logs info messages with context, on stderr', () => {
       info('test-context', 'Information message');
       
-      expect(consoleSpy.log).toHaveBeenCalledWith('[test-context] Information message');
+      expect(consoleSpy.error).toHaveBeenCalledWith('[test-context] Information message');
     });
 
     it('does not log when level is warn', () => {
@@ -80,7 +80,7 @@ describe('logger', () => {
       
       info('context', 'info message');
       
-      expect(consoleSpy.log).not.toHaveBeenCalled();
+      expect(consoleSpy.error).not.toHaveBeenCalled();
     });
 
     it('logs when level is info', () => {
@@ -88,17 +88,17 @@ describe('logger', () => {
       
       info('context', 'info message');
       
-      expect(consoleSpy.log).toHaveBeenCalled();
+      expect(consoleSpy.error).toHaveBeenCalled();
     });
   });
 
   describe('debug', () => {
-    it('logs debug messages with context', () => {
+    it('logs debug messages with context, on stderr', () => {
       setLogLevel('debug');
       
       debug('test-context', 'Debug message');
       
-      expect(consoleSpy.debug).toHaveBeenCalledWith('[test-context] Debug message');
+      expect(consoleSpy.error).toHaveBeenCalledWith('[test-context] Debug message');
     });
 
     it('does not log when level is info', () => {
@@ -106,7 +106,7 @@ describe('logger', () => {
       
       debug('context', 'debug message');
       
-      expect(consoleSpy.debug).not.toHaveBeenCalled();
+      expect(consoleSpy.error).not.toHaveBeenCalled();
     });
 
     it('logs when level is debug', () => {
@@ -114,75 +114,42 @@ describe('logger', () => {
       
       debug('context', 'debug message');
       
-      expect(consoleSpy.debug).toHaveBeenCalled();
+      expect(consoleSpy.error).toHaveBeenCalled();
     });
   });
 
   describe('setLogLevel', () => {
-    it('sets log level to error', () => {
-      setLogLevel('error');
-      
+    const emitAllLevels = () => {
       error('c', 'error');
       warn('c', 'warn');
       info('c', 'info');
       debug('c', 'debug');
-      
-      expect(consoleSpy.error).toHaveBeenCalled();
-      expect(consoleSpy.warn).not.toHaveBeenCalled();
-      expect(consoleSpy.log).not.toHaveBeenCalled();
-      expect(consoleSpy.debug).not.toHaveBeenCalled();
+    };
+
+    // error, info and debug all write to stderr, so count the messages that
+    // got through rather than which console method carried them.
+    it.each([
+      ['error', 1, 0],
+      ['warn', 1, 1],
+      ['info', 2, 1],
+      ['debug', 3, 1],
+    ] as const)('level %s lets %i through to stderr', (level, stderrCalls, warnCalls) => {
+      setLogLevel(level);
+
+      emitAllLevels();
+
+      expect(consoleSpy.error).toHaveBeenCalledTimes(stderrCalls);
+      expect(consoleSpy.warn).toHaveBeenCalledTimes(warnCalls);
     });
 
-    it('sets log level to warn', () => {
-      setLogLevel('warn');
-      
-      error('c', 'error');
-      warn('c', 'warn');
-      info('c', 'info');
-      debug('c', 'debug');
-      
-      expect(consoleSpy.error).toHaveBeenCalled();
-      expect(consoleSpy.warn).toHaveBeenCalled();
-      expect(consoleSpy.log).not.toHaveBeenCalled();
-      expect(consoleSpy.debug).not.toHaveBeenCalled();
-    });
-
-    it('sets log level to info', () => {
-      setLogLevel('info');
-      
-      error('c', 'error');
-      warn('c', 'warn');
-      info('c', 'info');
-      debug('c', 'debug');
-      
-      expect(consoleSpy.error).toHaveBeenCalled();
-      expect(consoleSpy.warn).toHaveBeenCalled();
-      expect(consoleSpy.log).toHaveBeenCalled();
-      expect(consoleSpy.debug).not.toHaveBeenCalled();
-    });
-
-    it('sets log level to debug', () => {
+    // stdout is the MCP stdio protocol channel and the CLI's data output, so
+    // nothing may log there.
+    it('never writes to stdout', () => {
       setLogLevel('debug');
-      
-      error('c', 'error');
-      warn('c', 'warn');
-      info('c', 'info');
-      debug('c', 'debug');
-      
-      expect(consoleSpy.error).toHaveBeenCalled();
-      expect(consoleSpy.warn).toHaveBeenCalled();
-      expect(consoleSpy.log).toHaveBeenCalled();
-      expect(consoleSpy.debug).toHaveBeenCalled();
-    });
 
-    it('logs info level when set to info', () => {
-      // Set info level
-      setLogLevel('info');
-      
-      info('c', 'test');
-      debug('c', 'test');
-      
-      expect(consoleSpy.log).toHaveBeenCalled();
+      emitAllLevels();
+
+      expect(consoleSpy.log).not.toHaveBeenCalled();
       expect(consoleSpy.debug).not.toHaveBeenCalled();
     });
   });

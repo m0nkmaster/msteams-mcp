@@ -71,3 +71,39 @@ export function escapeHtmlChars(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+/**
+ * Extracts the lowercased URI scheme from a URL, or undefined if the URL is
+ * relative (RFC 3986 §3.1).
+ *
+ * A scheme is the run of letters/digits/`+`/`-`/`.` that starts with a letter
+ * and precedes the first `:` — but only when that `:` comes before any `/`, `?`
+ * or `#`, so `path/to:thing`, `foo?a=b:c` and `#a:b` are correctly treated as
+ * scheme-less relative URLs.
+ */
+function urlScheme(url: string): string | undefined {
+  const colon = url.indexOf(':');
+  if (colon <= 0) return undefined;
+  const scheme = url.slice(0, colon);
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(scheme)) return undefined;
+  // A `/`, `?` or `#` before the colon means the colon is inside a relative URL.
+  if (/[/?#]/.test(url.slice(0, colon))) return undefined;
+  return scheme.toLowerCase();
+}
+
+/**
+ * Neutralises a link destination whose URL scheme is not on the allowlist.
+ *
+ * Only `http`, `https` and `mailto` (case-insensitive) are kept; any other
+ * scheme (`javascript:`, `data:`, `vbscript:`, `file:`, …) is rewritten to `#`
+ * so a link can never carry an executable scheme into a Teams-rendered message.
+ * Scheme-less URLs — relative paths and fragment-only links — carry no
+ * executable scheme and pass through unchanged.
+ */
+export function sanitizeLinkUrl(url: string): string {
+  const scheme = urlScheme(url);
+  if (scheme !== undefined && !['http', 'https', 'mailto'].includes(scheme)) {
+    return '#';
+  }
+  return url;
+}

@@ -8,6 +8,7 @@ import { saveSessionState } from './context.js';
 import {
   OVERLAY_STEP_PAUSE_MS,
   OVERLAY_COMPLETE_PAUSE_MS,
+  TEAMS_HOSTS,
 } from '../constants.js';
 import { extractSubstrateToken } from '../auth/token-extractor.js';
 import * as logger from '../utils/logger.js';
@@ -171,16 +172,7 @@ const LOGIN_URL_PATTERNS = [
   'login.microsoft.com',
 ];
 
-// Selectors that indicate successful authentication
-const AUTH_SUCCESS_SELECTORS = [
-  '[data-tid="app-bar"]',
-  '[data-tid="search-box"]',
-  'input[placeholder*="Search"]',
-  '[data-tid="chat-list"]',
-  '[data-tid="team-list"]',
-];
-
-export interface AuthStatus {
+interface AuthStatus {
   isAuthenticated: boolean;
   isOnLoginPage: boolean;
   currentUrl: string;
@@ -191,23 +183,6 @@ export interface AuthStatus {
  */
 function isLoginUrl(url: string): boolean {
   return LOGIN_URL_PATTERNS.some(pattern => url.includes(pattern));
-}
-
-/**
- * Checks if the page shows authenticated Teams content.
- */
-async function hasAuthenticatedContent(page: Page): Promise<boolean> {
-  for (const selector of AUTH_SUCCESS_SELECTORS) {
-    try {
-      const count = await page.locator(selector).count();
-      if (count > 0) {
-        return true;
-      }
-    } catch {
-      // Selector not found, continue checking others
-    }
-  }
-  return false;
 }
 
 /**
@@ -226,11 +201,15 @@ export async function getAuthStatus(page: Page): Promise<AuthStatus> {
     };
   }
 
-  // If on Teams domain, check for authenticated content
-  if (currentUrl.includes('teams.microsoft.com')) {
-    const hasContent = await hasAuthenticatedContent(page);
+  // On a Teams domain, a live MSAL token is the proof of sign-in: it is what
+  // every API call needs and what the saved session is for. Teams' own DOM
+  // markers are not a usable signal — new Teams renders none of the `data-tid`
+  // elements earlier versions exposed, so waiting for them left a completed
+  // login undetected and the browser window open until the manual-login
+  // timeout.
+  if (isTeamsUrl(currentUrl)) {
     return {
-      isAuthenticated: hasContent,
+      isAuthenticated: await checkBrowserTokenExpiry(page) > 0,
       isOnLoginPage: false,
       currentUrl,
     };
@@ -247,19 +226,11 @@ export async function getAuthStatus(page: Page): Promise<AuthStatus> {
 /** Timeout for detecting login redirect (ms). */
 const LOGIN_REDIRECT_TIMEOUT_MS = 5000;
 
-/** URL patterns that indicate we're on a Teams page (not redirected elsewhere). */
-const TEAMS_URL_PATTERNS = [
-  'teams.microsoft.com',
-  'teams.microsoft.us',      // GCC-High
-  'dod.teams.microsoft.us',  // DoD
-  'teams.cloud.microsoft',   // New Teams URL
-];
-
 /**
  * Checks if a URL is a Teams domain.
  */
-function isTeamsUrl(url: string): boolean {
-  return TEAMS_URL_PATTERNS.some(pattern => url.includes(pattern));
+export function isTeamsUrl(url: string): boolean {
+  return TEAMS_HOSTS.some(host => url.includes(host));
 }
 
 /**
@@ -272,40 +243,16 @@ function isTeamsUrl(url: string): boolean {
  * Returns isAuthenticated: false if we can't confirm we're on Teams, to avoid
  * silently failing with an invisible browser stuck on an unexpected page.
  */
-export async function navigateToTeams(page: Page): Promise<AuthStatus> {
-  // Set up a promise that resolves when we detect a login redirect
-  let redirectDetected = false;
-  
-  // Handler for detecting login redirects
-  const handleFrameNavigated = (frame: import('playwright').Frame) => {
-    if (frame === page.mainFrame() && isLoginUrl(frame.url())) {
-      redirectDetected = true;
-    }
-  };
+async function navigateToTeams(page: Page): Promise<AuthStatus> {
+  await page.goto(TEAMS_URL, { waitUntil: 'domcontentloaded' });
 
-  // Listen for navigation events
-  page.on('framenavigated', handleFrameNavigated);
-
-  try {
-    // Navigate to Teams
-    await page.goto(TEAMS_URL, { waitUntil: 'domcontentloaded' });
-
-    // Wait for either:
-    // 1. A redirect to login page (detected via framenavigated)
-    // 2. Timeout expires (no redirect = session valid)
-    // 
-    // Research shows login redirect happens ~3-4 seconds after navigation
-    // when session is invalid (MSAL tries silent auth first, then redirects).
-    // 5 seconds gives enough buffer while still being fast.
-    const startTime = Date.now();
-    while (Date.now() - startTime < LOGIN_REDIRECT_TIMEOUT_MS) {
-      if (redirectDetected) break;
-      await page.waitForTimeout(100); // Check every 100ms
-    }
-  } finally {
-    // Clean up listener to avoid memory leaks
-    page.off('framenavigated', handleFrameNavigated);
-  }
+  // Login redirect happens ~3-4 seconds after navigation when the session is
+  // invalid (MSAL tries silent auth first, then redirects). No redirect within
+  // the timeout = session valid.
+  const redirectDetected = await page.waitForURL(url => isLoginUrl(url.href), {
+    timeout: LOGIN_REDIRECT_TIMEOUT_MS,
+    waitUntil: 'commit',
+  }).then(() => true, () => false);
 
   // Check final state
   const currentUrl = page.url();
@@ -338,20 +285,21 @@ export async function navigateToTeams(page: Page): Promise<AuthStatus> {
   };
 }
 
+/** Maximum time to wait for the user to complete manual login (ms). */
+const MANUAL_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+
 /**
  * Waits for the user to complete manual authentication.
  * Returns when authenticated or throws after timeout.
  *
  * @param page - The page to monitor
  * @param context - Browser context for saving session
- * @param timeoutMs - Maximum time to wait (default: 5 minutes)
  * @param onProgress - Callback for progress updates
  * @param showOverlay - Whether to show progress overlay (default: true for visible browsers)
  */
-export async function waitForManualLogin(
+async function waitForManualLogin(
   page: Page,
   context: BrowserContext,
-  timeoutMs: number = 5 * 60 * 1000,
   onProgress?: (message: string) => void,
   showOverlay: boolean = true
 ): Promise<void> {
@@ -360,7 +308,7 @@ export async function waitForManualLogin(
 
   log('Waiting for manual login...');
 
-  while (Date.now() - startTime < timeoutMs) {
+  while (Date.now() - startTime < MANUAL_LOGIN_TIMEOUT_MS) {
     const status = await getAuthStatus(page);
 
     if (status.isAuthenticated) {
@@ -430,8 +378,7 @@ async function checkBrowserTokenExpiry(page: Page): Promise<number> {
         try {
           const entry = JSON.parse(value);
           const target = entry.target as string | undefined;
-          if (!target?.includes('substrate.office.com')) continue;
-          if (!target.includes('SubstrateSearch')) continue;
+          if (!target?.includes('SubstrateSearch')) continue;
 
           const secret = entry.secret as string | undefined;
           if (!secret?.startsWith('ey')) continue;
@@ -524,7 +471,7 @@ export async function ensureAuthenticated(
   const status = await navigateToTeams(page);
 
   if (status.isAuthenticated) {
-    log('Already authenticated — saving session state.');
+    log('Teams loaded — saving session state.');
     await saveSessionState(context);
     
     // Check if the saved tokens are actually valid
@@ -551,9 +498,11 @@ export async function ensureAuthenticated(
       throw new Error('Headless SSO failed: MSAL token refresh timed out');
     }
     
-    // In visible mode, the tokens might refresh while user interacts, or they can
-    // manually complete any prompts. We've saved what we have.
-    log('Session state saved (tokens may need refresh).');
+    // No redirect to login does not mean signed in: Teams can render with the
+    // Microsoft SSO session gone and only a dead SPA refresh token in its cache.
+    // Keep the window open until a live token appears (silently or by sign-in).
+    log('Tokens expired. Sign in in the browser window if prompted.');
+    await waitForManualLogin(page, context, onProgress, showOverlay);
     return;
   }
 
@@ -565,32 +514,8 @@ export async function ensureAuthenticated(
     throw new Error(`Headless SSO failed: ${reason}`);
   }
 
-  if (status.isOnLoginPage) {
-    log('Login required. Please complete authentication in the browser window.');
-    await waitForManualLogin(page, context, undefined, onProgress, showOverlay);
-  } else {
-    // Unexpected state - might need manual intervention
-    log('Unexpected page state. Waiting for authentication...');
-    await waitForManualLogin(page, context, undefined, onProgress, showOverlay);
-  }
-}
-
-/**
- * Forces a new login by clearing session and navigating to Teams.
- */
-export async function forceNewLogin(
-  page: Page,
-  context: BrowserContext,
-  onProgress?: (message: string) => void
-): Promise<void> {
-  const log = onProgress ?? console.log;
-
-  log('Starting fresh login...');
-
-  // Clear cookies to force re-authentication
-  await context.clearCookies();
-
-  // Navigate and wait for login
-  await navigateToTeams(page);
-  await waitForManualLogin(page, context, undefined, onProgress);
+  log(status.isOnLoginPage
+    ? 'Login required. Please complete authentication in the browser window.'
+    : 'Unexpected page state. Waiting for authentication...');
+  await waitForManualLogin(page, context, onProgress, showOverlay);
 }
