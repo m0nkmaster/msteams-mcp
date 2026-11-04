@@ -13,14 +13,23 @@ function makeOrigin(
   return { origin, localStorage };
 }
 
-function makeSubstrateEntry(target = 'https://substrate.office.com/SubstrateSearch-Internal.ReadWrite') {
+/** Fake JWT: unsigned header.payload.sig with a base64url JSON payload. */
+function fakeJwt(payload: Record<string, unknown>): string {
+  const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  return `eyJhbGciOiJub25lIn0.${body}.sig`;
+}
+
+function makeSubstrateEntry(
+  target = 'https://substrate.office.com/SubstrateSearch-Internal.ReadWrite',
+  secret = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.sig'
+) {
   return {
     name: 'msal-substrate-token',
     value: JSON.stringify({
       credentialType: 'AccessToken',
       target,
       // JWT-shaped secret (header.payload.sig) — extractor only checks prefix
-      secret: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.sig',
+      secret,
     }),
   };
 }
@@ -71,6 +80,45 @@ describe('getTeamsOrigin', () => {
 
     const chosen = getTeamsOrigin(state);
     expect(chosen?.origin).toBe('https://teams.microsoft.com');
+  });
+
+  it('prefers the origin with the latest-expiring UNEXPIRED JWT over a stale one listed first', () => {
+    const expired = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 14; // ~2 weeks ago
+    const fresh = Math.floor(Date.now() / 1000) + 60 * 60;
+    const state: SessionState = {
+      cookies: [],
+      origins: [
+        makeOrigin('https://teams.microsoft.com', [makeSubstrateEntry(undefined, fakeJwt({ exp: expired }))]),
+        makeOrigin('https://teams.cloud.microsoft', [makeSubstrateEntry(undefined, fakeJwt({ exp: fresh }))]),
+      ],
+    };
+    expect(getTeamsOrigin(state)?.origin).toBe('https://teams.cloud.microsoft');
+  });
+
+  it('picks the fresh origin even when the stale one is listed second', () => {
+    const expired = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 14;
+    const fresh = Math.floor(Date.now() / 1000) + 60 * 60;
+    const state: SessionState = {
+      cookies: [],
+      origins: [
+        makeOrigin('https://teams.cloud.microsoft', [makeSubstrateEntry(undefined, fakeJwt({ exp: fresh }))]),
+        makeOrigin('https://teams.microsoft.com', [makeSubstrateEntry(undefined, fakeJwt({ exp: expired }))]),
+      ],
+    };
+    expect(getTeamsOrigin(state)?.origin).toBe('https://teams.cloud.microsoft');
+  });
+
+  it('falls back to the previous behaviour when every JWT is expired', () => {
+    const expired = Math.floor(Date.now() / 1000) - 60;
+    const state: SessionState = {
+      cookies: [],
+      origins: [
+        makeOrigin('https://teams.microsoft.com', [makeSubstrateEntry(undefined, fakeJwt({ exp: expired }))]),
+        makeOrigin('https://teams.cloud.microsoft', [makeChatSvcEntry()]),
+      ],
+    };
+    // Upstream logic: first origin with a SubstrateSearch token.
+    expect(getTeamsOrigin(state)?.origin).toBe('https://teams.microsoft.com');
   });
 
   it('returns null when no Teams origins are present', () => {

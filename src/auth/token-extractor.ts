@@ -15,7 +15,7 @@ import {
   type SessionState,
 } from './session-store.js';
 import { parseJwtProfile, type UserProfile } from '../utils/parsers.js';
-import { MRI_TYPE_PREFIX, ORGID_PREFIX, MRI_ORGID_PREFIX, ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES } from '../constants.js';
+import { MRI_TYPE_PREFIX, ORGID_PREFIX, MRI_ORGID_PREFIX, ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES, TEAMS_HOSTS } from '../constants.js';
 
 // ============================================================================
 // JWT Utilities
@@ -345,16 +345,65 @@ export function extractRegionConfig(state?: SessionState): RegionConfig | null {
  * Extracts authentication info needed for messaging API.
  * Unlike other APIs, messaging uses cookies rather than localStorage tokens.
  */
+/**
+ * True when a cookie domain sits on a known Teams host (leading '.'
+ * stripped, exact or suffix match - keeps '.asyncgw.teams.microsoft.com').
+ */
+function domainMatchesTeamsHosts(domain: string | undefined): boolean {
+  if (!domain) return false;
+  const d = domain.startsWith('.') ? domain.slice(1) : domain;
+  return TEAMS_HOSTS.some(host => d === host || d.endsWith('.' + host) || d.endsWith(host));
+}
+
+/**
+ * JWT exp (seconds) from a cookie value after URL-decoding and stripping a
+ * 'Bearer=' prefix; null for non-JWT values (which rank lowest).
+ */
+function cookieValueJwtExp(value: string): number | null {
+  try {
+    let v = decodeURIComponent(value);
+    if (v.startsWith('Bearer=')) v = v.substring(7);
+    if (!v.startsWith('ey')) return null;
+    const payload = decodeJwtPayload(v);
+    return typeof payload?.exp === 'number' ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Selects the cookie with `name` whose domain matches a Teams host,
+ * preferring the one whose value is the latest-expiring JWT. After the
+ * Teams host migration the authtoken lives on teams.cloud.microsoft while
+ * skypetoken_asm sits on .asyncgw.teams.microsoft.com, so a hardcoded
+ * 'teams.microsoft.com' filter silently drops the only usable cookie.
+ */
+function pickTeamsCookie(
+  cookies: SessionState['cookies'] | undefined,
+  name: string
+): SessionState['cookies'][number] | null {
+  let best: SessionState['cookies'][number] | null = null;
+  let bestExp = Number.NEGATIVE_INFINITY;
+  for (const c of cookies ?? []) {
+    if (c.name !== name || !domainMatchesTeamsHosts(c.domain)) continue;
+    const exp = cookieValueJwtExp(c.value) ?? Number.NEGATIVE_INFINITY;
+    if (!best || exp > bestExp) {
+      best = c;
+      bestExp = exp;
+    }
+  }
+  return best;
+}
+
 export function extractMessageAuth(state?: SessionState): MessageAuthInfo | null {
   const sessionState = state ?? readSessionState();
   if (!sessionState) return null;
 
   const cookies = sessionState.cookies ?? [];
-  const teamsCookies = cookies.filter(c => c.domain?.includes('teams.microsoft.com'));
 
   // Extract the two required cookies
-  const skypeToken = teamsCookies.find(c => c.name === 'skypetoken_asm')?.value ?? null;
-  const rawAuthToken = teamsCookies.find(c => c.name === 'authtoken')?.value ?? null;
+  const skypeToken = pickTeamsCookie(cookies, 'skypetoken_asm')?.value ?? null;
+  const rawAuthToken = pickTeamsCookie(cookies, 'authtoken')?.value ?? null;
   
   if (!skypeToken || !rawAuthToken) return null;
 
@@ -377,22 +426,22 @@ export function extractMessageAuth(state?: SessionState): MessageAuthInfo | null
  * Gets messaging token status for diagnostics.
  * The skypetoken_asm cookie is a JWT with an exp claim.
  */
-export function getMessageAuthStatus(): {
+export function getMessageAuthStatus(state?: SessionState): {
   hasToken: boolean;
   expiresAt?: string;
   minutesRemaining?: number;
 } {
-  const sessionState = readSessionState();
+  const sessionState = state ?? readSessionState();
   if (!sessionState) {
     return { hasToken: false };
   }
 
   const cookies = sessionState.cookies ?? [];
-  const skypeToken = cookies.find(
-    c => c.domain?.includes('teams.microsoft.com') && c.name === 'skypetoken_asm'
-  )?.value;
+  const skypeToken = pickTeamsCookie(cookies, 'skypetoken_asm')?.value;
 
-  if (!skypeToken) {
+  // Status must match what extractMessageAuth can actually use: without an
+  // authtoken on a Teams host every chatsvc call fails anyway.
+  if (!skypeToken || !pickTeamsCookie(cookies, 'authtoken')) {
     return { hasToken: false };
   }
 

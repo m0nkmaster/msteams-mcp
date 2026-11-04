@@ -205,16 +205,57 @@ function hasSubstrateSearchToken(
 }
 
 /**
+ * Latest unexpired JWT exp (seconds) among an origin's localStorage entries.
+ * Entries are MSAL JSON blobs; secrets that look like JWTs ('ey' prefix) get
+ * their exp claim decoded. Returns null when nothing unexpired exists.
+ */
+function latestUnexpiredJwtExp(
+  localStorage: SessionState['origins'][number]['localStorage'] | undefined
+): number | null {
+  const nowSec = Date.now() / 1000;
+  let best: number | null = null;
+  for (const item of localStorage ?? []) {
+    try {
+      const entry = JSON.parse(item.value) as { secret?: string };
+      const secret = entry.secret;
+      if (typeof secret !== 'string' || !secret.startsWith('ey')) continue;
+      const parts = secret.split('.');
+      if (parts.length < 2) continue;
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString()) as { exp?: number };
+      if (typeof payload.exp !== 'number' || payload.exp <= nowSec) continue;
+      if (best === null || payload.exp > best) best = payload.exp;
+    } catch {
+      // ignore non-JSON or non-JWT values
+    }
+  }
+  return best;
+}
+
+/**
  * Gets the Teams origin from session state.
  * Checks multiple known Teams domains to support government clouds.
  *
- * Prefers an origin that has a SubstrateSearch token so Outlook/email and
- * Substrate search keep working when both teams.cloud.microsoft and
- * teams.microsoft.com are present in the saved session (common after the
- * New Teams host migration).
+ * After the New Teams host migration a session can hold TWO Teams origins:
+ * a fresh one on teams.cloud.microsoft and a stale one on
+ * teams.microsoft.com. Pick the origin whose localStorage contains the
+ * latest-expiring UNEXPIRED JWT, so extraction never lands on the stale
+ * copy. When nothing is unexpired, fall back to preferring an origin that
+ * has a SubstrateSearch token, then known origins in TEAMS_HOSTS order.
  */
 export function getTeamsOrigin(state: SessionState): SessionState['origins'][number] | null {
   if (!state.origins) return null;
+
+  let bestOrigin: SessionState['origins'][number] | null = null;
+  let bestExp: number | null = null;
+  for (const origin of state.origins) {
+    if (!TEAMS_HOSTS.some(host => origin.origin.includes(host))) continue;
+    const exp = latestUnexpiredJwtExp(origin.localStorage);
+    if (exp !== null && (bestExp === null || exp > bestExp)) {
+      bestExp = exp;
+      bestOrigin = origin;
+    }
+  }
+  if (bestOrigin) return bestOrigin;
 
   const withSubstrate = state.origins.find(o => hasSubstrateSearchToken(o.localStorage));
   if (withSubstrate) return withSubstrate;
