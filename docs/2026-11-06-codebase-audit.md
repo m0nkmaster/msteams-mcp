@@ -30,11 +30,11 @@ The fragility sits in one place: **the rules about tokens, errors and retries ar
 | **C. Safe with several processes** | Write the session file atomically, never delete a live browser lock, and use a key that doesn't change when the hostname does. | 6, 9, 10 |
 | **D. Consolidate duplicated rules** | One "is this a real message" filter, one conversation-type check, one auth-plus-region guard, one result type. Move the pure message-building code out of the HTTP module. | 16, 17, 18, 19 |
 
-Fix **1** separately and first: it's a security issue.
+**1** was a security issue and is already fixed, in the same branch as this document.
 
 ### Suggested order
 
-1. **Today (small, high value):** 1, 2, 3, 4. Each is a few lines.
+1. **Today (small, high value):** 2, 3, 4. Each is a few lines. (1 is already fixed.)
 2. **Next:** 5, 6, 9, plus the test in 20, so the auto-login path can't regress.
 3. **Then the auth consolidation:** 7, 8, 14, 15. Afterwards auth is one rule per question, and the next Microsoft host change is a one-line fix.
 4. **Clean-up when convenient:** 11–13 (real bugs, but low impact), 16–19, and the smaller items.
@@ -48,7 +48,7 @@ Each finding is marked **Confirmed** (I traced it in the code) or **Plausible** 
 ### Must fix
 
 #### 1. Transcript fallback sends your Teams token to any link in the meeting chat
-`src/api/transcript-api.ts:203-217` · Security · Plausible
+`src/api/transcript-api.ts:203-217` · Security · Plausible · **Fixed:** `findAmsTranscriptLink` (`src/utils/parsers-virtual.ts`) only returns HTTPS links on the hosts the skype token is issued for (`*.asyncgw.teams.microsoft.com`, `*.asm.skype.com`), with tests for planted and look-alike hosts. The message-type check below was left out, because the exact type string couldn't be confirmed without a live recording.
 
 - **What this is:** If the recording isn't in your own OneDrive index, `teams_get_transcript` reads the meeting chat, finds a message containing `<item type="amsTranscript" uri="...">`, and downloads that URI with `Authorization: skype_token <your token>`.
 - **Problem:** It doesn't check who sent the message, what type the message is, or what host the URI points to. Anyone in the meeting chat who can post HTML with that `<item>` tag (for example through the chatsvc API, which this project itself uses) can point the URI at their own server. When you ask for the transcript, your skype token goes to them. That token reads and sends your chats for up to about 24 hours.

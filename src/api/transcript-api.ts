@@ -12,7 +12,7 @@ import { httpRequest } from '../utils/http.js';
 import { type Result, ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { requireMessageAuth, requireSubstrateTokenAsync } from '../utils/auth-guards.js';
-import { formatTranscriptText, parseVttTranscript, type TranscriptEntry } from '../utils/parsers.js';
+import { formatTranscriptText, parseVttTranscript, findAmsTranscriptLink, type TranscriptEntry } from '../utils/parsers.js';
 import { getThreadMessages } from './chatsvc-messaging.js';
 import { MAX_THREAD_LIMIT } from '../constants.js';
 
@@ -208,11 +208,11 @@ async function getTranscriptFromMeetingChat(threadId: string): Promise<Result<Tr
   const thread = await getThreadMessages(threadId, { limit: MAX_THREAD_LIMIT });
   if (!thread.ok) return thread;
 
-  const recording = thread.value.messages.find(m => m.links?.some(l => l.contentType === 'amsTranscript'));
-  const transcriptUrl = recording?.links?.find(l => l.contentType === 'amsTranscript')?.url;
-  if (!recording || !transcriptUrl) return null;
+  const found = findAmsTranscriptLink(thread.value.messages);
+  if (!found) return null;
+  const recording = found.message;
 
-  const response = await httpRequest<string>(transcriptUrl, {
+  const response = await httpRequest<string>(found.url, {
     method: 'GET',
     headers: { 'Authorization': `skype_token ${auth.value.skypeToken}` },
   });

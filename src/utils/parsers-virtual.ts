@@ -119,6 +119,33 @@ export interface TranscriptEntry {
   text: string;
 }
 
+/** The Teams async media gateway: the only hosts the skype token is issued for. */
+const AMS_HOST = /\.(?:asyncgw\.teams\.microsoft\.com|asm\.skype\.com)$/;
+
+/**
+ * First `amsTranscript` link that points at the Teams media gateway. Message
+ * content is written by any chat member, so a link on any other host is ignored:
+ * the caller sends the user's skype token to the returned URL.
+ */
+export function findAmsTranscriptLink<T extends { links?: ExtractedLink[] }>(
+  messages: T[]
+): { message: T; url: string } | null {
+  for (const message of messages) {
+    for (const link of message.links ?? []) {
+      if (link.contentType !== 'amsTranscript') continue;
+      try {
+        const url = new URL(link.url);
+        if (url.protocol === 'https:' && !url.username && !url.password && AMS_HOST.test(url.hostname)) {
+          return { message, url: link.url };
+        }
+      } catch {
+        // Not a URL; keep looking
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Parses a Teams WebVTT transcript (cues like `<v Speaker>text</v>`) into entries.
  * Cue identifiers and the WEBVTT header are ignored.

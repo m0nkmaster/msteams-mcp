@@ -55,6 +55,7 @@ export {
   parseVirtualConversationMessage,
   formatTranscriptText,
   parseVttTranscript,
+  findAmsTranscriptLink,
   type VirtualConversationItem,
   type TranscriptEntry,
 } from './parsers-virtual.js';

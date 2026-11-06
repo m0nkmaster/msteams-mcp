@@ -28,6 +28,7 @@ import {
   markdownToTeamsHtml,
   formatTranscriptText,
   parseVttTranscript,
+  findAmsTranscriptLink,
   parseChannelSuggestion,
   parseChannelResults,
   filterChannelsByName,
@@ -940,6 +941,33 @@ describe('parseVttTranscript', () => {
 
   it('returns no entries for an empty transcript', () => {
     expect(parseVttTranscript('WEBVTT\n\n')).toEqual([]);
+  });
+});
+
+describe('findAmsTranscriptLink', () => {
+  const ams = (url: string) => ({ links: [{ url, text: 'amsTranscript', contentType: 'amsTranscript' }] });
+  const real = 'https://us-prod.asyncgw.teams.microsoft.com/v1/objects/0-wus-d1-abc/views/transcript';
+
+  it('returns the media gateway link and its message', () => {
+    const msg = ams(real);
+    expect(findAmsTranscriptLink([{ links: [] }, msg])).toEqual({ message: msg, url: real });
+  });
+
+  it('never returns a link on another host, so the token is not sent there', () => {
+    for (const url of [
+      'https://attacker.example/x',
+      'https://asyncgw.teams.microsoft.com.attacker.example/x',
+      'http://us-prod.asyncgw.teams.microsoft.com/x',
+      'https://user:pw@us-prod.asyncgw.teams.microsoft.com/x',
+      'not a url',
+    ]) {
+      expect(findAmsTranscriptLink([ams(url)])).toBeNull();
+    }
+  });
+
+  it('skips a planted link and finds the real recording behind it', () => {
+    const msg = ams(real);
+    expect(findAmsTranscriptLink([ams('https://attacker.example/x'), msg])?.url).toBe(real);
   });
 });
 
