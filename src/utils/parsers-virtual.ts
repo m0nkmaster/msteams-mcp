@@ -120,6 +120,25 @@ export interface TranscriptEntry {
 }
 
 /**
+ * Parses a Teams WebVTT transcript (cues like `<v Speaker>text</v>`) into entries.
+ * Cue identifiers and the WEBVTT header are ignored.
+ */
+export function parseVttTranscript(vtt: string): TranscriptEntry[] {
+  const entries: TranscriptEntry[] = [];
+  for (const block of vtt.replace(/\r/g, '').split(/\n{2,}/)) {
+    const lines = block.split('\n');
+    const timingIdx = lines.findIndex(l => l.includes('-->'));
+    if (timingIdx === -1) continue;
+    const [startTime, endTime] = lines[timingIdx].split('-->').map(s => s.trim().split(/\s/)[0]);
+    const body = lines.slice(timingIdx + 1).join(' ');
+    const speaker = body.match(/<v\s+([^>]+)>/)?.[1].trim() ?? '';
+    const text = body.replace(/<[^>]*>/g, '').trim();
+    if (text) entries.push({ startTime, endTime, speaker, text });
+  }
+  return entries;
+}
+
+/**
  * Formats transcript entries into a readable text format.
  * 
  * Merges consecutive entries from the same speaker into a single block

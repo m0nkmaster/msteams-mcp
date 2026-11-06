@@ -138,7 +138,7 @@ Different Teams APIs use different auth mechanisms:
 | **Messaging / Threads** (chatsvc) | `skypetoken_asm` cookie | `extractMessageAuth()` |
 | **Favorites** (csa/conversationFolders) | CSA token from MSAL + `skypetoken_asm` | `extractCsaToken()` + `extractMessageAuth()` |
 | **Calendar** (mt/part/calendarView) | Skype Spaces token + `skypetoken_asm` | `extractSkypeSpacesToken()` |
-| **Transcripts** (Substrate WorkingSetFiles) | Substrate JWT + `Prefer` header | `getValidSubstrateToken()` |
+| **Transcripts** (Substrate WorkingSetFiles; fallback: meeting chat recording message's `amsTranscript` WebVTT link on the Teams async media gateway) | Substrate JWT + `Prefer` header; fallback `Authorization: skype_token …` | `getValidSubstrateToken()`, `extractMessageAuth()` |
 | **Files** (Substrate AllFiles) | Substrate JWT + message auth for user MRI | `getValidSubstrateToken()` + `extractMessageAuth()` |
 | **Profiles** (mt/part fetchShortProfile) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuthWithConfig()` |
 | **Tags** (mt/part teams/{groupId}/tags) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuth()` |

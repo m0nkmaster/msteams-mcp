@@ -27,6 +27,7 @@ import {
   extractActivityTimestamp,
   markdownToTeamsHtml,
   formatTranscriptText,
+  parseVttTranscript,
   parseChannelSuggestion,
   parseChannelResults,
   filterChannelsByName,
@@ -924,6 +925,21 @@ describe('formatTranscriptText', () => {
 
   it('returns empty string for empty entries', () => {
     expect(formatTranscriptText([])).toBe('');
+  });
+});
+
+describe('parseVttTranscript', () => {
+  it('parses Teams WebVTT cues with speakers, ignoring header and cue ids', () => {
+    const vtt = 'WEBVTT\r\n\r\nabc-123/0-1\r\n00:00:32.678 --> 00:00:36.958\r\n<v Hristova, Gabriela>Hello, everybody.</v>\r\n\r\n00:00:37.878 --> 00:00:38.478\n<v Bob>Hey.</v>\n\n00:00:39.000 --> 00:00:40.000\nNo speaker here.\n';
+    expect(parseVttTranscript(vtt)).toEqual([
+      { startTime: '00:00:32.678', endTime: '00:00:36.958', speaker: 'Hristova, Gabriela', text: 'Hello, everybody.' },
+      { startTime: '00:00:37.878', endTime: '00:00:38.478', speaker: 'Bob', text: 'Hey.' },
+      { startTime: '00:00:39.000', endTime: '00:00:40.000', speaker: '', text: 'No speaker here.' },
+    ]);
+  });
+
+  it('returns no entries for an empty transcript', () => {
+    expect(parseVttTranscript('WEBVTT\n\n')).toEqual([]);
   });
 });
 

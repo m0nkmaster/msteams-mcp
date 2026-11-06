@@ -11,8 +11,10 @@
 import { httpRequest } from '../utils/http.js';
 import { type Result, ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
-import { requireSubstrateTokenAsync } from '../utils/auth-guards.js';
-import { formatTranscriptText, type TranscriptEntry } from '../utils/parsers.js';
+import { requireMessageAuth, requireSubstrateTokenAsync } from '../utils/auth-guards.js';
+import { formatTranscriptText, parseVttTranscript, type TranscriptEntry } from '../utils/parsers.js';
+import { getThreadMessages } from './chatsvc-messaging.js';
+import { MAX_THREAD_LIMIT } from '../constants.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -114,6 +116,10 @@ export async function getTranscriptContent(
   const items = data.value as Array<Record<string, unknown>> | undefined;
 
   if (!items || items.length === 0) {
+    // WorkingSetFiles only indexes recordings in the user's own working set; a recording
+    // stored in another organiser's OneDrive is reachable via the meeting chat instead.
+    const fromChat = await getTranscriptFromMeetingChat(threadId);
+    if (fromChat) return fromChat;
     return err(createError(
       ErrorCode.NOT_FOUND,
       'No recording found for this meeting. Transcription may not have been enabled, or the recording has not finished processing.',
@@ -167,17 +173,58 @@ export async function getTranscriptContent(
     text: e.text as string || '',
   }));
 
-  const formattedText = formatTranscriptText(entries);
-  const speakers = [...new Set(entries.map(e => e.speaker).filter(s => s.length > 0))];
-
-  return ok({
+  return ok(buildTranscriptResult(threadId, entries, {
     meetingTitle: viz?.Title as string | undefined,
-    threadId,
     recordingStartTime: props?.RecordingStartDateTime as string | undefined,
     recordingEndTime: props?.RecordingEndDateTime as string | undefined,
+  }));
+}
+
+function buildTranscriptResult(
+  threadId: string,
+  entries: TranscriptEntry[],
+  meta: Pick<TranscriptResult, 'meetingTitle' | 'recordingStartTime' | 'recordingEndTime'>
+): TranscriptResult {
+  return {
+    ...meta,
+    threadId,
     entries,
-    formattedText,
+    formattedText: formatTranscriptText(entries),
     entryCount: entries.length,
-    speakers,
+    speakers: [...new Set(entries.map(e => e.speaker).filter(s => s.length > 0))],
+  };
+}
+
+/**
+ * Fallback: finds the newest recording message in the meeting chat and fetches its
+ * `amsTranscript` (WebVTT) from the Teams async media gateway with the skype token.
+ * Returns null when the chat has no transcript link, so the caller reports NOT_FOUND.
+ */
+async function getTranscriptFromMeetingChat(threadId: string): Promise<Result<TranscriptResult> | null> {
+  const auth = requireMessageAuth();
+  if (!auth.ok) return auth;
+
+  // shortcut: only scans the newest MAX_THREAD_LIMIT messages, page back if busy meeting chats miss recordings
+  const thread = await getThreadMessages(threadId, { limit: MAX_THREAD_LIMIT });
+  if (!thread.ok) return thread;
+
+  const recording = thread.value.messages.find(m => m.links?.some(l => l.contentType === 'amsTranscript'));
+  const transcriptUrl = recording?.links?.find(l => l.contentType === 'amsTranscript')?.url;
+  if (!recording || !transcriptUrl) return null;
+
+  const response = await httpRequest<string>(transcriptUrl, {
+    method: 'GET',
+    headers: { 'Authorization': `skype_token ${auth.value.skypeToken}` },
   });
+  if (!response.ok) return response;
+
+  const entries = parseVttTranscript(String(response.value.data));
+  if (entries.length === 0) {
+    return err(createError(ErrorCode.NOT_FOUND, 'Transcript is empty — no speech was detected during the meeting.'));
+  }
+
+  return ok(buildTranscriptResult(threadId, entries, {
+    meetingTitle: recording.content.replace(/\s*Play$/, '') || undefined,
+    recordingEndTime: recording.timestamp,
+  }));
 }
