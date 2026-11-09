@@ -117,7 +117,7 @@ A saved session holds only the tokens the browser itself had acquired, and Teams
 
 Microsoft redirects Teams users to new hosts without warning (`teams.cloud.microsoft`, then `teams.chat.microsoft.com`), so every host check reads one list: `TEAMS_HOSTS` in `constants.ts`. A host missing from it makes `getAuthStatus()` report an unknown page on a session that is in fact signed in, and manual login then hangs with the window open until the 5-minute timeout. Login detection treats a live MSAL token as the proof of sign-in: new Teams renders none of the `data-tid` elements earlier versions exposed, so waiting on the DOM never completes.
 
-The server uses the system browser via Playwright's `launchPersistentContext()` (Edge on Windows, Chrome on macOS/Linux; ~180MB saved vs bundled Chromium). Only one process can use the profile at a time (Chromium lock); the token-refresh module serializes refreshes to prevent concurrent access and session-state overwrites. If no system browser is found, the error suggests installing Chrome or running `npx playwright install chromium`.
+The server uses the system browser via Playwright's `launchPersistentContext()` (Edge on Windows, Chrome on macOS/Linux; ~180MB saved vs bundled Chromium). Only one process can use the profile at a time (Chromium lock); the token-refresh module serializes refreshes to prevent concurrent access and session-state overwrites. `TEAMS_BROWSER=firefox` switches to Playwright's own Firefox build (installed with `npx playwright install firefox`; a stock Firefox can't be driven) and a separate `browser-profile-firefox/` directory, since profile formats differ; the Chromium lock handling is skipped for it. If the browser can't be launched, the error says how to install it.
 
 ### Token refresh
 

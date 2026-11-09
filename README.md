@@ -86,6 +86,26 @@ Then configure your MCP client:
 
 The server uses your system's Chrome (macOS/Linux) or Edge (Windows) for authentication.
 
+To use Firefox instead, install Playwright's Firefox build and set `TEAMS_BROWSER=firefox` in the server's environment:
+
+```bash
+npx playwright install firefox
+```
+
+```json
+{
+  "mcpServers": {
+    "teams": {
+      "command": "npx",
+      "args": ["-y", "msteams-mcp@latest"],
+      "env": { "TEAMS_BROWSER": "firefox" }
+    }
+  }
+}
+```
+
+`TEAMS_BROWSER` also accepts `chrome` and `msedge`.
+
 ### CLI
 
 The same functionality is also available as a standalone command-line tool, `msteams`. This is useful when you want Teams from a shell or script instead of an MCP client.
@@ -346,7 +366,7 @@ Session files are stored in a user config directory (encrypted):
 - **macOS/Linux**: `~/.teams-mcp-server/`
 - **Windows**: `%APPDATA%\teams-mcp-server\`
 
-Contents: `session-state.json`, `token-cache.json`, `browser-profile/`
+Contents: `session-state.json`, `token-cache.json`, `browser-profile/` (`browser-profile-firefox/` with Firefox)
 
 If your session expires, call `teams_login` or delete the config directory.
 
