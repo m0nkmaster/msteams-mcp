@@ -118,9 +118,10 @@ function bestJwt(
  *   - substrate.office.com/search/SubstrateSearch (old)
  *   - substrate.office.com/SubstrateSearch-Internal.ReadWrite (new)
  *   - outlook.office.com/search/SubstrateSearch-Internal.ReadWrite (some Enterprise tenants)
+ * Matched case-insensitively: MSAL.js v4 can store the scope lowercased.
  */
 export function extractSubstrateToken(state?: SessionState): SubstrateTokenInfo | null {
-  return bestJwt(state, entry => entry.target?.includes('SubstrateSearch') ?? false);
+  return bestJwt(state, entry => entry.target?.toLowerCase().includes('substratesearch') ?? false);
 }
 
 // ============================================================================
