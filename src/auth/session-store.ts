@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { encrypt, decrypt } from './crypto.js';
+import { decryptStorageState } from './msal-cache-crypto.js';
 import { SESSION_EXPIRY_HOURS, TEAMS_HOSTS } from '../constants.js';
 import * as log from '../utils/logger.js';
 
@@ -101,7 +102,11 @@ export function hasSessionState(): boolean {
  * Reads the session state.
  */
 export function readSessionState(): SessionState | null {
-  return readSecure<SessionState>(SESSION_STATE_PATH);
+  const state = readSecure<SessionState>(SESSION_STATE_PATH);
+  // Sessions saved before MSAL v4 decryption was added may still hold
+  // encrypted entries next to their key cookie; decrypt them in memory.
+  if (state) decryptStorageState(state);
+  return state;
 }
 
 /**
@@ -191,7 +196,7 @@ function hasSubstrateSearchToken(
     try {
       const entry = JSON.parse(item.value) as { target?: string; secret?: string };
       if (
-        entry.target?.includes('SubstrateSearch') &&
+        entry.target?.toLowerCase().includes('substratesearch') &&
         typeof entry.secret === 'string' &&
         entry.secret.startsWith('ey')
       ) {

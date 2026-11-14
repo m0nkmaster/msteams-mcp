@@ -24,6 +24,7 @@ import {
   writeSessionState,
 } from '../auth/session-store.js';
 import { clearRegionCache } from '../utils/auth-guards.js';
+import { decryptStorageState } from '../auth/msal-cache-crypto.js';
 import * as log from '../utils/logger.js';
 
 export interface BrowserManager {
@@ -234,6 +235,13 @@ export async function createBrowserContext(
  */
 export async function saveSessionState(context: BrowserContext): Promise<void> {
   const state = await context.storageState();
+  // MSAL.js v4+ encrypts its localStorage cache; store plaintext entries so
+  // token extraction and HTTP refresh can read them. Entries that cannot be
+  // decrypted are kept as-is.
+  const stats = decryptStorageState(state);
+  if (stats.encrypted > 0) {
+    log.debug('browser', `MSAL cache entries: ${stats.encrypted} encrypted, ${stats.decrypted} decrypted`);
+  }
   writeSessionState(state);
   // Clear cached region config so new session values are picked up
   clearRegionCache();
