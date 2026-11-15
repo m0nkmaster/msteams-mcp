@@ -20,6 +20,8 @@ import {
   parsePeopleResults,
   parseEmailResult,
   parseEmailSearchResults,
+  parseGraphEmail,
+  htmlToEmailText,
   classifyEmailType,
   extractObjectId,
   buildOneOnOneConversationId,
@@ -60,6 +62,8 @@ import {
   emailSearchResultWithRecipients,
   emailSearchResultCalendarResponse,
   emailEntitySetsResponse,
+  graphEmailMessage,
+  graphEmailMessageText,
 } from '../__fixtures__/api-responses.js';
 
 describe('stripHtml', () => {
@@ -1301,7 +1305,7 @@ describe('parseEmailResult', () => {
   it('parses a full email result with structured From', () => {
     const result = parseEmailResult(emailSearchResult);
     expect(result).not.toBeNull();
-    expect(result!.id).toBe('AAMkAGE1OWFlZjc0LWYxMjQtNGM1Mi05NzJlLTU0MTU2ZGU1OGM1YQBGAAAAAAEmail');
+    expect(result!.id).toBe('AAMkAGE1OWFlZjc0.RestId-Q3Budget');
     expect(result!.emailType).toBe('email');
     expect(result!.subject).toBe('Q3 Budget Review');
     expect(result!.sender).toBe('Smith, John');
@@ -1371,6 +1375,108 @@ describe('parseEmailResult', () => {
     expect(result).not.toBeNull();
     expect(result!.emailType).toBe('calendar-response');
     expect(result!.subject).toBe('Accepted: Weekly Standup');
+  });
+
+  it('prefers Source.ItemRestId as the id', () => {
+    const result = parseEmailResult({
+      Id: 'AAMkEwsFormatId',
+      Source: { Subject: 'Test', ItemRestId: 'AAMkRestId' },
+    });
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('AAMkRestId');
+  });
+
+  it('derives the REST id from the EWS Id when ItemRestId is absent or empty', () => {
+    const absent = parseEmailResult({
+      Id: 'AAMk+Ews/Id=',
+      Source: { Subject: 'Test' },
+    });
+    expect(absent!.id).toBe('AAMk_Ews-Id=');
+
+    const empty = parseEmailResult({
+      Id: 'AAMk+Ews/Id=',
+      Source: { Subject: 'Test', ItemRestId: '' },
+    });
+    expect(empty!.id).toBe('AAMk_Ews-Id=');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseGraphEmail
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseGraphEmail', () => {
+  it('parses a full Graph message into an EmailDetail', () => {
+    const result = parseGraphEmail(graphEmailMessage);
+    expect(result.id).toBe('AAMkAGE1OWFlZjc0.RestId-Q3Budget');
+    expect(result.subject).toBe('Q3 Budget Review');
+    expect(result.emailType).toBe('email');
+    expect(result.sender).toBe('Smith, John');
+    expect(result.senderEmail).toBe('john.smith@company.com');
+    expect(result.toRecipients).toEqual(['Jane Doe <jane.doe@company.com>', 'noreply@company.com']);
+    expect(result.ccRecipients).toEqual(['Finance Team <finance@company.com>']);
+    expect(result.bccRecipients).toBeUndefined();
+    expect(result.sentAt).toBe('2026-01-20T14:25:00Z');
+    expect(result.receivedAt).toBe('2026-01-20T14:30:00Z');
+    expect(result.importance).toBe('high');
+    expect(result.isRead).toBe(true);
+    expect(result.webLink).toBe('https://outlook.office.com/mail/id/AAMkAGE1OWFlZjc0');
+    expect(result.conversationId).toBe('AAQkAGE1OWFlZjc0LWYxMjQtNGM1Mi05NzJl');
+    expect(result.internetMessageId).toBe('<abc123@company.com>');
+  });
+
+  it('converts the HTML body to readable text', () => {
+    const { body } = parseGraphEmail(graphEmailMessage);
+    expect(body).toContain('Hi team,');
+    expect(body).toContain('Please review the attached budget spreadsheet for Q3.');
+    expect(body).toContain('Revenue up 10%');
+    expect(body).toContain('Regards,\nJohn');
+    // Paragraph breaks survive as newlines; style contents are gone.
+    expect(body).toContain('Hi team,\nPlease review');
+    expect(body).not.toContain('font-family');
+    expect(body).not.toContain('<p>');
+  });
+
+  it('keeps a plain-text body as-is', () => {
+    const result = parseGraphEmail(graphEmailMessageText);
+    expect(result.body).toBe('First line.\nSecond line.');
+    expect(result.links).toBeUndefined();
+    expect(result.attachments).toBeUndefined();
+  });
+
+  it('extracts links from the HTML body', () => {
+    const result = parseGraphEmail(graphEmailMessage);
+    expect(result.links).toEqual([{ url: 'https://example.com/budget', text: 'budget site' }]);
+  });
+
+  it('lists only non-inline attachments', () => {
+    const result = parseGraphEmail(graphEmailMessage);
+    expect(result.attachments).toEqual([
+      { name: 'Q3-Budget.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', size: 18432 },
+    ]);
+  });
+
+  it('classifies calendar-response subjects', () => {
+    const result = parseGraphEmail({ subject: 'Accepted: Weekly Standup', body: { contentType: 'text', content: '' } });
+    expect(result.emailType).toBe('calendar-response');
+  });
+});
+
+describe('htmlToEmailText', () => {
+  it('decodes entities once and handles numeric entities', () => {
+    expect(htmlToEmailText('<p>&amp;lt;b&amp;gt; it&#8217;s &#x2013; ok&#160;now</p>')).toBe('&lt;b&gt; it\u2019s \u2013 ok now');
+  });
+
+  it('drops Outlook conditional comments', () => {
+    expect(htmlToEmailText('<!--[if gte mso 9]><xml><o:Settings>x</o:Settings></xml><![endif]--><p>Hello</p>')).toBe('Hello');
+  });
+
+  it('collapses 3+ newlines to two', () => {
+    expect(htmlToEmailText('<p>one</p><p></p><p></p><p>two</p>')).toBe('one\n\ntwo');
+  });
+
+  it('decodes entities', () => {
+    expect(htmlToEmailText('<p>Fish &amp; Chips &lt;3&nbsp;!</p>')).toBe('Fish & Chips <3 !');
   });
 });
 

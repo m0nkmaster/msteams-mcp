@@ -25,4 +25,4 @@ We deliberately keep messaging, search and Teams-internal concepts on the intern
 - **File upload / attachments** - Graph OneDrive/SharePoint is how the Teams client itself uploads chat files. Being trialled in PR #26 (adds `graph.microsoft.com` to `REFRESH_SCOPES` plus a `teams_upload_file` tool). Two things to resolve before adopting: make the Graph refresh scope non-fatal so a failed Graph token cannot abort the whole refresh (matters for restricted / GCC-High / DoD tenants), and confirm recipients are actually granted access to the uploaded file.
 - **Presence** - `/me/presence` and `/communications/getPresencesByUserId` would close the current "presence not available over HTTP" gap - a genuinely new capability.
 - **Calendar / meetings** - `/me/calendarView` and `/me/events` are cleaner and better documented than the reverse-engineered mt/part calendar API; a candidate to simplify existing code.
-- **Broader M365** - Planner tasks, OneNote, and mail beyond search, where no equivalent internal API exists.
+- **Broader M365** - Planner tasks and OneNote, where no equivalent internal API exists.

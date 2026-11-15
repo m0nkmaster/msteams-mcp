@@ -20,6 +20,7 @@ This is a test script for verifying all MCP tools work correctly before release.
 |------|---------|
 | `teams_search` | Search Teams messages with query operators |
 | `teams_search_email` | Search emails in your mailbox (same auth as Teams) |
+| `teams_get_email` | Read a full email (body, recipients, attachments) by id from teams_search_email |
 | `teams_find_channel` | Find channels by name (your teams + org-wide) |
 | `teams_search_people` | Search for people by name or email |
 | `teams_get_frequent_contacts` | Get frequently contacted people (for name resolution) |
@@ -194,9 +195,10 @@ When reading channel messages with `teams_get_thread`:
 1. teams_search_email query="from:sarah@company.com" → search emails from a person
 2. teams_search_email query="subject:budget sent:>=2026-01-15" → search by subject and date
 3. teams_search_email query="hasattachment:true is:unread" → unread emails with attachments
+4. teams_get_email id="<an id from the results>" → full body (plain text), all recipients, attachment list
 ```
 Returns: subject, sender, recipients, preview, read status, importance, attachments, and pagination.
-Uses the same Substrate token as Teams search — no additional login required.
+Uses the same Substrate token as Teams search — no additional login required. teams_get_email uses the Teams client's Microsoft Graph token.
 
 ### Get a meeting transcript
 ```

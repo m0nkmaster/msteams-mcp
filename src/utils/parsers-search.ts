@@ -2,9 +2,10 @@
  * Search result and email result parsing from Substrate API responses.
  */
 
-import type { TeamsSearchResult, EmailSearchResult, EmailType } from '../types/teams.js';
+import type { TeamsSearchResult, EmailSearchResult, EmailDetail, EmailType } from '../types/teams.js';
+import type { RawGraphMessage, RawGraphRecipient } from '../types/api-responses.js';
 import { MIN_CONTENT_LENGTH } from '../constants.js';
-import { extractLinks, stripHtml } from './parsers-html.js';
+import { extractLinks, stripHtml, decodeHtmlEntities } from './parsers-html.js';
 import { extractMessageTimestamp, buildMessageLink, type LinkContext } from './parsers-identifiers.js';
 
 /**
@@ -218,7 +219,11 @@ export function parseEmailResult(item: Record<string, unknown>): EmailSearchResu
   // Skip results with no meaningful content
   if (!subject && preview.length < MIN_CONTENT_LENGTH) return null;
 
-  const id = item.Id as string
+  // Graph's REST id (what teams_get_email needs) is the EWS-format Id made
+  // URL-safe; Substrate returns it as ItemRestId, so derive it only as a fallback.
+  const itemRestId = source?.ItemRestId;
+  const id = (typeof itemRestId === 'string' && itemRestId.length > 0 ? itemRestId : undefined)
+    || (item.Id as string | undefined)?.replace(/\//g, '-').replace(/\+/g, '_')
     || item.ReferenceId as string
     || `email-${Date.now()}`;
 
@@ -399,4 +404,83 @@ export function parseEmailSearchResults(
   }
 
   return { results, total, filteredCount: filteredCount > 0 ? filteredCount : undefined };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Graph Email Parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Converts Outlook HTML to readable plain text.
+ *
+ * `stripHtml` collapses all whitespace, which turns a multi-paragraph email
+ * into one dense line — so block-level breaks are converted to newlines first.
+ * Comments (including Outlook `<!--[if mso]>` blocks) and style/script/head
+ * contents are removed outright.
+ */
+export function htmlToEmailText(html: string): string {
+  const withoutTags = html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(style|script|head)\b[\s\S]*?<\/\1>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|tr|h[1-6])\s*>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ');
+  return decodeHtmlEntities(withoutTags)
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Formats a Graph recipient as "Name <address>", or just the address. */
+function formatRecipient(recipient: RawGraphRecipient): string | undefined {
+  const address = recipient.emailAddress?.address;
+  const name = recipient.emailAddress?.name;
+  if (name && address) return `${name} <${address}>`;
+  return address || name || undefined;
+}
+
+function formatRecipients(recipients: RawGraphRecipient[] | undefined): string[] | undefined {
+  if (!Array.isArray(recipients)) return undefined;
+  const parsed = recipients.map(formatRecipient).filter((r): r is string => !!r);
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+/**
+ * Parses a Microsoft Graph /me/messages/{id} response into an EmailDetail,
+ * with HTML bodies converted to readable plain text (links listed separately).
+ */
+export function parseGraphEmail(raw: RawGraphMessage): EmailDetail {
+  const subject = raw.subject ?? '';
+  const bodyContent = raw.body?.content ?? '';
+  const bodyIsHtml = raw.body?.contentType?.toLowerCase() !== 'text';
+  const body = bodyIsHtml ? htmlToEmailText(bodyContent) : bodyContent;
+
+  const senderAddress = raw.from?.emailAddress ?? raw.sender?.emailAddress;
+  const links = bodyIsHtml ? extractLinks(bodyContent) : [];
+
+  const attachments = (raw.attachments ?? [])
+    .filter(a => !a.isInline)
+    .map(a => ({ name: a.name ?? '', contentType: a.contentType, size: a.size }));
+
+  return {
+    id: raw.id ?? '',
+    subject,
+    sender: senderAddress?.name ?? '',
+    senderEmail: senderAddress?.address,
+    toRecipients: formatRecipients(raw.toRecipients),
+    ccRecipients: formatRecipients(raw.ccRecipients),
+    bccRecipients: formatRecipients(raw.bccRecipients),
+    sentAt: raw.sentDateTime,
+    receivedAt: raw.receivedDateTime,
+    importance: raw.importance,
+    isRead: raw.isRead,
+    webLink: raw.webLink,
+    conversationId: raw.conversationId,
+    internetMessageId: raw.internetMessageId,
+    emailType: classifyEmailType(subject),
+    body,
+    links: links.length > 0 ? links : undefined,
+    attachments: attachments.length > 0 ? attachments : undefined,
+  };
 }

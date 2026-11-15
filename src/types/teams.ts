@@ -76,3 +76,43 @@ export interface EmailSearchResult {
   /** Links extracted from email body. */
   links?: ExtractedLink[];
 }
+
+/** Full email detail from Microsoft Graph /me/messages/{id}. */
+export interface EmailDetail {
+  /** Graph message id. */
+  id: string;
+  /** Email subject line. */
+  subject: string;
+  /** Sender display name. */
+  sender: string;
+  /** Sender email address. */
+  senderEmail?: string;
+  /** To recipients, formatted "Name <address>". */
+  toRecipients?: string[];
+  /** CC recipients, formatted "Name <address>". */
+  ccRecipients?: string[];
+  /** BCC recipients, formatted "Name <address>". */
+  bccRecipients?: string[];
+  /** When the email was sent (ISO timestamp). */
+  sentAt?: string;
+  /** When the email was received (ISO timestamp). */
+  receivedAt?: string;
+  /** Importance level (normal, high, low). */
+  importance?: string;
+  /** Whether the email has been read. */
+  isRead?: boolean;
+  /** Web link to open the email in Outlook. */
+  webLink?: string;
+  /** The conversation/thread ID for this email chain. */
+  conversationId?: string;
+  /** RFC 5322 message id. */
+  internetMessageId?: string;
+  /** Classification: 'email', 'calendar-response', or 'notification'. */
+  emailType: EmailType;
+  /** Full email body as plain text. */
+  body: string;
+  /** Links extracted from the HTML body. */
+  links?: ExtractedLink[];
+  /** Non-inline attachments (metadata only; use the email's webLink to download). */
+  attachments?: { name: string; contentType?: string; size?: number }[];
+}

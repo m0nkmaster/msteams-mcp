@@ -7,6 +7,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchMessages, searchEmails, searchChannels } from '../api/substrate-api.js';
+import { getEmail } from '../api/graph-mail-api.js';
 import { getThreadMessages, getConsumptionHorizon, markAsRead } from '../api/chatsvc-api.js';
 import { parseTeamsMessageUrl } from '../utils/parsers.js';
 import { ErrorCode, createError } from '../types/errors.js';
@@ -53,6 +54,10 @@ export const SearchEmailInputSchema = z.object({
   maxResults: z.number().optional().default(DEFAULT_PAGE_SIZE),
   from: z.number().min(0).optional().default(0),
   size: z.number().min(1).max(MAX_PAGE_SIZE).optional().default(DEFAULT_PAGE_SIZE),
+});
+
+export const GetEmailInputSchema = z.object({
+  id: z.string().min(1, 'Email id cannot be empty'),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,7 +155,7 @@ const findChannelToolDefinition: Tool = {
 
 const searchEmailToolDefinition: Tool = {
   name: 'teams_search_email',
-  description: 'Search emails in the user\'s mailbox. Returns matching emails with subject, sender, recipients, timestamp, preview, read status, and pagination info. Supports the same search operators as Outlook: from:email, to:name, subject:"text", hasattachment:true, sent:YYYY-MM-DD, sent:>=YYYY-MM-DD, sent:today, is:read, is:unread. Results sorted by recency. Uses the same authentication as Teams — no additional login required.',
+  description: 'Search emails in the user\'s mailbox. Returns matching emails with subject, sender, recipients, timestamp, preview, read status, and pagination info. Each result\'s id can be passed to teams_get_email to fetch the full body, recipients and attachment list. Supports the same search operators as Outlook: from:email, to:name, subject:"text", hasattachment:true, sent:YYYY-MM-DD, sent:>=YYYY-MM-DD, sent:today, is:read, is:unread. Results sorted by recency. Uses the same authentication as Teams — no additional login required.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -172,6 +177,21 @@ const searchEmailToolDefinition: Tool = {
       },
     },
     required: ['query'],
+  },
+};
+
+const getEmailToolDefinition: Tool = {
+  name: 'teams_get_email',
+  description: 'Fetch the full content of one email: complete body, all recipients (to/cc/bcc), and the attachment list (names, types, sizes). Pass an id from teams_search_email results — search returns only a short preview, use this to read the whole message. The body is returned as readable plain text, with links listed separately. Read-only; does not mark the email as read or download attachments.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      id: {
+        type: 'string',
+        description: 'Email id from a teams_search_email result.',
+      },
+    },
+    required: ['id'],
   },
 };
 
@@ -362,6 +382,13 @@ async function handleSearchEmail(
   };
 }
 
+async function handleGetEmail(
+  input: z.infer<typeof GetEmailInputSchema>
+): Promise<ToolResult> {
+  const result = await getEmail(input.id);
+  return handleApiResult(result, (email) => ({ email }));
+}
+
 async function handleFindChannel(
   input: z.infer<typeof FindChannelInputSchema>
 ): Promise<ToolResult> {
@@ -402,5 +429,11 @@ export const searchEmailTool: RegisteredTool<typeof SearchEmailInputSchema> = {
   handler: handleSearchEmail,
 };
 
+export const getEmailTool: RegisteredTool<typeof GetEmailInputSchema> = {
+  definition: getEmailToolDefinition,
+  schema: GetEmailInputSchema,
+  handler: handleGetEmail,
+};
+
 /** All search-related tools. */
-export const searchTools = [searchTool, getThreadTool, findChannelTool, searchEmailTool];
+export const searchTools = [searchTool, getThreadTool, findChannelTool, searchEmailTool, getEmailTool];
