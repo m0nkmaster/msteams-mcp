@@ -3,11 +3,11 @@
  *
  * `teams_search_email` results carry the message's REST id (ItemRestId), which
  * Graph accepts directly. Older results may hold the EWS-format Substrate `Id`;
- * when a direct GET fails those are translated once via translateExchangeIds
+ * when a direct GET of one fails it is translated once via translateExchangeIds
  * (ewsId → restId) and retried.
  *
- * Auth: the Teams client's own Graph token (Mail.ReadWrite), obtained on demand
- * via `requireGraphTokenAsync()`. Like file downloads it is optional: a failure
+ * Auth: a Graph token with a Mail.* scope, obtained on demand via
+ * `requireGraphMailTokenAsync()` (Teams' own cached Graph token may lack one). Like file downloads it is optional: a failure
  * never surfaces as AUTH_REQUIRED/AUTH_EXPIRED, so it can't trigger the
  * server's auto-login.
  */
@@ -17,8 +17,8 @@ import { type Result, ok, err } from '../types/result.js';
 import { type McpError, ErrorCode, createError } from '../types/errors.js';
 import type { RawGraphMessage, RawGraphTranslatedIds } from '../types/api-responses.js';
 import type { EmailDetail } from '../types/teams.js';
-import { requireGraphTokenAsync } from '../utils/auth-guards.js';
-import { invalidateAccessToken } from '../auth/token-extractor.js';
+import { requireGraphMailTokenAsync } from '../utils/auth-guards.js';
+import { graphAuthError } from './graph-files-api.js';
 import { parseGraphEmail } from '../utils/parsers.js';
 import { GRAPH_API } from '../utils/api-config.js';
 
@@ -46,30 +46,29 @@ export async function getEmail(
       { suggestions: ["Use an 'id' value from teams_search_email results"] }));
   }
 
-  const tokenResult = await requireGraphTokenAsync();
+  const tokenResult = await requireGraphMailTokenAsync();
   if (!tokenResult.ok) return tokenResult;
   const token = tokenResult.value;
 
   let response = await fetchMessage(id, token);
-  if (!response.ok) {
-    const authError = handleGraphAuthError(response.error, token);
-    if (authError) return authError;
-
-    if (response.error.code === ErrorCode.INVALID_INPUT || response.error.code === ErrorCode.NOT_FOUND) {
-      // The id may be EWS-format (older search results): translate and retry once.
-      const restId = await translateToRestId(id, token);
-      if (restId && restId !== id) {
-        response = await fetchMessage(restId, token);
-        if (response.ok) return ok(parseGraphEmail(response.value.data, options.format ?? 'text'));
-        const retryAuthError = handleGraphAuthError(response.error, token);
-        if (retryAuthError) return retryAuthError;
-      }
-      return err(emailNotFoundError(id));
-    }
-    return response;
+  if (!response.ok && isEwsId(id)
+    && (response.error.code === ErrorCode.INVALID_INPUT || response.error.code === ErrorCode.NOT_FOUND)) {
+    // Older search results hold EWS-format ids: translate and retry once.
+    const translated = await translateToRestId(id, token);
+    if (!translated.ok) return err(mapEmailError(translated.error, token, id));
+    if (translated.value && translated.value !== id) response = await fetchMessage(translated.value, token);
   }
+  if (!response.ok) return err(mapEmailError(response.error, token, id));
 
   return ok(parseGraphEmail(response.value.data, options.format ?? 'text'));
+}
+
+/**
+ * EWS ids are standard base64 (`+`, `/`); Graph REST ids are base64url. An id
+ * with neither is identical in both formats, so translating it is pointless.
+ */
+function isEwsId(id: string): boolean {
+  return /[+/]/.test(id);
 }
 
 function fetchMessage(id: string, token: string) {
@@ -80,8 +79,8 @@ function fetchMessage(id: string, token: string) {
   });
 }
 
-/** Translates an EWS-format id to a Graph REST id; undefined when untranslatable. */
-async function translateToRestId(id: string, token: string): Promise<string | undefined> {
+/** Translates an EWS-format id to a Graph REST id (undefined when Graph returns none). */
+async function translateToRestId(id: string, token: string): Promise<Result<string | undefined>> {
   const response = await httpRequest<RawGraphTranslatedIds>(GRAPH_API.translateExchangeIds, {
     method: 'POST',
     headers: { ...graphHeaders(token), 'Content-Type': 'application/json' },
@@ -91,33 +90,21 @@ async function translateToRestId(id: string, token: string): Promise<string | un
       targetIdType: 'restId',
     }),
   });
-  if (!response.ok) return undefined;
-  return response.value.data.value?.[0]?.targetId;
+  if (!response.ok) return response;
+  return ok(response.value.data.value?.[0]?.targetId);
 }
 
 /**
- * Maps a Graph auth failure the same way file downloads do: a rejected token is
- * discarded and reported as retryable API_ERROR, a forbidden token as
- * ACCESS_DENIED — never AUTH_REQUIRED/AUTH_EXPIRED, which would trigger
- * auto-login. Returns null for non-auth errors.
+ * Auth failures go through the shared Graph mapping (never auto-login), a 404
+ * becomes an actionable NOT_FOUND that keeps Graph's message, and anything else
+ * (400s, throttling, 5xx) passes through with its own message and retryable flag.
  */
-function handleGraphAuthError(error: McpError, token: string): Result<EmailDetail> | null {
-  if (error.code === ErrorCode.AUTH_EXPIRED) {
-    invalidateAccessToken(token);
-    return err(createError(ErrorCode.API_ERROR,
-      'Microsoft Graph rejected its access token; it has been discarded, so a retry will request a new one.',
-      { retryable: true }));
-  }
-  if (error.code === ErrorCode.AUTH_REQUIRED) {
-    return err(createError(ErrorCode.ACCESS_DENIED,
-      `You don't have access to this email: ${error.message}`, { retryable: false }));
-  }
-  return null;
-}
-
-function emailNotFoundError(id: string): McpError {
+function mapEmailError(error: McpError, token: string, id: string): McpError {
+  const authError = graphAuthError(error, token, 'email');
+  if (authError) return authError;
+  if (error.code !== ErrorCode.NOT_FOUND) return error;
   return createError(ErrorCode.NOT_FOUND,
-    'Email not found. The id may be stale or belong to a different mailbox.',
+    `Email not found. The id may be stale or belong to a different mailbox. (${error.message})`,
     {
       retryable: false,
       suggestions: ["Use an 'id' value from teams_search_email results", `Verify the id: ${id.slice(0, 40)}…`],

@@ -144,7 +144,7 @@ Different Teams APIs use different auth mechanisms:
 | **Profiles** (mt/part fetchShortProfile) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuthWithConfig()` |
 | **Tags** (mt/part teams/{groupId}/tags) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuth()` |
 | **File downloads** (Graph drive items; SharePoint URLs resolved via `/shares`) | Teams client's Graph JWT (aud `https://graph.microsoft.com`); the resulting `downloadUrl` is pre-authenticated and gets no header | `requireGraphTokenAsync()` |
-| **Email read** (Graph `/me/messages/{id}`) | Teams client's Graph JWT (`Mail.ReadWrite`); EWS-format ids are translated via `translateExchangeIds` | `requireGraphTokenAsync()` |
+| **Email read** (Graph `/me/messages/{id}`) | Graph JWT whose `scp` includes `Mail.*` (the Graph token Teams caches may not, so a `.default` one is minted); EWS-format ids are translated via `translateExchangeIds` | `requireGraphMailTokenAsync()` |
 | **Assignments** (assignments.edu.cloud.microsoft) | JWT Bearer for the Assignments app (aud `8f348934-…`) + `MS-Int-AppID: assignments-ui` header | `requireAssignmentsTokenAsync()` |
 
 The `extract*`/`getValid*` helpers live in `auth/token-extractor`; the `require*` guards live in `utils/auth-guards`. Notes:
@@ -194,7 +194,7 @@ Everything user-facing is derived from the tool definitions, so a new tool is
 callable, documented and type-coerced with no CLI changes:
 
 - `src/cli/resolve.ts` resolves a typed command to a tool name (exact, then
-  `teams_<cmd>`, `teams_get_<cmd>`, `teams_search_<cmd>`, a unique
+  `teams_<cmd>`, `teams_search_<cmd>`, `teams_get_<cmd>`, a unique
   `teams_<cmd>*` prefix, then a unique substring match), and parses flags with
   `node:util` `parseArgs` using an options config built from the tool's JSON
   input schema. Types come from the schema, so there is no hand-maintained

@@ -40,6 +40,8 @@ describe('resolveToolName', () => {
     ['assignment', 'teams_get_assignment'],
     ['assignments', 'teams_list_assignments'],
     ['SEARCH', 'teams_search'],
+    ['email', 'teams_search_email'],
+    ['get_email', 'teams_get_email'],
   ])('resolves %s', (command, expected) => {
     expect(resolveToolName(names, command)).toBe(expected);
   });

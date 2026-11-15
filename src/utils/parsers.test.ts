@@ -1406,6 +1406,11 @@ describe('parseEmailResult', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('parseGraphEmail', () => {
+  it("reports bodyFormat 'text' for a plain-text email even when html is requested", () => {
+    const parsed = parseGraphEmail({ id: 'x', body: { contentType: 'text', content: 'a < b' } }, 'html');
+    expect(parsed).toMatchObject({ bodyFormat: 'text', body: 'a < b' });
+  });
+
   it('parses a full Graph message into an EmailDetail', () => {
     const result = parseGraphEmail(graphEmailMessage);
     expect(result.id).toBe('AAMkAGE1OWFlZjc0.RestId-Q3Budget');
@@ -1471,6 +1476,14 @@ describe('parseGraphEmail', () => {
 });
 
 describe('htmlToEmailText', () => {
+  it('decodes entities once and handles numeric entities', () => {
+    expect(htmlToEmailText('<p>&amp;lt;b&amp;gt; it&#8217;s &#x2013; ok&#160;now</p>')).toBe('&lt;b&gt; it\u2019s \u2013 ok now');
+  });
+
+  it('drops Outlook conditional comments', () => {
+    expect(htmlToEmailText('<!--[if gte mso 9]><xml><o:Settings>x</o:Settings></xml><![endif]--><p>Hello</p>')).toBe('Hello');
+  });
+
   it('collapses 3+ newlines to two', () => {
     expect(htmlToEmailText('<p>one</p><p></p><p></p><p>two</p>')).toBe('one\n\ntwo');
   });

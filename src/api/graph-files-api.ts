@@ -26,7 +26,7 @@ import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { httpRequest } from '../utils/http.js';
 import { type Result, ok, err } from '../types/result.js';
-import { ErrorCode, createError } from '../types/errors.js';
+import { type McpError, ErrorCode, createError } from '../types/errors.js';
 import { requireGraphTokenAsync } from '../utils/auth-guards.js';
 import { invalidateAccessToken } from '../auth/token-extractor.js';
 import { DOWNLOAD_INACTIVITY_TIMEOUT_MS } from '../constants.js';
@@ -92,15 +92,8 @@ export async function downloadFile(url: string, outputPath: string): Promise<Res
     headers: { Authorization: `Bearer ${tokenResult.value}`, Accept: 'application/json' },
   });
   if (!meta.ok) {
-    if (meta.error.code === ErrorCode.AUTH_EXPIRED) {
-      invalidateAccessToken(tokenResult.value);
-      return err(createError(ErrorCode.API_ERROR,
-        'Microsoft Graph rejected its access token; it has been discarded, so a retry will request a new one.',
-        { retryable: true }));
-    }
-    if (meta.error.code === ErrorCode.AUTH_REQUIRED) {
-      return err(createError(ErrorCode.ACCESS_DENIED, `You don't have access to this file: ${meta.error.message}`, { retryable: false }));
-    }
+    const authError = graphAuthError(meta.error, tokenResult.value, 'file');
+    if (authError) return err(authError);
     if (meta.error.code === ErrorCode.NOT_FOUND) {
       return err(createError(ErrorCode.NOT_FOUND,
         'File not found. It may have been moved or deleted, or the URL is not a file you can access.', { retryable: false }));
@@ -193,4 +186,23 @@ async function streamToFile(
     await file.close().catch(() => {});
     if (!complete) await unlink(outputPath).catch(() => {});
   }
+}
+
+/**
+ * Maps a Graph auth failure for an optional Graph feature: a rejected token is
+ * discarded and reported as retryable API_ERROR, a forbidden one as
+ * ACCESS_DENIED. Never AUTH_REQUIRED/AUTH_EXPIRED, which would trigger the
+ * server's auto-login. Returns null for non-auth errors.
+ */
+export function graphAuthError(error: McpError, token: string, subject: string): McpError | null {
+  if (error.code === ErrorCode.AUTH_EXPIRED) {
+    invalidateAccessToken(token);
+    return createError(ErrorCode.API_ERROR,
+      'Microsoft Graph rejected its access token; it has been discarded, so a retry will request a new one.',
+      { retryable: true });
+  }
+  if (error.code === ErrorCode.AUTH_REQUIRED) {
+    return createError(ErrorCode.ACCESS_DENIED, `You don't have access to this ${subject}: ${error.message}`, { retryable: false });
+  }
+  return null;
 }

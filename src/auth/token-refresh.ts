@@ -24,6 +24,7 @@ import {
   extractSubstrateToken,
   getValidAssignmentsToken,
   getValidGraphToken,
+  getValidGraphMailToken,
 } from './token-extractor.js';
 import { clearTokenCache } from './session-store.js';
 import { refreshTokensViaHttp, type OnDemandResource } from './token-refresh-http.js';
@@ -78,6 +79,11 @@ export function refreshAssignmentsToken(): Promise<Result<string>> {
 /** Acquire the optional Microsoft Graph token (used for file downloads). */
 export function refreshGraphToken(): Promise<Result<string>> {
   return refreshOnDemandToken('graph', 'Microsoft Graph', getValidGraphToken);
+}
+
+/** Acquire a Microsoft Graph token that grants mail access (used for email reads). */
+export function refreshGraphMailToken(): Promise<Result<string>> {
+  return refreshOnDemandToken('graph', 'Microsoft Graph mail', getValidGraphMailToken);
 }
 
 async function refreshCoreTokens(): Promise<Result<void>> {

@@ -5,7 +5,7 @@
 import type { TeamsSearchResult, EmailSearchResult, EmailDetail, EmailType } from '../types/teams.js';
 import type { RawGraphMessage, RawGraphRecipient } from '../types/api-responses.js';
 import { MIN_CONTENT_LENGTH } from '../constants.js';
-import { extractLinks, stripHtml } from './parsers-html.js';
+import { extractLinks, stripHtml, decodeHtmlEntities } from './parsers-html.js';
 import { extractMessageTimestamp, buildMessageLink, type LinkContext } from './parsers-identifiers.js';
 
 /**
@@ -415,22 +415,17 @@ export function parseEmailSearchResults(
  *
  * `stripHtml` collapses all whitespace, which turns a multi-paragraph email
  * into one dense line — so block-level breaks are converted to newlines first.
- * Style/script/head contents are removed outright (Outlook HTML carries large
- * embedded style blocks).
+ * Comments (including Outlook `<!--[if mso]>` blocks) and style/script/head
+ * contents are removed outright.
  */
 export function htmlToEmailText(html: string): string {
-  return html
+  const withoutTags = html
+    .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<(style|script|head)\b[\s\S]*?<\/\1>/gi, '')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div|li|tr|h[1-6])\s*>/gi, '\n')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
+    .replace(/<[^>]*>/g, ' ');
+  return decodeHtmlEntities(withoutTags)
     .replace(/[^\S\n]+/g, ' ')
     .replace(/ *\n */g, '\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -455,13 +450,15 @@ function formatRecipients(recipients: RawGraphRecipient[] | undefined): string[]
  * Parses a Microsoft Graph /me/messages/{id} response into an EmailDetail.
  *
  * `format` controls the body: 'html' returns the raw body content, 'text'
- * (default) converts HTML bodies to readable plain text.
+ * (default) converts HTML bodies to readable plain text. `bodyFormat` reports
+ * what was actually returned: a plain-text email is 'text' even if 'html' was asked for.
  */
 export function parseGraphEmail(raw: RawGraphMessage, format: 'text' | 'html' = 'text'): EmailDetail {
   const subject = raw.subject ?? '';
   const bodyContent = raw.body?.content ?? '';
   const bodyIsHtml = raw.body?.contentType?.toLowerCase() !== 'text';
-  const body = format === 'html' || !bodyIsHtml ? bodyContent : htmlToEmailText(bodyContent);
+  const bodyFormat = format === 'html' && bodyIsHtml ? 'html' : 'text';
+  const body = bodyFormat === 'html' || !bodyIsHtml ? bodyContent : htmlToEmailText(bodyContent);
 
   const senderAddress = raw.from?.emailAddress ?? raw.sender?.emailAddress;
   const links = bodyIsHtml ? extractLinks(bodyContent) : [];
@@ -487,7 +484,7 @@ export function parseGraphEmail(raw: RawGraphMessage, format: 'text' | 'html' = 
     conversationId: raw.conversationId,
     internetMessageId: raw.internetMessageId,
     emailType: classifyEmailType(subject),
-    bodyFormat: format,
+    bodyFormat,
     body,
     links: links.length > 0 ? links : undefined,
     attachments: attachments.length > 0 ? attachments : undefined,

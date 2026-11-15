@@ -48,17 +48,26 @@ export function extractLinks(html: string): ExtractedLink[] {
  * Strips HTML tags from content for display.
  */
 export function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
+  return decodeHtmlEntities(html.replace(/<[^>]*>/g, ' '))
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+const NAMED_ENTITIES: Record<string, string> = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+/**
+ * Decodes common named entities plus decimal/hex numeric ones in a single
+ * pass, so double-escaped text (`&amp;lt;`) decodes once to `&lt;`.
+ * Unknown entities are left as-is.
+ */
+export function decodeHtmlEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+    if (entity[0] !== '#') return NAMED_ENTITIES[entity.toLowerCase()] ?? match;
+    const codePoint = entity[1] === 'x' || entity[1] === 'X'
+      ? parseInt(entity.slice(2), 16)
+      : parseInt(entity.slice(1), 10);
+    return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match;
+  });
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   extractSubstrateToken,
   extractAssignmentsToken,
   extractGraphToken,
+  extractGraphMailToken,
   extractSkypeSpacesToken,
   extractRegionConfig,
   getUserProfile,
@@ -23,7 +24,7 @@ import {
 import { clearTokenCache } from '../auth/session-store.js';
 import { DEFAULT_TEAMS_BASE_URL } from './api-config.js';
 import { TOKEN_REFRESH_THRESHOLD_MS, ASSIGNMENTS_UNAVAILABLE_TTL_MS } from '../constants.js';
-import { refreshTokensViaBrowser, refreshAssignmentsToken, refreshGraphToken } from '../auth/token-refresh.js';
+import { refreshTokensViaBrowser, refreshAssignmentsToken, refreshGraphToken, refreshGraphMailToken } from '../auth/token-refresh.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Guard Types
@@ -98,11 +99,13 @@ function onDemandTokenGuard(
 
 const assignmentsGuard = onDemandTokenGuard(extractAssignmentsToken, refreshAssignmentsToken);
 const graphGuard = onDemandTokenGuard(extractGraphToken, refreshGraphToken);
+const graphMailGuard = onDemandTokenGuard(() => extractGraphMailToken(), refreshGraphMailToken);
 
 /** Forget remembered refusals for optional resources; called on explicit login. */
 export function resetAssignmentsAvailability(): void {
   assignmentsGuard.reset();
   graphGuard.reset();
+  graphMailGuard.reset();
 }
 
 /** Require the EDU Assignments token, preserving auth, access and transient errors. */
@@ -113,6 +116,11 @@ export function requireAssignmentsTokenAsync(): Promise<Result<string, McpError>
 /** Require a Microsoft Graph token (optional; used for file downloads). */
 export function requireGraphTokenAsync(): Promise<Result<string, McpError>> {
   return graphGuard.require();
+}
+
+/** Require a Microsoft Graph token with a Mail.* scope (optional; used for email reads). */
+export function requireGraphMailTokenAsync(): Promise<Result<string, McpError>> {
+  return graphMailGuard.require();
 }
 
 /**

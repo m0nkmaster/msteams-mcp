@@ -56,15 +56,15 @@ const normalise = (name: string): string => name.replace(/_/g, '').toLowerCase()
 /**
  * Resolves a typed command to a tool name.
  *
- * Tries, in order: the exact name, `teams_<cmd>`, `teams_get_<cmd>`,
- * `teams_search_<cmd>`, a unique `teams_<cmd>*` prefix, then a unique
+ * Tries, in order: the exact name, `teams_<cmd>`, `teams_search_<cmd>`,
+ * `teams_get_<cmd>` (search first, so `email` stays teams_search_email), a unique `teams_<cmd>*` prefix, then a unique
  * substring match ignoring underscores. So `search`, `get_thread`, `thread`,
  * `send` and `markread` all land on the right tool.
  */
 export function resolveToolName(names: string[], command: string): string {
   const cmd = command.toLowerCase();
 
-  const exact = [cmd, `teams_${cmd}`, `teams_get_${cmd}`, `teams_search_${cmd}`]
+  const exact = [cmd, `teams_${cmd}`, `teams_search_${cmd}`, `teams_get_${cmd}`]
     .find(name => names.includes(name));
   if (exact) return exact;
 

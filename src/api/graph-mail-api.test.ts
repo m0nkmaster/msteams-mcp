@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { httpRequest } from '../utils/http.js';
-import { requireGraphTokenAsync } from '../utils/auth-guards.js';
+import { requireGraphMailTokenAsync } from '../utils/auth-guards.js';
 import { invalidateAccessToken } from '../auth/token-extractor.js';
 import { ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
@@ -8,7 +8,7 @@ import { getEmail } from './graph-mail-api.js';
 import { graphEmailMessage } from '../__fixtures__/api-responses.js';
 
 vi.mock('../utils/http.js', () => ({ httpRequest: vi.fn() }));
-vi.mock('../utils/auth-guards.js', () => ({ requireGraphTokenAsync: vi.fn() }));
+vi.mock('../utils/auth-guards.js', () => ({ requireGraphMailTokenAsync: vi.fn() }));
 vi.mock('../auth/token-extractor.js', () => ({ invalidateAccessToken: vi.fn() }));
 
 const REST_ID = 'AAMkAGE1OWFlZjc0.RestId-Q3Budget';
@@ -26,7 +26,7 @@ function translated(targetId: string | undefined) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(requireGraphTokenAsync).mockResolvedValue(ok('graph-token'));
+  vi.mocked(requireGraphMailTokenAsync).mockResolvedValue(ok('graph-token'));
 });
 
 describe('getEmail', () => {
@@ -70,12 +70,37 @@ describe('getEmail', () => {
     expect(mockHttp).toHaveBeenCalledTimes(2);
   });
 
-  it('reports not found when translation itself fails', async () => {
+  it('passes through a translation failure with its own code and retryability', async () => {
     mockHttp
       .mockResolvedValueOnce(err(createError(ErrorCode.NOT_FOUND, 'HTTP 404')))
-      .mockResolvedValueOnce(err(createError(ErrorCode.INVALID_INPUT, 'HTTP 400')));
+      .mockResolvedValueOnce(err(createError(ErrorCode.RATE_LIMITED, 'HTTP 429', { retryable: true })));
 
-    expect(await getEmail(EWS_ID)).toMatchObject({ ok: false, error: { code: ErrorCode.NOT_FOUND } });
+    expect(await getEmail(EWS_ID)).toMatchObject({ ok: false, error: { code: ErrorCode.RATE_LIMITED, retryable: true } });
+  });
+
+  it('discards the token when translation is rejected', async () => {
+    mockHttp
+      .mockResolvedValueOnce(err(createError(ErrorCode.NOT_FOUND, 'HTTP 404')))
+      .mockResolvedValueOnce(err(createError(ErrorCode.AUTH_EXPIRED, 'HTTP 401')));
+
+    expect(await getEmail(EWS_ID)).toMatchObject({ ok: false, error: { code: ErrorCode.API_ERROR, retryable: true } });
+    expect(invalidateAccessToken).toHaveBeenCalledWith('graph-token');
+  });
+
+  it('does not translate a REST id that is not found', async () => {
+    mockHttp.mockResolvedValueOnce(err(createError(ErrorCode.NOT_FOUND, 'HTTP 404: ErrorItemNotFound')));
+
+    const result = await getEmail(REST_ID);
+
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.NOT_FOUND } });
+    expect(result.ok || result.error.message).toContain('ErrorItemNotFound');
+    expect(mockHttp).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Graph's message on a 400 instead of reporting not found", async () => {
+    mockHttp.mockResolvedValueOnce(err(createError(ErrorCode.INVALID_INPUT, 'HTTP 400: Invalid $expand')));
+
+    expect(await getEmail(REST_ID)).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT, message: 'HTTP 400: Invalid $expand' } });
   });
 
   it('discards a rejected Graph token without triggering Teams re-login', async () => {
@@ -95,7 +120,7 @@ describe('getEmail', () => {
 
   it('passes through an unavailable Graph token unchanged', async () => {
     const unavailable = err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED, 'Microsoft Graph could not be authorized'));
-    vi.mocked(requireGraphTokenAsync).mockResolvedValue(unavailable);
+    vi.mocked(requireGraphMailTokenAsync).mockResolvedValue(unavailable);
 
     expect(await getEmail(REST_ID)).toEqual(unavailable);
     expect(mockHttp).not.toHaveBeenCalled();
@@ -103,7 +128,7 @@ describe('getEmail', () => {
 
   it.each(['', 'has space', 'has\ttab'])('rejects an invalid id before using the token: %s', async id => {
     expect(await getEmail(id)).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
-    expect(requireGraphTokenAsync).not.toHaveBeenCalled();
+    expect(requireGraphMailTokenAsync).not.toHaveBeenCalled();
   });
 
   it('passes the requested format to the parser', async () => {
