@@ -157,6 +157,8 @@ Two layers work together:
 1. **Persistent browser profile** (`browser-profile/`): retains Microsoft session cookies, extensions, and autofill across launches; enables silent headless re-auth.
 2. **Encrypted session state** (`session-state.json`): Playwright `storageState()` output from which tokens are extracted for browserless API calls.
 
+MSAL.js v4+ encrypts its own localStorage cache (`{id, nonce, data}` envelopes; HKDF-SHA256 + AES-256-GCM keyed by the `msal.cache.encryption` session cookie). `auth/msal-cache-crypto.ts` decrypts those entries in Node when the session is saved, when login is being detected, and when an older session is read; entries it cannot decrypt are kept unchanged. Substrate scope matching is case-insensitive because v4 may store scopes lowercased.
+
 Session state and token cache files are encrypted at rest with AES-256-GCM using a key derived from machine-specific values (hostname + username), stored with 0o600 permissions.
 
 ## MCP Tools

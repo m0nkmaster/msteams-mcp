@@ -3,8 +3,11 @@ import type { Page } from 'playwright';
 
 vi.mock('./context.js', () => ({ saveSessionState: vi.fn() }));
 vi.mock('../auth/token-extractor.js', () => ({ extractSubstrateToken: vi.fn() }));
+vi.mock('../auth/msal-cache-crypto.js', () => ({ decryptStorageState: vi.fn() }));
 
 import { ensureAuthenticated, getAuthStatus, isTeamsUrl } from './auth.js';
+import { extractSubstrateToken } from '../auth/token-extractor.js';
+import { decryptStorageState } from '../auth/msal-cache-crypto.js';
 
 /** A page on `url` with no Teams DOM markers and `tokenMinutes` left on MSAL. */
 function fakePage(url: string, tokenMinutes: number): Page {
@@ -47,6 +50,22 @@ describe('getAuthStatus', () => {
     const status = await getAuthStatus(fakePage('https://teams.cloud.microsoft/', -1));
 
     expect(status.isAuthenticated).toBe(false);
+  });
+
+  it('detects a login whose MSAL v4 tokens are encrypted in localStorage', async () => {
+    // In-page scan finds no plaintext token (-1); the Node-side decrypt does.
+    const results: unknown[] = [-1, [{ name: 'k', value: '{"id":"a","nonce":"b","data":"c"}' }]];
+    const page = {
+      url: () => 'https://teams.cloud.microsoft/',
+      evaluate: async () => results.shift(),
+      context: () => ({ cookies: async () => [] }),
+    } as unknown as Page;
+    vi.mocked(decryptStorageState).mockReturnValueOnce({ encrypted: 1, decrypted: 1 });
+    vi.mocked(extractSubstrateToken).mockReturnValueOnce({ token: 'fake', expiry: new Date(Date.now() + 30 * 60000) });
+
+    const status = await getAuthStatus(page);
+
+    expect(status.isAuthenticated).toBe(true);
   });
 
   it('reports the login page', async () => {

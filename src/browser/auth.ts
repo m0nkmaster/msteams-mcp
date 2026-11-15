@@ -11,6 +11,7 @@ import {
   TEAMS_HOSTS,
 } from '../constants.js';
 import { extractSubstrateToken } from '../auth/token-extractor.js';
+import { decryptStorageState } from '../auth/msal-cache-crypto.js';
 import * as logger from '../utils/logger.js';
 
 /**
@@ -367,7 +368,7 @@ const TOKEN_REFRESH_POLL_INTERVAL_MS = 1000;
  */
 async function checkBrowserTokenExpiry(page: Page): Promise<number> {
   try {
-    return await page.evaluate(() => {
+    const plaintext = await page.evaluate(() => {
       const now = Date.now();
       let bestExpiry = -1;
 
@@ -378,7 +379,7 @@ async function checkBrowserTokenExpiry(page: Page): Promise<number> {
         try {
           const entry = JSON.parse(value);
           const target = entry.target as string | undefined;
-          if (!target?.includes('SubstrateSearch')) continue;
+          if (!target?.toLowerCase().includes('substratesearch')) continue;
 
           const secret = entry.secret as string | undefined;
           if (!secret?.startsWith('ey')) continue;
@@ -402,9 +403,43 @@ async function checkBrowserTokenExpiry(page: Page): Promise<number> {
 
       return bestExpiry;
     });
+    if (plaintext > 0) return plaintext;
+    return await checkEncryptedTokenExpiry(page);
   } catch {
     return -1;
   }
+}
+
+/**
+ * MSAL.js v4+ encrypts its localStorage cache, so the plaintext scan above
+ * sees no tokens even after a completed sign-in. Reads the page's
+ * localStorage and the `msal.cache.encryption` cookie, decrypts in Node, and
+ * returns the Substrate token's minutes remaining (or -1).
+ */
+async function checkEncryptedTokenExpiry(page: Page): Promise<number> {
+  if (typeof page.context !== 'function') return -1;
+  const items = await page.evaluate(() => {
+    const out: Array<{ name: string; value: string }> = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const name = localStorage.key(i);
+      if (name === null) continue;
+      out.push({ name, value: localStorage.getItem(name) ?? '' });
+    }
+    return out;
+  });
+  if (!Array.isArray(items) || items.length === 0) return -1;
+
+  const cookies = await page.context().cookies();
+  const state = {
+    cookies,
+    origins: [{ origin: new URL(page.url()).origin, localStorage: items }],
+  };
+  if (decryptStorageState(state).decrypted === 0) return -1;
+
+  const token = extractSubstrateToken(state);
+  if (!token) return -1;
+  const mins = Math.round((token.expiry.getTime() - Date.now()) / 60000);
+  return mins > 0 ? mins : -1;
 }
 
 /**
