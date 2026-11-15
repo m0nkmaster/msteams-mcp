@@ -58,7 +58,6 @@ export const SearchEmailInputSchema = z.object({
 
 export const GetEmailInputSchema = z.object({
   id: z.string().min(1, 'Email id cannot be empty'),
-  format: z.enum(['text', 'html']).optional().default('text'),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -183,18 +182,13 @@ const searchEmailToolDefinition: Tool = {
 
 const getEmailToolDefinition: Tool = {
   name: 'teams_get_email',
-  description: 'Fetch the full content of one email: complete body, all recipients (to/cc/bcc), and the attachment list (names, types, sizes). Pass an id from teams_search_email results — search returns only a short preview, use this to read the whole message. format "text" (default) returns the body as readable plain text; "html" returns the raw HTML. Read-only; does not mark the email as read or download attachments.',
+  description: 'Fetch the full content of one email: complete body, all recipients (to/cc/bcc), and the attachment list (names, types, sizes). Pass an id from teams_search_email results — search returns only a short preview, use this to read the whole message. The body is returned as readable plain text, with links listed separately. Read-only; does not mark the email as read or download attachments.',
   inputSchema: {
     type: 'object',
     properties: {
       id: {
         type: 'string',
         description: 'Email id from a teams_search_email result.',
-      },
-      format: {
-        type: 'string',
-        enum: ['text', 'html'],
-        description: 'Body format: "text" (default, readable plain text) or "html" (raw HTML body).',
       },
     },
     required: ['id'],
@@ -391,7 +385,7 @@ async function handleSearchEmail(
 async function handleGetEmail(
   input: z.infer<typeof GetEmailInputSchema>
 ): Promise<ToolResult> {
-  const result = await getEmail(input.id, { format: input.format });
+  const result = await getEmail(input.id);
   return handleApiResult(result, (email) => ({ email }));
 }
 

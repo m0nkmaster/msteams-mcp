@@ -1386,18 +1386,18 @@ describe('parseEmailResult', () => {
     expect(result!.id).toBe('AAMkRestId');
   });
 
-  it('falls back to top-level Id when ItemRestId is absent or empty', () => {
+  it('derives the REST id from the EWS Id when ItemRestId is absent or empty', () => {
     const absent = parseEmailResult({
-      Id: 'AAMkEwsFormatId',
+      Id: 'AAMk+Ews/Id=',
       Source: { Subject: 'Test' },
     });
-    expect(absent!.id).toBe('AAMkEwsFormatId');
+    expect(absent!.id).toBe('AAMk_Ews-Id=');
 
     const empty = parseEmailResult({
-      Id: 'AAMkEwsFormatId',
+      Id: 'AAMk+Ews/Id=',
       Source: { Subject: 'Test', ItemRestId: '' },
     });
-    expect(empty!.id).toBe('AAMkEwsFormatId');
+    expect(empty!.id).toBe('AAMk_Ews-Id=');
   });
 });
 
@@ -1406,11 +1406,6 @@ describe('parseEmailResult', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('parseGraphEmail', () => {
-  it("reports bodyFormat 'text' for a plain-text email even when html is requested", () => {
-    const parsed = parseGraphEmail({ id: 'x', body: { contentType: 'text', content: 'a < b' } }, 'html');
-    expect(parsed).toMatchObject({ bodyFormat: 'text', body: 'a < b' });
-  });
-
   it('parses a full Graph message into an EmailDetail', () => {
     const result = parseGraphEmail(graphEmailMessage);
     expect(result.id).toBe('AAMkAGE1OWFlZjc0.RestId-Q3Budget');
@@ -1425,14 +1420,12 @@ describe('parseGraphEmail', () => {
     expect(result.receivedAt).toBe('2026-01-20T14:30:00Z');
     expect(result.importance).toBe('high');
     expect(result.isRead).toBe(true);
-    expect(result.hasAttachments).toBe(true);
     expect(result.webLink).toBe('https://outlook.office.com/mail/id/AAMkAGE1OWFlZjc0');
     expect(result.conversationId).toBe('AAQkAGE1OWFlZjc0LWYxMjQtNGM1Mi05NzJl');
     expect(result.internetMessageId).toBe('<abc123@company.com>');
-    expect(result.bodyFormat).toBe('text');
   });
 
-  it('converts the HTML body to readable text by default', () => {
+  it('converts the HTML body to readable text', () => {
     const { body } = parseGraphEmail(graphEmailMessage);
     expect(body).toContain('Hi team,');
     expect(body).toContain('Please review the attached budget spreadsheet for Q3.');
@@ -1444,13 +1437,7 @@ describe('parseGraphEmail', () => {
     expect(body).not.toContain('<p>');
   });
 
-  it('returns the raw body for format html', () => {
-    const result = parseGraphEmail(graphEmailMessage, 'html');
-    expect(result.bodyFormat).toBe('html');
-    expect(result.body).toBe(graphEmailMessage.body.content);
-  });
-
-  it('keeps a plain-text body as-is even for format text', () => {
+  it('keeps a plain-text body as-is', () => {
     const result = parseGraphEmail(graphEmailMessageText);
     expect(result.body).toBe('First line.\nSecond line.');
     expect(result.links).toBeUndefined();

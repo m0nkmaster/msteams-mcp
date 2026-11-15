@@ -189,18 +189,6 @@ export function extractGraphToken(state?: SessionState): SubstrateTokenInfo | nu
   return extractTokenByAudience(GRAPH_AUDIENCES, state);
 }
 
-/**
- * Like extractGraphToken, but only a token whose `scp` grants mail access.
- * The Graph token Teams web caches for itself may carry only file scopes;
- * when it does, this returns null so the caller mints a `.default` token.
- */
-export function extractGraphMailToken(state?: SessionState): SubstrateTokenInfo | null {
-  return bestJwt(state, (entry, payload) =>
-    entry.credentialType === 'AccessToken'
-    && GRAPH_AUDIENCES.includes(String(payload.aud))
-    && /(^|\s)Mail\.(Read|ReadWrite)(\s|$)/i.test(String(payload.scp ?? '')));
-}
-
 /** Longest-lived unexpired AccessToken whose JWT audience is one of `audiences`. */
 function extractTokenByAudience(audiences: readonly string[], state?: SessionState): SubstrateTokenInfo | null {
   return bestJwt(state, (entry, payload) =>
@@ -234,11 +222,6 @@ export function getValidAssignmentsToken(): string | null {
 /** Gets a valid Microsoft Graph token from the session, or null. */
 export function getValidGraphToken(): string | null {
   return extractGraphToken()?.token ?? null;
-}
-
-/** Gets a valid mail-scoped Microsoft Graph token from the session, or null. */
-export function getValidGraphMailToken(): string | null {
-  return extractGraphMailToken()?.token ?? null;
 }
 
 /**

@@ -219,11 +219,11 @@ export function parseEmailResult(item: Record<string, unknown>): EmailSearchResu
   // Skip results with no meaningful content
   if (!subject && preview.length < MIN_CONTENT_LENGTH) return null;
 
-  // Prefer the Graph REST id (works directly with /me/messages); the EWS-format
-  // Substrate Id needs translating before Graph will accept it.
+  // Graph's REST id (what teams_get_email needs) is the EWS-format Id made
+  // URL-safe; Substrate returns it as ItemRestId, so derive it only as a fallback.
   const itemRestId = source?.ItemRestId;
   const id = (typeof itemRestId === 'string' && itemRestId.length > 0 ? itemRestId : undefined)
-    || item.Id as string
+    || (item.Id as string | undefined)?.replace(/\//g, '-').replace(/\+/g, '_')
     || item.ReferenceId as string
     || `email-${Date.now()}`;
 
@@ -447,18 +447,14 @@ function formatRecipients(recipients: RawGraphRecipient[] | undefined): string[]
 }
 
 /**
- * Parses a Microsoft Graph /me/messages/{id} response into an EmailDetail.
- *
- * `format` controls the body: 'html' returns the raw body content, 'text'
- * (default) converts HTML bodies to readable plain text. `bodyFormat` reports
- * what was actually returned: a plain-text email is 'text' even if 'html' was asked for.
+ * Parses a Microsoft Graph /me/messages/{id} response into an EmailDetail,
+ * with HTML bodies converted to readable plain text (links listed separately).
  */
-export function parseGraphEmail(raw: RawGraphMessage, format: 'text' | 'html' = 'text'): EmailDetail {
+export function parseGraphEmail(raw: RawGraphMessage): EmailDetail {
   const subject = raw.subject ?? '';
   const bodyContent = raw.body?.content ?? '';
   const bodyIsHtml = raw.body?.contentType?.toLowerCase() !== 'text';
-  const bodyFormat = format === 'html' && bodyIsHtml ? 'html' : 'text';
-  const body = bodyFormat === 'html' || !bodyIsHtml ? bodyContent : htmlToEmailText(bodyContent);
+  const body = bodyIsHtml ? htmlToEmailText(bodyContent) : bodyContent;
 
   const senderAddress = raw.from?.emailAddress ?? raw.sender?.emailAddress;
   const links = bodyIsHtml ? extractLinks(bodyContent) : [];
@@ -479,12 +475,10 @@ export function parseGraphEmail(raw: RawGraphMessage, format: 'text' | 'html' = 
     receivedAt: raw.receivedDateTime,
     importance: raw.importance,
     isRead: raw.isRead,
-    hasAttachments: raw.hasAttachments,
     webLink: raw.webLink,
     conversationId: raw.conversationId,
     internetMessageId: raw.internetMessageId,
     emailType: classifyEmailType(subject),
-    bodyFormat,
     body,
     links: links.length > 0 ? links : undefined,
     attachments: attachments.length > 0 ? attachments : undefined,

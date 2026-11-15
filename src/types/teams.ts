@@ -101,8 +101,6 @@ export interface EmailDetail {
   importance?: string;
   /** Whether the email has been read. */
   isRead?: boolean;
-  /** Whether the email has attachments. */
-  hasAttachments?: boolean;
   /** Web link to open the email in Outlook. */
   webLink?: string;
   /** The conversation/thread ID for this email chain. */
@@ -111,9 +109,7 @@ export interface EmailDetail {
   internetMessageId?: string;
   /** Classification: 'email', 'calendar-response', or 'notification'. */
   emailType: EmailType;
-  /** Format the body was returned in. */
-  bodyFormat: 'text' | 'html';
-  /** Full email body (plain text or HTML per bodyFormat). */
+  /** Full email body as plain text. */
   body: string;
   /** Links extracted from the HTML body. */
   links?: ExtractedLink[];

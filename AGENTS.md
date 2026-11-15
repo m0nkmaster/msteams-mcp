@@ -144,7 +144,7 @@ Different Teams APIs use different auth mechanisms:
 | **Profiles** (mt/part fetchShortProfile) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuthWithConfig()` |
 | **Tags** (mt/part teams/{groupId}/tags) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuth()` |
 | **File downloads** (Graph drive items; SharePoint URLs resolved via `/shares`) | Teams client's Graph JWT (aud `https://graph.microsoft.com`); the resulting `downloadUrl` is pre-authenticated and gets no header | `requireGraphTokenAsync()` |
-| **Email read** (Graph `/me/messages/{id}`) | Graph JWT whose `scp` includes `Mail.*` (the Graph token Teams caches may not, so a `.default` one is minted); EWS-format ids are translated via `translateExchangeIds` | `requireGraphMailTokenAsync()` |
+| **Email read** (Graph `/me/messages/{id}`) | Teams client's Graph JWT (`Mail.ReadWrite`); ids are Graph REST ids (the EWS id made URL-safe) | `requireGraphTokenAsync()` |
 | **Assignments** (assignments.edu.cloud.microsoft) | JWT Bearer for the Assignments app (aud `8f348934-…`) + `MS-Int-AppID: assignments-ui` header | `requireAssignmentsTokenAsync()` |
 
 The `extract*`/`getValid*` helpers live in `auth/token-extractor`; the `require*` guards live in `utils/auth-guards`. Notes:

@@ -196,7 +196,6 @@ When reading channel messages with `teams_get_thread`:
 2. teams_search_email query="subject:budget sent:>=2026-01-15" → search by subject and date
 3. teams_search_email query="hasattachment:true is:unread" → unread emails with attachments
 4. teams_get_email id="<an id from the results>" → full body (plain text), all recipients, attachment list
-5. teams_get_email id="<same id>" format="html" → raw HTML body
 ```
 Returns: subject, sender, recipients, preview, read status, importance, attachments, and pagination.
 Uses the same Substrate token as Teams search — no additional login required. teams_get_email uses the Teams client's Microsoft Graph token.

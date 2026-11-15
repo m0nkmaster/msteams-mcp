@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractAssignmentsToken, extractGraphMailToken, invalidateAccessToken } from './token-extractor.js';
+import { extractAssignmentsToken, invalidateAccessToken } from './token-extractor.js';
 import { readSessionState, writeSessionState, type SessionState } from './session-store.js';
 import { ASSIGNMENTS_APP_ID } from '../constants.js';
 
@@ -8,8 +8,8 @@ vi.mock('./session-store.js', async importOriginal => ({
   readSessionState: vi.fn(), writeSessionState: vi.fn(),
 }));
 
-function token(aud: string, seconds = 3600, scp?: string) {
-  return `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ aud, scp, exp: Date.now() / 1000 + seconds })).toString('base64url')}.signature`;
+function token(aud: string, seconds = 3600) {
+  return `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ aud, exp: Date.now() / 1000 + seconds })).toString('base64url')}.signature`;
 }
 function entry(secret: string, credentialType = 'AccessToken') {
   return { name: secret, value: JSON.stringify({ credentialType, target: 'EduAssignments.ReadWrite', secret }) };
@@ -35,14 +35,5 @@ describe('Assignments token selection', () => {
     vi.mocked(readSessionState).mockReturnValue(state([entry(rejected), unrelated]));
     invalidateAccessToken(rejected);
     expect(vi.mocked(writeSessionState).mock.calls[0][0].origins[0].localStorage).toEqual([unrelated]);
-  });
-});
-
-describe('Graph mail token selection', () => {
-  it('skips a Graph token without a Mail scope, even one that lives longer', () => {
-    const filesOnly = token('https://graph.microsoft.com', 7200, 'Files.ReadWrite.All Sites.Read.All');
-    const mail = token('https://graph.microsoft.com', 3600, 'Files.ReadWrite.All Mail.ReadWrite');
-    expect(extractGraphMailToken(state([entry(filesOnly), entry(mail)]))?.token).toBe(mail);
-    expect(extractGraphMailToken(state([entry(filesOnly)]))).toBeNull();
   });
 });

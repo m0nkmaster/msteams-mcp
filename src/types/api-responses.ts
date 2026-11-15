@@ -223,17 +223,10 @@ export interface RawGraphMessage {
   receivedDateTime?: string;
   importance?: string;
   isRead?: boolean;
-  hasAttachments?: boolean;
   webLink?: string;
   conversationId?: string;
   internetMessageId?: string;
   body?: { contentType?: string; content?: string };
   attachments?: RawGraphAttachment[];
-  [key: string]: unknown;
-}
-
-/** Raw response from Microsoft Graph /me/translateExchangeIds. */
-export interface RawGraphTranslatedIds {
-  value?: { sourceId?: string; targetId?: string }[];
   [key: string]: unknown;
 }
