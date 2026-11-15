@@ -255,6 +255,20 @@ export const ASSIGNMENTS_API = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Microsoft Graph API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Microsoft Graph endpoints (mail). Uses the Teams client's own Graph token. */
+export const GRAPH_API = {
+  /** A single message in the signed-in user's mailbox. */
+  message: (id: string) =>
+    `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(id)}`,
+
+  /** Translates Exchange ids (ewsId, restId, etc.) between formats. */
+  translateExchangeIds: 'https://graph.microsoft.com/v1.0/me/translateExchangeIds',
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Request Headers
 // ─────────────────────────────────────────────────────────────────────────────
 

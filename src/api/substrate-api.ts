@@ -181,6 +181,7 @@ export async function searchEmails(
         'ConversationId',
         'FromAddress',
         'SenderSmtpAddress',
+        'ItemRestId',
       ],
       query: {
         queryString: query,

@@ -184,3 +184,56 @@ export interface RawWorkingSetFilesResponse {
   Items?: RawTranscriptItem[];
   [key: string]: unknown;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Microsoft Graph Mail API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Raw emailAddress structure from Microsoft Graph. */
+export interface RawGraphEmailAddress {
+  name?: string;
+  address?: string;
+}
+
+/** Raw recipient from a Microsoft Graph message. */
+export interface RawGraphRecipient {
+  emailAddress?: RawGraphEmailAddress;
+  [key: string]: unknown;
+}
+
+/** Raw attachment from a Microsoft Graph message ($expand=attachments). */
+export interface RawGraphAttachment {
+  name?: string;
+  contentType?: string;
+  size?: number;
+  isInline?: boolean;
+  [key: string]: unknown;
+}
+
+/** Raw message from Microsoft Graph /me/messages/{id}. */
+export interface RawGraphMessage {
+  id?: string;
+  subject?: string;
+  from?: RawGraphRecipient;
+  sender?: RawGraphRecipient;
+  toRecipients?: RawGraphRecipient[];
+  ccRecipients?: RawGraphRecipient[];
+  bccRecipients?: RawGraphRecipient[];
+  sentDateTime?: string;
+  receivedDateTime?: string;
+  importance?: string;
+  isRead?: boolean;
+  hasAttachments?: boolean;
+  webLink?: string;
+  conversationId?: string;
+  internetMessageId?: string;
+  body?: { contentType?: string; content?: string };
+  attachments?: RawGraphAttachment[];
+  [key: string]: unknown;
+}
+
+/** Raw response from Microsoft Graph /me/translateExchangeIds. */
+export interface RawGraphTranslatedIds {
+  value?: { sourceId?: string; targetId?: string }[];
+  [key: string]: unknown;
+}

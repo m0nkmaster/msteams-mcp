@@ -34,6 +34,8 @@ export {
   classifyEmailType,
   parseEmailResult,
   parseEmailSearchResults,
+  parseGraphEmail,
+  htmlToEmailText,
 } from './parsers-search.js';
 export {
   parsePersonSuggestion,

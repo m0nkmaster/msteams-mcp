@@ -229,6 +229,7 @@ export const emailSearchResult = {
   HitHighlightedSummary: 'Please review the attached <c0>budget</c0> spreadsheet for Q3',
   Source: {
     Subject: 'Q3 Budget Review',
+    ItemRestId: 'AAMkAGE1OWFlZjc0.RestId-Q3Budget',
     From: {
       EmailAddress: {
         Name: 'Smith, John',
@@ -326,6 +327,58 @@ export const emailEntitySetsResponse = {
       ],
     },
   ],
+};
+
+/**
+ * Email message from Microsoft Graph.
+ * From: GET https://graph.microsoft.com/v1.0/me/messages/{id}
+ * HTML body with an embedded style block, paragraphs, a list, and a link;
+ * one inline image attachment plus one real file attachment; recipients with
+ * and without display names.
+ */
+export const graphEmailMessage = {
+  id: 'AAMkAGE1OWFlZjc0.RestId-Q3Budget',
+  subject: 'Q3 Budget Review',
+  from: { emailAddress: { name: 'Smith, John', address: 'john.smith@company.com' } },
+  sender: { emailAddress: { name: 'Smith, John', address: 'john.smith@company.com' } },
+  toRecipients: [
+    { emailAddress: { name: 'Jane Doe', address: 'jane.doe@company.com' } },
+    { emailAddress: { address: 'noreply@company.com' } },
+  ],
+  ccRecipients: [{ emailAddress: { name: 'Finance Team', address: 'finance@company.com' } }],
+  bccRecipients: [],
+  sentDateTime: '2026-01-20T14:25:00Z',
+  receivedDateTime: '2026-01-20T14:30:00Z',
+  importance: 'high',
+  isRead: true,
+  hasAttachments: true,
+  webLink: 'https://outlook.office.com/mail/id/AAMkAGE1OWFlZjc0',
+  conversationId: 'AAQkAGE1OWFlZjc0LWYxMjQtNGM1Mi05NzJl',
+  internetMessageId: '<abc123@company.com>',
+  body: {
+    contentType: 'html',
+    content:
+      '<html><head><style>body { font-family: Calibri; } .x { color: red; }</style></head>' +
+      '<body><p>Hi team,</p><p>Please review the attached <b>budget</b> spreadsheet for Q3.</p>' +
+      '<ul><li>Revenue up 10%</li><li>Costs flat</li></ul>' +
+      '<p>Details: <a href="https://example.com/budget">budget site</a></p>' +
+      '<div>Regards,<br>John</div></body></html>',
+  },
+  attachments: [
+    { name: 'logo.png', contentType: 'image/png', size: 2048, isInline: true },
+    { name: 'Q3-Budget.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', size: 18432, isInline: false },
+  ],
+};
+
+/**
+ * Email message with a plain-text body from Microsoft Graph.
+ */
+export const graphEmailMessageText = {
+  id: 'AAMkPlainText1',
+  subject: 'Plain update',
+  from: { emailAddress: { name: 'Alice Johnson', address: 'alice@company.com' } },
+  receivedDateTime: '2026-01-22T09:00:00Z',
+  body: { contentType: 'text', content: 'First line.\nSecond line.' },
 };
 
 /**
