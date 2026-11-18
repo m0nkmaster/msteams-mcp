@@ -54,7 +54,7 @@ export async function requireSubstrateTokenAsync(): Promise<Result<string, McpEr
   if (!token) {
     return err(createError(
       ErrorCode.AUTH_EXPIRED,
-      'ACTION REQUIRED: Teams token expired and automatic refresh failed. You MUST call teams_login to re-authenticate before retrying.',
+      'No valid Substrate token is available for search.',
     ));
   }
   return ok(token);
@@ -122,7 +122,7 @@ export function requireGraphTokenAsync(): Promise<Result<string, McpError>> {
 export function requireMessageAuth(): Result<MessageAuthInfo, McpError> {
   const auth = extractMessageAuth();
   if (!auth) {
-    return err(createError(ErrorCode.AUTH_REQUIRED, 'ACTION REQUIRED: No valid Teams authentication. You MUST call teams_login to authenticate before retrying.'));
+    return err(createError(ErrorCode.AUTH_REQUIRED, 'Teams messaging credentials are missing or invalid.'));
   }
   return ok(auth);
 }
@@ -136,7 +136,7 @@ export function requireCsaAuth(): Result<CsaAuthInfo, McpError> {
   const csaToken = extractCsaToken();
 
   if (!auth?.skypeToken || !csaToken) {
-    return err(createError(ErrorCode.AUTH_REQUIRED, 'ACTION REQUIRED: No valid authentication for favourites. You MUST call teams_login to authenticate before retrying.'));
+    return err(createError(ErrorCode.AUTH_REQUIRED, auth ? 'The CSA token required for favourites is missing or expired.' : 'Teams messaging credentials required for favourites are missing or invalid.'));
   }
 
   return ok({ auth, csaToken });
@@ -159,7 +159,7 @@ export function requireSkypeSpacesAuth(): Result<SkypeSpacesAuthInfo, McpError> 
   if (!auth?.skypeToken || !spacesToken) {
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
-      'API access requires authentication. Please run teams_login.',
+      auth ? 'The Skype Spaces token is missing or expired.' : 'Teams messaging credentials are missing or invalid.',
       { suggestions: ['Call teams_login to authenticate'] }
     ));
   }

@@ -310,7 +310,7 @@ async function waitForManualLogin(
   showOverlay: boolean = true
 ): Promise<void> {
   const startTime = Date.now();
-  const log = onProgress ?? console.log;
+  const log = onProgress ?? ((msg: string) => logger.info('auth', msg));
 
   log('Waiting for manual login...');
 
@@ -505,7 +505,7 @@ export async function ensureAuthenticated(
   showOverlay: boolean = true,
   headless: boolean = false
 ): Promise<void> {
-  const log = onProgress ?? console.log;
+  const log = onProgress ?? ((msg: string) => logger.info('auth', msg));
 
   log('Navigating to Teams...');
   const status = await navigateToTeams(page);
@@ -550,7 +550,7 @@ export async function ensureAuthenticated(
   if (headless) {
     const reason = status.isOnLoginPage 
       ? 'Login page detected - user credentials required'
-      : `Unexpected page state: ${status.currentUrl}`;
+      : `Unexpected page at ${new URL(status.currentUrl).origin}`;
     throw new Error(`Headless SSO failed: ${reason}`);
   }
 

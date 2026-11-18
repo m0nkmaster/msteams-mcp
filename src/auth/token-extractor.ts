@@ -448,8 +448,11 @@ export function extractCsaToken(state?: SessionState): string | null {
       if (!item.name.includes('chatsvcagg.teams.microsoft.com')) continue;
 
       try {
-        const entry = JSON.parse(item.value) as { secret?: string };
-        if (entry.secret) return entry.secret;
+        const entry = JSON.parse(item.value) as { secret?: string; expiresOn?: string };
+        if (!entry.secret) continue;
+        const expiry = getJwtExpiry(entry.secret)?.getTime() ?? Number(entry.expiresOn) * 1000;
+        if (expiry <= Date.now()) continue;
+        return entry.secret;
       } catch {
         // Ignore parse errors
       }

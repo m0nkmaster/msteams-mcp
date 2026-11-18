@@ -87,12 +87,15 @@ async function refreshCoreTokens(): Promise<Result<void>> {
   const httpResult = await refreshTokensViaHttp();
   if (httpResult.ok && extractSubstrateToken()) return ok(undefined);
 
-  log.warn('token-refresh', httpResult.ok
-    ? 'HTTP refresh reported success but no valid Substrate token found, falling back to browser'
-    : `HTTP refresh failed: ${httpResult.error.message}, falling back to browser (session cookies may still be valid)`);
+  const httpFailure = httpResult.ok
+    ? 'HTTP refresh reported success but no valid Substrate token found'
+    : `HTTP refresh failed: ${httpResult.error.message}`;
+  log.warn('token-refresh', `Falling back to browser after HTTP refresh: ${httpFailure}`);
 
   // ── Strategy 2: Browser refresh (fallback) ──────────────────────────
-  return refreshViaHeadlessBrowser();
+  const browser = await refreshViaHeadlessBrowser();
+  if (browser.ok) return browser;
+  return err({ ...browser.error, message: `${httpFailure}\n${browser.error.message}` });
 }
 
 /**
@@ -117,7 +120,7 @@ async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
     if (!extractSubstrateToken()) {
       return err(createError(
         ErrorCode.AUTH_EXPIRED,
-        'ACTION REQUIRED: Token refresh failed. You MUST call teams_login to re-authenticate.',
+        'Browser refresh yielded no valid Substrate token.',
       ));
     }
     return ok(undefined);
