@@ -21,12 +21,8 @@ import {
   hasSessionState,
   isSessionLikelyExpired,
 } from './auth/session-store.js';
-import {
-  getSubstrateTokenStatus,
-  extractMessageAuth,
-  extractCsaToken,
-  getUserProfile,
-} from './auth/token-extractor.js';
+import { getUserProfile } from './auth/token-extractor.js';
+import { getAuthCapabilities } from './tools/auth-tools.js';
 import { refreshTokensViaBrowser } from './auth/token-refresh.js';
 
 // API modules
@@ -177,22 +173,8 @@ export class TeamsServer {
         }
 
         case 'teams://status': {
-          const tokenStatus = getSubstrateTokenStatus();
-          const messageAuth = extractMessageAuth();
-          const csaToken = extractCsaToken();
-
           const status = {
-            directApi: {
-              available: tokenStatus.hasToken,
-              expiresAt: tokenStatus.expiresAt,
-              minutesRemaining: tokenStatus.minutesRemaining,
-            },
-            messaging: {
-              available: messageAuth !== null,
-            },
-            favorites: {
-              available: messageAuth !== null && csaToken !== null,
-            },
+            ...getAuthCapabilities(),
             session: {
               exists: hasSessionState(),
               likelyExpired: isSessionLikelyExpired(),
@@ -249,17 +231,11 @@ export class TeamsServer {
             return this.formatError(retryResult.error);
           }
 
-          // Auto-login failed — return a strongly-worded error directing to forceNew
-          log.error('auto-login', 'Automatic re-authentication failed.');
-          return this.formatError(createError(
-            ErrorCode.AUTH_REQUIRED,
-            'ACTION REQUIRED: Teams session has expired and automatic re-authentication failed. You MUST call teams_login with forceNew: true to clear stale state and re-authenticate. Do NOT call teams_login without forceNew — it will return early without fixing the problem.',
-            { suggestions: [
-              'IMMEDIATELY call teams_login with { "forceNew": true }',
-              'After login succeeds, retry the original request',
-              'Do NOT skip this step or tell the user Teams is unavailable — authentication just needs refreshing',
-            ] }
-          ));
+          log.error('auto-login', refresh.error.message);
+          return this.formatError({
+            ...result.error,
+            message: `${result.error.message} Automatic re-authentication failed: ${refresh.error.message}`,
+          });
         }
 
         return this.formatError(result.error);

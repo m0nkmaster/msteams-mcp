@@ -307,7 +307,7 @@ msteams status
 
 # Log in (opens a browser; tries silent SSO first)
 msteams login
-msteams login --force        # clear session and re-login
+msteams login --force        # delete all local login data and sign in from scratch
 
 # Search messages
 msteams search "meeting notes"

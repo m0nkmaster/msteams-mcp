@@ -11,7 +11,7 @@ vi.mock('../auth/token-extractor.js', () => ({
   getMessageAuthStatus: vi.fn(),
   extractMessageAuth: vi.fn(),
   extractCsaToken: vi.fn(),
-  extractSubstrateToken: vi.fn(),
+
   extractSkypeSpacesToken: vi.fn(),
 }));
 
@@ -26,7 +26,7 @@ import {
   getSubstrateTokenStatus,
   extractMessageAuth,
   extractCsaToken,
-  extractSubstrateToken,
+  getMessageAuthStatus,
   extractSkypeSpacesToken,
 } from '../auth/token-extractor.js';
 import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
@@ -35,7 +35,7 @@ import { createBrowserContext, closeBrowser } from '../browser/context.js';
 /** A session holding every core credential except the CSA (favourites) token. */
 function sessionMissingCsaToken(): void {
   vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: true, minutesRemaining: 60 });
-  vi.mocked(extractSubstrateToken).mockReturnValue({ token: 'substrate', expiry: new Date(Date.now() + 3.6e6) });
+  vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: true });
   vi.mocked(extractSkypeSpacesToken).mockReturnValue('spaces');
   vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
   vi.mocked(extractCsaToken).mockReturnValue(null);
@@ -50,9 +50,13 @@ describe('teams_login core credential top-up', () => {
   it('mints the missing CSA token when the session is otherwise valid', async () => {
     sessionMissingCsaToken();
 
+    vi.mocked(refreshTokensViaHttp).mockImplementationOnce(async () => {
+      vi.mocked(extractCsaToken).mockReturnValue('csa');
+      return { ok: true, value: undefined };
+    });
     const result = await loginTool.handler({ forceNew: false });
 
-    expect(result.success).toBe(true);
+    expect(result).toMatchObject({ success: true, data: { capabilities: { favorites: { available: true } } } });
     expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
     expect(createBrowserContext).not.toHaveBeenCalled();
   });
@@ -94,7 +98,7 @@ describe('teams_login core credential top-up', () => {
     expect(createBrowserContext).toHaveBeenCalledWith({ headless: false });
   });
 
-  it('still reports success when the top-up fails', async () => {
+  it('reports usable capabilities and the reason a top-up failed', async () => {
     sessionMissingCsaToken();
     vi.mocked(refreshTokensViaHttp).mockResolvedValue({
       ok: false,
@@ -103,6 +107,22 @@ describe('teams_login core credential top-up', () => {
 
     const result = await loginTool.handler({ forceNew: false });
 
-    expect(result.success).toBe(true);
+    expect(result).toMatchObject({ success: true, data: {
+      warning: 'Unavailable capabilities: favorites. Refresh failed: offline',
+      capabilities: { messaging: { available: true }, favorites: { available: false } },
+    } });
+  });
+
+  it('fails login when a saved session still has no usable capabilities after refresh', async () => {
+    sessionMissingCsaToken();
+    vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+
+    const result = await loginTool.handler({ forceNew: true });
+
+    expect(result).toMatchObject({ success: false, error: {
+      code: 'AUTH_REQUIRED', message: expect.stringContaining('directApi, messaging, favorites, calendar'),
+    } });
   });
 });

@@ -19,9 +19,9 @@ import {
   getMessageAuthStatus,
   extractMessageAuth,
   extractCsaToken,
-  extractSubstrateToken,
   extractSkypeSpacesToken,
 } from '../auth/token-extractor.js';
+import { createError, ErrorCode } from '../types/errors.js';
 import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import * as log from '../utils/logger.js';
@@ -48,7 +48,7 @@ const loginToolDefinition: Tool = {
     properties: {
       forceNew: {
         type: 'boolean',
-        description: 'Delete all previous login data (browser profile, cookies, saved session, every previously signed-in account) and sign in from scratch in a visible browser. Use to switch accounts or recover a broken session (default: false)',
+        description: 'Delete all previous login data (browser profile, cookies, saved session, every previously signed-in account) and sign in from scratch in a visible browser. Use only when the user wants to switch accounts or explicitly requests a full reset (default: false)',
       },
     },
   },
@@ -56,7 +56,7 @@ const loginToolDefinition: Tool = {
 
 const statusToolDefinition: Tool = {
   name: 'teams_status',
-  description: 'Check the current authentication status and session state.',
+  description: 'Check credential availability for each core Teams capability. session.exists reports whether the saved session file exists.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -70,31 +70,42 @@ const statusToolDefinition: Tool = {
 /** Minimum minutes remaining on token to consider it valid (skip browser). */
 const TOKEN_VALID_THRESHOLD_MINUTES = 10;
 
-/** Every core credential a session needs: search, calendar, favourites, messaging. */
-function coreCredentialsComplete(): boolean {
-  return extractSubstrateToken() !== null
-    && extractSkypeSpacesToken() !== null
-    && extractCsaToken() !== null
-    && extractMessageAuth() !== null;
+export function getAuthCapabilities() {
+  const substrate = getSubstrateTokenStatus();
+  const messaging = getMessageAuthStatus();
+  const canMessage = messaging.hasToken && extractMessageAuth() !== null;
+  return {
+    directApi: { available: substrate.hasToken, expiresAt: substrate.expiresAt, minutesRemaining: substrate.minutesRemaining },
+    messaging: { available: canMessage, expiresAt: messaging.expiresAt, minutesRemaining: messaging.minutesRemaining },
+    favorites: { available: canMessage && extractCsaToken() !== null },
+    calendar: { available: canMessage && extractSkypeSpacesToken() !== null },
+  };
 }
 
-/**
- * Mints any core credential the browser did not leave in the saved session.
- *
- * Teams JS acquires some resource tokens lazily — the CSA (chatsvcagg) token
- * behind favourites is routinely absent from a session saved straight after
- * SSO, so login would report success while teams_status reported favourites
- * unavailable until some later call happened to trigger a refresh. One HTTP
- * exchange mints every core resource. Failure is non-fatal: the session is
- * still usable and the next tool call retries through auto-login.
- */
-async function fillCoreCredentialGaps(): Promise<void> {
-  if (coreCredentialsComplete()) return;
-
-  const result = await refreshTokensViaHttp();
-  if (!result.ok) {
-    log.warn('login', `Could not top up core credentials: ${result.error.message}`);
+async function finishLogin(message: string, tokenStatus?: ReturnType<typeof getSubstrateTokenStatus>): Promise<ToolResult> {
+  let capabilities = getAuthCapabilities();
+  let refreshError: string | undefined;
+  if (Object.values(capabilities).some(capability => !capability.available)) {
+    // Teams acquires some tokens lazily. Even a successful refresh can fill only some gaps.
+    const refresh = await refreshTokensViaHttp();
+    if (!refresh.ok) {
+      refreshError = refresh.error.message;
+      log.warn('login', `Could not top up core credentials: ${refreshError}`);
+    }
+    capabilities = getAuthCapabilities();
   }
+
+  const data = { capabilities, ...(tokenStatus && { tokenStatus }) };
+  const missing = Object.entries(capabilities).filter(([, value]) => !value.available).map(([name]) => name);
+  if (missing.length) {
+    const detail = `Unavailable capabilities: ${missing.join(', ')}.${refreshError ? ` Refresh failed: ${refreshError}` : ''}`;
+    if (missing.length === Object.keys(capabilities).length) {
+      return { success: false, error: createError(ErrorCode.AUTH_REQUIRED, `Login yielded no usable core credentials. ${detail}`) };
+    }
+    return { success: true, data: { message: 'Some Teams capabilities are unavailable.', warning: detail, ...data } };
+  }
+
+  return { success: true, data: { message, ...data } };
 }
 
 async function handleLogin(
@@ -114,17 +125,7 @@ async function handleLogin(
   // Fast path: if tokens are still valid, skip browser entirely
   const tokenStatus = getSubstrateTokenStatus();
   if (tokenStatus.hasToken && tokenStatus.minutesRemaining! >= TOKEN_VALID_THRESHOLD_MINUTES) {
-    await fillCoreCredentialGaps();
-    return {
-      success: true,
-      data: {
-        message: `Already authenticated. Token valid for ${tokenStatus.minutesRemaining} more minutes.`,
-        tokenStatus: {
-          expiresAt: tokenStatus.expiresAt,
-          minutesRemaining: tokenStatus.minutesRemaining,
-        },
-      },
-    };
+    return finishLogin(`Already authenticated. Token valid for ${tokenStatus.minutesRemaining} more minutes.`, tokenStatus);
   }
 
   // Headless-first strategy:
@@ -140,14 +141,7 @@ async function handleLogin(
       true   // Headless mode - throw immediately if user interaction required
     );
     await closeBrowser(headless, true);
-    await fillCoreCredentialGaps();
-
-    return {
-      success: true,
-      data: {
-        message: 'Login completed silently via SSO. Session has been saved.',
-      },
-    };
+    return finishLogin('Login completed silently via SSO. Session has been saved.');
   } catch (error) {
     log.warn('login:headless', `Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
     await closeBrowser(headless, false).catch(() => {});
@@ -166,37 +160,15 @@ async function loginInVisibleBrowser(): Promise<ToolResult> {
     await closeBrowser(visible, true);
   }
 
-  await fillCoreCredentialGaps();
-
-  return {
-    success: true,
-    data: {
-      message: 'Login completed successfully. Session has been saved.',
-    },
-  };
+  return finishLogin('Login completed successfully. Session has been saved.');
 }
 
 async function handleStatus(): Promise<ToolResult> {
-  const tokenStatus = getSubstrateTokenStatus();
-  const messageAuthStatus = getMessageAuthStatus();
-
   return {
     success: true,
     data: {
       version: pkg.version,
-      directApi: {
-        available: tokenStatus.hasToken,
-        expiresAt: tokenStatus.expiresAt,
-        minutesRemaining: tokenStatus.minutesRemaining,
-      },
-      messaging: {
-        available: messageAuthStatus.hasToken,
-        expiresAt: messageAuthStatus.expiresAt,
-        minutesRemaining: messageAuthStatus.minutesRemaining,
-      },
-      favorites: {
-        available: extractMessageAuth() !== null && extractCsaToken() !== null,
-      },
+      ...getAuthCapabilities(),
       session: {
         exists: hasSessionState(),
         likelyExpired: isSessionLikelyExpired(),
