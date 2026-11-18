@@ -181,7 +181,7 @@ export function clearTokenCache(): void {
 }
 
 /**
- * Known Teams origins (commercial and government clouds).
+ * Known Teams origins (personal, commercial and government).
  * Used to find the correct origin in session state.
  */
 const TEAMS_ORIGINS = TEAMS_HOSTS.map(host => `https://${host}`);
@@ -230,6 +230,5 @@ export function getTeamsOrigin(state: SessionState): SessionState['origins'][num
     if (origin) return origin;
   }
 
-  // Fallback: any origin on a known Teams host
-  return state.origins.find(o => TEAMS_HOSTS.some(host => o.origin.includes(host))) ?? null;
+  return null;
 }

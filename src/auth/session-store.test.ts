@@ -63,14 +63,14 @@ describe('getTeamsOrigin', () => {
     expect(chosen?.origin).toBe('https://teams.cloud.microsoft');
   });
 
-  it('returns teams.microsoft.com when it is the only known origin', () => {
+  it.each(['https://teams.microsoft.com', 'https://teams.live.com'])('returns %s when it is the only known origin', origin => {
     const state: SessionState = {
       cookies: [],
-      origins: [makeOrigin('https://teams.microsoft.com', [makeChatSvcEntry()])],
+      origins: [makeOrigin(origin, [makeChatSvcEntry()])],
     };
 
     const chosen = getTeamsOrigin(state);
-    expect(chosen?.origin).toBe('https://teams.microsoft.com');
+    expect(chosen?.origin).toBe(origin);
   });
 
   it('returns null when no Teams origins are present', () => {
