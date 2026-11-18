@@ -25,12 +25,14 @@ describe('isTeamsUrl', () => {
       'https://teams.microsoft.com/',
       'https://teams.cloud.microsoft/',
       'https://teams.chat.microsoft.com/',
+      'https://teams.live.com/v2/',
       'https://teams.microsoft.us/',
       'https://dod.teams.microsoft.us/',
     ]) {
       expect(isTeamsUrl(url), url).toBe(true);
     }
     expect(isTeamsUrl('https://outlook.office.com/')).toBe(false);
+    expect(isTeamsUrl('https://example.org/?next=https://teams.live.com')).toBe(false);
   });
 
   it('matches on the host, whatever path the app has routed to', () => {
@@ -39,12 +41,14 @@ describe('isTeamsUrl', () => {
 });
 
 describe('getAuthStatus', () => {
-  it('detects a completed login from the MSAL token alone', async () => {
-    const status = await getAuthStatus(fakePage('https://teams.cloud.microsoft/', 55));
+  it.each(['https://teams.cloud.microsoft/', 'https://teams.live.com/v2/'])(
+    'detects a completed login at %s from the MSAL token alone', async url => {
+      const status = await getAuthStatus(fakePage(url, 55));
 
-    expect(status.isAuthenticated).toBe(true);
-    expect(status.isOnLoginPage).toBe(false);
-  });
+      expect(status.isAuthenticated).toBe(true);
+      expect(status.isOnLoginPage).toBe(false);
+    },
+  );
 
   it('stays unauthenticated on a Teams host with no token', async () => {
     const status = await getAuthStatus(fakePage('https://teams.cloud.microsoft/', -1));

@@ -231,7 +231,12 @@ const LOGIN_REDIRECT_TIMEOUT_MS = 5000;
  * Checks if a URL is a Teams domain.
  */
 export function isTeamsUrl(url: string): boolean {
-  return TEAMS_HOSTS.some(host => url.includes(host));
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && TEAMS_HOSTS.includes(parsed.host);
+  } catch {
+    return false;
+  }
 }
 
 /**

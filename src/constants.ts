@@ -265,6 +265,7 @@ export const TEAMS_HOSTS: readonly string[] = [
   'teams.cloud.microsoft',    // New Teams (often holds the SubstrateSearch token)
   'teams.chat.microsoft.com', // New Teams chat host
   'teams.microsoft.com',      // Commercial legacy
+  'teams.live.com',           // Personal Teams
   'teams.microsoft.us',       // GCC-High
   'dod.teams.microsoft.us',   // DoD
 ];
