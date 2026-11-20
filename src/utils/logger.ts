@@ -6,11 +6,15 @@
  *   the CLI's data output
  * - Output is consistently prefixed with `[module]` context
  * - Log levels can be controlled via LOG_LEVEL environment variable
- * - Future structured logging can be added in one place
+ * - Every emitted line can also be appended to a file (see setLogFilePath)
+ *   for environments that do not retain the server's stderr
  * 
  * Levels: error | warn | info (default) | debug
  * Set LOG_LEVEL=debug for verbose output during development.
  */
+
+import * as fs from 'fs';
+import * as path from 'path';
 
 type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
@@ -38,30 +42,75 @@ export function setLogLevel(level: LogLevel): void {
   currentLevel = level;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// File logging
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rotate the log file once it grows past this size (bytes). */
+const LOG_FILE_MAX_BYTES = 1024 * 1024;
+
+/** Active log file path, or null when file logging is disabled. */
+let logFilePath: string | null = null;
+
+/**
+ * Enables appending every emitted line to `filePath`, ISO-timestamped.
+ * When the file exceeds 1 MB it is rotated to `<filePath>.1` (one backup
+ * kept). Pass null to disable. File write failures are swallowed — logging
+ * must never break the server.
+ */
+export function setLogFilePath(filePath: string | null): void {
+  logFilePath = filePath;
+}
+
+function appendToFile(line: string): void {
+  if (!logFilePath) return;
+  try {
+    fs.mkdirSync(path.dirname(logFilePath), { recursive: true });
+    try {
+      if (fs.statSync(logFilePath).size > LOG_FILE_MAX_BYTES) {
+        fs.renameSync(logFilePath, `${logFilePath}.1`);
+      }
+    } catch {
+      // Missing file or failed rotation — appendFileSync recreates as needed.
+    }
+    fs.appendFileSync(logFilePath, `${new Date().toISOString()} ${line}\n`, 'utf8');
+  } catch {
+    // File logging is best-effort diagnostics only.
+  }
+}
+
 /** Log an error message. Always shown unless level is somehow above error. */
 export function error(context: string, message: string): void {
   if (shouldLog('error')) {
-    console.error(`[${context}] ${message}`);
+    const line = `[${context}] ${message}`;
+    console.error(line);
+    appendToFile(line);
   }
 }
 
 /** Log a warning message. */
 export function warn(context: string, message: string): void {
   if (shouldLog('warn')) {
-    console.warn(`[${context}] ${message}`);
+    const line = `[${context}] ${message}`;
+    console.warn(line);
+    appendToFile(line);
   }
 }
 
 /** Log an informational message. */
 export function info(context: string, message: string): void {
   if (shouldLog('info')) {
-    console.error(`[${context}] ${message}`);
+    const line = `[${context}] ${message}`;
+    console.error(line);
+    appendToFile(line);
   }
 }
 
 /** Log a debug message. Only shown when LOG_LEVEL=debug. */
 export function debug(context: string, message: string): void {
   if (shouldLog('debug')) {
-    console.error(`[${context}] ${message}`);
+    const line = `[${context}] ${message}`;
+    console.error(line);
+    appendToFile(line);
   }
 }
