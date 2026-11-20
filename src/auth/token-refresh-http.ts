@@ -228,8 +228,11 @@ function scanOriginMsal(localStorage: LocalStorage | undefined): OriginMsalScan 
  * migration (teams.cloud.microsoft, teams.microsoft.com, ...). The origin
  * getTeamsOrigin() selects can lack a refresh token while one survives on
  * another origin, so when the selected origin has none we fall back to a
- * refresh token from any other Teams origin — preferring the same
- * account/client, then the most recently updated.
+ * refresh token from any other Teams origin — but only for the same
+ * account: a shared profile can hold tokens from a previously signed-in
+ * user, and redeeming a foreign refresh token would mint credentials for
+ * the wrong account. When the session carries no account reference at all,
+ * any candidate may be used; ties break on most recently updated.
  */
 function extractMsalCacheInfo(state: SessionState): { cacheInfo: MsalCacheInfo; refreshTokenEntry: MsalRefreshToken } | { missing: string } {
   const selected = getTeamsOrigin(state);
@@ -255,8 +258,12 @@ function extractMsalCacheInfo(state: SessionState): { cacheInfo: MsalCacheInfo; 
   const sameAccount = candidates.filter(c =>
     (!referenceHomeAccountId || c.entry.homeAccountId === referenceHomeAccountId)
     && (!referenceClientId || c.entry.clientId === referenceClientId));
-  // Newest first; stable sort keeps origin preference order on ties.
-  const pool = (sameAccount.length > 0 ? sameAccount : candidates)
+  // With a known account reference, only same-account refresh tokens are
+  // eligible — a foreign one is treated as absent. With no reference at
+  // all, every candidate is eligible. Newest first; stable sort keeps
+  // origin preference order on ties.
+  const hasAccountReference = referenceHomeAccountId !== null || referenceClientId !== null;
+  const pool = (hasAccountReference ? sameAccount : candidates)
     .slice()
     .sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt);
   const chosen = pool[0];
