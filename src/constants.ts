@@ -153,6 +153,19 @@ export const TOKEN_REFRESH_THRESHOLD_MS = 10 * 60 * 1000;
  */
 export const ASSIGNMENTS_UNAVAILABLE_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * Hard deadline for one serialized token refresh (HTTP + browser fallback).
+ * A refresh that has not settled by then is abandoned so tool calls can
+ * never wait on it forever; the next call starts a fresh attempt.
+ */
+export const CORE_REFRESH_TIMEOUT_MS = 90_000;
+
+/** Max wait for the headless browser launch during token refresh (ms). */
+export const BROWSER_REFRESH_LAUNCH_TIMEOUT_MS = 30_000;
+
+/** Max wait for individual browser steps: evaluate, storageState, close (ms). */
+export const BROWSER_STEP_TIMEOUT_MS = 15_000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // User Identity
 // ─────────────────────────────────────────────────────────────────────────────
