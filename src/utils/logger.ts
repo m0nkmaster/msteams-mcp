@@ -53,10 +53,12 @@ const LOG_FILE_MAX_BYTES = 1024 * 1024;
 let logFilePath: string | null = null;
 
 /**
- * Enables appending every emitted line to `filePath`, ISO-timestamped.
- * When the file exceeds 1 MB it is rotated to `<filePath>.1` (one backup
- * kept). Pass null to disable. File write failures are swallowed — logging
- * must never break the server.
+ * Enables appending every emitted line to `filePath`, ISO-timestamped and
+ * prefixed with the pid — two server processes can share one config dir, so
+ * the pid is what tells their interleaved lines apart. When the file
+ * exceeds 1 MB it is rotated to `<filePath>.1` (one backup kept). Pass null
+ * to disable. File write failures are swallowed — logging must never break
+ * the server.
  */
 export function setLogFilePath(filePath: string | null): void {
   logFilePath = filePath;
@@ -73,7 +75,7 @@ function appendToFile(line: string): void {
     } catch {
       // Missing file or failed rotation — appendFileSync recreates as needed.
     }
-    fs.appendFileSync(logFilePath, `${new Date().toISOString()} ${line}\n`, 'utf8');
+    fs.appendFileSync(logFilePath, `${new Date().toISOString()} [pid ${process.pid}] ${line}\n`, 'utf8');
   } catch {
     // File logging is best-effort diagnostics only.
   }

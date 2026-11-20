@@ -172,11 +172,11 @@ describe('logger', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('appends ISO-timestamped lines to the log file', () => {
+    it('appends ISO-timestamped, pid-prefixed lines to the log file', () => {
       info('ctx', 'hello file');
 
       const content = fs.readFileSync(logFile, 'utf8');
-      expect(content).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z \[ctx\] hello file\n$/m);
+      expect(content).toMatch(new RegExp(`^\\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z \\[pid ${process.pid}\\] \\[ctx\\] hello file\\n$`, 'm'));
     });
 
     it('respects the configured level for file output', () => {
