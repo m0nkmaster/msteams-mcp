@@ -9,8 +9,10 @@ import {
   OVERLAY_STEP_PAUSE_MS,
   OVERLAY_COMPLETE_PAUSE_MS,
   TEAMS_HOSTS,
+  BROWSER_STEP_TIMEOUT_MS,
 } from '../constants.js';
 import { extractSubstrateToken } from '../auth/token-extractor.js';
+import { withTimeout } from '../utils/timeout.js';
 import * as logger from '../utils/logger.js';
 
 /**
@@ -367,7 +369,9 @@ const TOKEN_REFRESH_POLL_INTERVAL_MS = 1000;
  */
 async function checkBrowserTokenExpiry(page: Page): Promise<number> {
   try {
-    return await page.evaluate(() => {
+    // A wedged renderer can leave evaluate() pending forever; the deadline
+    // turns that into "no token found" so the caller's own timeout applies.
+    return await withTimeout(page.evaluate(() => {
       const now = Date.now();
       let bestExpiry = -1;
 
@@ -401,7 +405,7 @@ async function checkBrowserTokenExpiry(page: Page): Promise<number> {
       }
 
       return bestExpiry;
-    });
+    }), BROWSER_STEP_TIMEOUT_MS, 'browser token check');
   } catch {
     return -1;
   }

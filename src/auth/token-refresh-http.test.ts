@@ -45,6 +45,31 @@ function makeRefreshTokenEntry() {
   };
 }
 
+/** Creates an MSAL refresh token entry with overridable account fields. */
+function makeRtEntry(overrides: {
+  secret?: string;
+  homeAccountId?: string;
+  clientId?: string;
+  environment?: string;
+  lastUpdatedAt?: string;
+} = {}) {
+  const homeAccountId = overrides.homeAccountId ?? MOCK_HOME_ACCOUNT_ID;
+  const clientId = overrides.clientId ?? MOCK_CLIENT_ID;
+  const environment = overrides.environment ?? MOCK_ENVIRONMENT;
+  return {
+    name: `${homeAccountId}-${environment}-refreshtoken-${clientId}----`,
+    value: JSON.stringify({
+      credentialType: 'RefreshToken',
+      homeAccountId,
+      environment,
+      clientId,
+      secret: overrides.secret ?? 'mock-refresh-token-secret',
+      expiresOn: String(Math.floor(Date.now() / 1000) + 86400),
+      lastUpdatedAt: overrides.lastUpdatedAt ?? String(Date.now()),
+    }),
+  };
+}
+
 /** Creates a minimal MSAL access token localStorage entry. */
 function makeAccessTokenEntry(resource: string, target: string, expiresInSeconds = 3600) {
   const now = Math.floor(Date.now() / 1000);
@@ -550,6 +575,194 @@ describe('refreshTokensViaHttp', () => {
     vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ error_description: 'AADSTS65001: Consent required.' }), { status: 400 }));
     expect(await refreshTokensViaHttp('graph')).toMatchObject({ ok: false, error: { code: 'ACCESS_DENIED', message: expect.stringContaining('Microsoft Graph') } });
+  });
+
+  // ── Cross-origin refresh token fallback ─────────────────────────────
+  // After the Teams host migration a session can hold MSAL caches on both
+  // teams.cloud.microsoft (selected: unexpired access tokens, no RT) and
+  // teams.microsoft.com (the surviving refresh token).
+
+  function mockHappyPathFetch() {
+    vi.mocked(fetch).mockImplementation(async (url: RequestInfo | URL) => {
+      const urlStr = String(url);
+      if (urlStr.includes('login.microsoftonline.com')) {
+        return new Response(JSON.stringify(makeTokenResponse('mocked-scope')), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (urlStr.includes('authsvc.teams.microsoft.com')) {
+        return new Response(JSON.stringify({
+          tokens: { skypeToken: 'new-skype-token', expiresIn: 86400 },
+        }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('unexpected URL', { status: 500 });
+    });
+  }
+
+  /** The refresh_token grant value sent to Azure AD on the first token call. */
+  function refreshTokenUsed(): string | null {
+    const call = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes('login.microsoftonline.com'));
+    return call ? new URLSearchParams(String(call[1]?.body)).get('refresh_token') : null;
+  }
+
+  it('falls back to a refresh token on another Teams origin when the selected origin has none', async () => {
+    const state = makeMockSessionState();
+    state.origins = [
+      {
+        // Selected origin: live access tokens but no refresh token.
+        origin: 'https://teams.cloud.microsoft',
+        localStorage: [
+          makeAccessTokenEntry('substrate.office.com', 'https://substrate.office.com/.default'),
+          makeAccessTokenEntry('api.spaces.skype.com', 'https://api.spaces.skype.com/.default'),
+          makeAccessTokenEntry('chatsvcagg.teams.microsoft.com', 'https://chatsvcagg.teams.microsoft.com/.default'),
+        ],
+      },
+      {
+        // Stale origin: the only surviving refresh token.
+        origin: 'https://teams.microsoft.com',
+        localStorage: [makeRefreshTokenEntry()],
+      },
+    ];
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    mockHappyPathFetch();
+
+    const result = await refreshTokensViaHttp();
+
+    expect(result.ok).toBe(true);
+    expect(refreshTokenUsed()).toBe('mock-refresh-token-secret');
+
+    // New access tokens land in the selected origin so extractors find them.
+    const saved = vi.mocked(writeSessionState).mock.calls.at(-1)![0];
+    expect(saved.origins[0].origin).toBe('https://teams.cloud.microsoft');
+    const accessTokens = saved.origins[0].localStorage
+      .map(item => JSON.parse(item.value))
+      .filter(entry => entry.credentialType === 'AccessToken');
+    expect(accessTokens.filter(entry => String(entry.secret).startsWith('new-access-token'))).toHaveLength(3);
+  });
+
+  it('prefers a same-account refresh token over a newer foreign one', async () => {
+    const state = makeMockSessionState();
+    state.origins = [
+      {
+        origin: 'https://teams.cloud.microsoft',
+        localStorage: [makeAccessTokenEntry('substrate.office.com', 'https://substrate.office.com/.default')],
+      },
+      {
+        origin: 'https://teams.microsoft.com',
+        localStorage: [makeRtEntry({
+          secret: 'same-account-rt',
+          lastUpdatedAt: String(Date.now() - 60_000),
+        })],
+      },
+      {
+        origin: 'https://teams.microsoft.us',
+        localStorage: [makeRtEntry({
+          secret: 'foreign-rt',
+          homeAccountId: 'other-user.other-tenant',
+          lastUpdatedAt: String(Date.now()),
+        })],
+      },
+    ];
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    mockHappyPathFetch();
+
+    const result = await refreshTokensViaHttp();
+
+    expect(result.ok).toBe(true);
+    expect(refreshTokenUsed()).toBe('same-account-rt');
+  });
+
+  it('uses the newest refresh token when several origins hold one for the account', async () => {
+    const state = makeMockSessionState();
+    state.origins = [
+      {
+        origin: 'https://teams.cloud.microsoft',
+        localStorage: [makeAccessTokenEntry('substrate.office.com', 'https://substrate.office.com/.default')],
+      },
+      {
+        origin: 'https://teams.microsoft.com',
+        localStorage: [makeRtEntry({
+          secret: 'older-rt',
+          lastUpdatedAt: String(Date.now() - 60_000),
+        })],
+      },
+      {
+        origin: 'https://teams.chat.microsoft.com',
+        localStorage: [makeRtEntry({
+          secret: 'newer-rt',
+          lastUpdatedAt: String(Date.now()),
+        })],
+      },
+    ];
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    mockHappyPathFetch();
+
+    const result = await refreshTokensViaHttp();
+
+    expect(result.ok).toBe(true);
+    expect(refreshTokenUsed()).toBe('newer-rt');
+  });
+
+  it('still reports AUTH_REQUIRED when no Teams origin holds a refresh token', async () => {
+    const state = makeMockSessionState();
+    state.origins = [
+      {
+        origin: 'https://teams.cloud.microsoft',
+        localStorage: [makeAccessTokenEntry('substrate.office.com', 'https://substrate.office.com/.default')],
+      },
+      {
+        origin: 'https://teams.microsoft.com',
+        localStorage: [makeAccessTokenEntry('substrate.office.com', 'https://substrate.office.com/.default')],
+      },
+    ];
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+
+    const result = await refreshTokensViaHttp();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('AUTH_REQUIRED');
+      expect(result.error.message).toContain('No MSAL refresh token');
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('never redeems a refresh token belonging to a different account', async () => {
+    const state = makeMockSessionState();
+    state.origins = [
+      {
+        // Selected origin: account A's access tokens, no refresh token.
+        origin: 'https://teams.cloud.microsoft',
+        localStorage: [makeAccessTokenEntry('substrate.office.com', 'https://substrate.office.com/.default')],
+      },
+      {
+        // Other origin: only account B's refresh token — using it would mint
+        // tokens for the wrong user.
+        origin: 'https://teams.microsoft.com',
+        localStorage: [makeRtEntry({
+          secret: 'foreign-account-rt',
+          homeAccountId: 'other-user.other-tenant',
+        })],
+      },
+    ];
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+
+    const result = await refreshTokensViaHttp();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('AUTH_REQUIRED');
+      expect(result.error.message).toContain('No MSAL refresh token');
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(writeSessionState).not.toHaveBeenCalled();
   });
 
 });

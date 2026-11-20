@@ -19,10 +19,13 @@
  */
 
 import { createRequire } from 'module';
+import * as path from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from './server.js';
+import { CONFIG_DIR } from './auth/session-store.js';
+import { setLogFilePath } from './utils/logger.js';
 import { toolCategories } from './tools/registry.js';
 import { UsageError, parseToolArgs, resolveToolName, shortName } from './cli/resolve.js';
 import { printFailure, printResponse } from './cli/render.js';
@@ -33,6 +36,9 @@ const pkg = require('../package.json') as { version: string };
 
 /** Login can wait on SSO/MFA in a browser; everything else uses the default. */
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+
+// Keep a durable copy of diagnostics alongside the MCP server's log file.
+setLogFilePath(path.join(CONFIG_DIR, 'logs', 'server.log'));
 
 async function connect(): Promise<{ client: Client; cleanup: () => Promise<void> }> {
   const server = await createServer();

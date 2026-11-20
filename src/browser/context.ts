@@ -22,6 +22,9 @@ import {
   writeSessionState,
 } from '../auth/session-store.js';
 import { clearRegionCache } from '../utils/auth-guards.js';
+import { BROWSER_STEP_TIMEOUT_MS } from '../constants.js';
+import { withTimeout, TimeoutError } from '../utils/timeout.js';
+import { killBrowserProfileProcesses } from './force-kill.js';
 import * as log from '../utils/logger.js';
 
 export interface BrowserManager {
@@ -141,11 +144,12 @@ function getBrowserChannel(): 'msedge' | 'chrome' {
  * browser before attempting refresh to avoid lock contention.
  *
  * @param options.headless - Run without a visible window (default: true)
+ * @param options.launchTimeoutMs - Max wait for the browser launch (default: Playwright's)
  * @returns Browser manager with context and page
  * @throws Error if system browser is not found (with helpful suggestions)
  */
 export async function createBrowserContext(
-  { headless = true }: { headless?: boolean } = {}
+  { headless = true, launchTimeoutMs }: { headless?: boolean; launchTimeoutMs?: number } = {}
 ): Promise<BrowserManager> {
   ensureConfigDir();
 
@@ -160,6 +164,7 @@ export async function createBrowserContext(
       channel,
       viewport: { width: 1280, height: 800 },
       acceptDownloads: false,
+      ...(launchTimeoutMs !== undefined ? { timeout: launchTimeoutMs } : {}),
     });
 
     // Persistent contexts start with one page; use it or create one
@@ -172,7 +177,15 @@ export async function createBrowserContext(
     return await launchBrowser();
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
+
+    // On Windows a profile held by another process makes Edge exit during
+    // launch, which surfaces as a closed-target error rather than a
+    // SingletonLock message. Name the likely cause instead of leaving a
+    // generic launch failure.
+    if (errorMessage.includes('Target page, context or browser has been closed')) {
+      log.warn('browser', 'browser profile is in use by another process (another Teams MCP server?)');
+    }
+
     // Check if this is a profile lock error and try to recover
     if (errorMessage.includes('ProcessSingleton') || errorMessage.includes('SingletonLock')) {
       log.warn('browser', 'Profile lock detected, attempting to clean up and retry...');
@@ -205,7 +218,7 @@ export async function createBrowserContext(
  * Saves the current browser context's session state.
  */
 export async function saveSessionState(context: BrowserContext): Promise<void> {
-  const state = await context.storageState();
+  const state = await withTimeout(context.storageState(), BROWSER_STEP_TIMEOUT_MS, 'browser storageState()');
   writeSessionState(state);
   // Clear cached region config so new session values are picked up
   clearRegionCache();
@@ -213,6 +226,10 @@ export async function saveSessionState(context: BrowserContext): Promise<void> {
 
 /**
  * Closes the browser context and optionally saves session state.
+ *
+ * A wedged browser can leave close() pending forever; after the step timeout
+ * the processes holding our profile are force-killed so the profile lock is
+ * released for the next attempt.
  */
 export async function closeBrowser(
   manager: BrowserManager,
@@ -221,5 +238,12 @@ export async function closeBrowser(
   if (saveSession) {
     await saveSessionState(manager.context);
   }
-  await manager.context.close();
+  try {
+    await withTimeout(manager.context.close(), BROWSER_STEP_TIMEOUT_MS, 'browser context close');
+  } catch (error) {
+    if (error instanceof TimeoutError) {
+      await killBrowserProfileProcesses(BROWSER_PROFILE_DIR);
+    }
+    throw error;
+  }
 }

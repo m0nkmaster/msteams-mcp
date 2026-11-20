@@ -21,7 +21,7 @@
  * 6. Write updated session state back to encrypted storage
  */
 
-import { ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES } from '../constants.js';
+import { ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES, TEAMS_HOSTS } from '../constants.js';
 import {
   readSessionState,
   writeSessionState,
@@ -172,36 +172,118 @@ const REFRESH_TIMEOUT_MS = 10000;
 // MSAL Cache Extraction
 // ============================================================================
 
-/**
- * Extracts MSAL cache info (refresh token, client ID, tenant ID) from session state.
- * On failure returns a diagnostic string describing what was missing.
- */
-function extractMsalCacheInfo(state: SessionState): { cacheInfo: MsalCacheInfo; refreshTokenEntry: MsalRefreshToken } | { missing: string } {
-  const localStorage = getTeamsOrigin(state)?.localStorage ?? [];
-  let refreshToken: MsalRefreshToken | null = null;
-  let refreshTokenKey: string | null = null;
-  let tenantId: string | null = null;
+/** One MSAL cache origin's refresh-token candidates plus account references. */
+interface OriginMsalScan {
+  localStorage: LocalStorage;
+  /** Refresh token entries found on this origin. */
+  refreshTokens: Array<{ key: string; entry: MsalRefreshToken; lastUpdatedAt: number }>;
+  /** Tenant id from any access token's realm on this origin. */
+  tenantId: string | null;
+  /** Account identifiers used to prefer a same-account refresh token. */
+  homeAccountId: string | null;
+  clientId: string | null;
+}
 
-  for (const item of localStorage) {
+/** Scans one origin's localStorage for refresh tokens and account references. */
+function scanOriginMsal(localStorage: LocalStorage | undefined): OriginMsalScan {
+  const scan: OriginMsalScan = {
+    localStorage: localStorage ?? [],
+    refreshTokens: [],
+    tenantId: null,
+    homeAccountId: null,
+    clientId: null,
+  };
+
+  for (const item of scan.localStorage) {
     try {
       const entry = JSON.parse(item.value);
-      if (entry.credentialType === 'RefreshToken' && entry.secret && entry.clientId) {
-        refreshToken = entry as MsalRefreshToken;
-        refreshTokenKey = item.name;
+      if (entry.credentialType === 'AccessToken' && entry.realm && !scan.tenantId) {
+        scan.tenantId = entry.realm;
       }
-      // Tenant ID comes from any access token's realm field
-      if (entry.credentialType === 'AccessToken' && entry.realm && !tenantId) {
-        tenantId = entry.realm;
+      if (entry.credentialType === 'RefreshToken' && entry.secret && entry.clientId) {
+        scan.refreshTokens.push({
+          key: item.name,
+          entry: entry as MsalRefreshToken,
+          lastUpdatedAt: Number(entry.lastUpdatedAt) || 0,
+        });
+      }
+      if (!scan.homeAccountId && typeof entry.homeAccountId === 'string') {
+        scan.homeAccountId = entry.homeAccountId;
+      }
+      if (!scan.clientId && typeof entry.clientId === 'string') {
+        scan.clientId = entry.clientId;
       }
     } catch {
       continue;
     }
   }
+  return scan;
+}
 
-  if (!refreshToken || !refreshTokenKey || !tenantId) {
-    return { missing: `localStorage items: ${localStorage.length}, refreshToken: ${!!refreshToken}, tenantId: ${!!tenantId}` };
+/**
+ * Extracts MSAL cache info (refresh token, client ID, tenant ID) from session state.
+ * On failure returns a diagnostic string describing what was missing.
+ *
+ * A session can hold MSAL caches on several Teams origins after the host
+ * migration (teams.cloud.microsoft, teams.microsoft.com, ...). The origin
+ * getTeamsOrigin() selects can lack a refresh token while one survives on
+ * another origin, so when the selected origin has none we fall back to a
+ * refresh token from any other Teams origin — but only for the same
+ * account: a shared profile can hold tokens from a previously signed-in
+ * user, and redeeming a foreign refresh token would mint credentials for
+ * the wrong account. When the session carries no account reference at all,
+ * any candidate may be used; ties break on most recently updated.
+ */
+function extractMsalCacheInfo(state: SessionState): { cacheInfo: MsalCacheInfo; refreshTokenEntry: MsalRefreshToken } | { missing: string } {
+  const selected = getTeamsOrigin(state);
+
+  // Teams origins in preference order: the selected origin first.
+  const teamsOrigins = (state.origins ?? []).filter(o =>
+    TEAMS_HOSTS.some(host => o.origin.includes(host)));
+  const ordered = selected
+    ? [selected, ...teamsOrigins.filter(o => o !== selected)]
+    : teamsOrigins;
+
+  const scans = ordered.map(origin => scanOriginMsal(origin.localStorage));
+  const primaryScan = selected ? scans[0] : undefined;
+
+  // Reference account = the selected origin's identifiers; a refresh token
+  // from the same account is preferred over a newer foreign one.
+  const referenceHomeAccountId = primaryScan?.homeAccountId ?? null;
+  const referenceClientId = primaryScan?.clientId ?? null;
+
+  const candidates = scans.flatMap((scan, i) =>
+    scan.refreshTokens.map(rt => ({ ...rt, originIndex: i })));
+
+  const sameAccount = candidates.filter(c =>
+    (!referenceHomeAccountId || c.entry.homeAccountId === referenceHomeAccountId)
+    && (!referenceClientId || c.entry.clientId === referenceClientId));
+  // With a known account reference, only same-account refresh tokens are
+  // eligible — a foreign one is treated as absent. With no reference at
+  // all, every candidate is eligible. Newest first; stable sort keeps
+  // origin preference order on ties.
+  const hasAccountReference = referenceHomeAccountId !== null || referenceClientId !== null;
+  const pool = (hasAccountReference ? sameAccount : candidates)
+    .slice()
+    .sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt);
+  const chosen = pool[0];
+
+  if (!chosen) {
+    const localStorageItems = scans.reduce((n, s) => n + s.localStorage.length, 0);
+    return { missing: `teams origins: ${scans.length}, localStorage items: ${localStorageItems}, refreshToken: false, tenantId: ${scans.some(s => s.tenantId !== null)}` };
   }
 
+  const chosenScan = scans[chosen.originIndex];
+  const tenantId = chosenScan.tenantId
+    ?? primaryScan?.tenantId
+    ?? scans.find(s => s.tenantId !== null)?.tenantId
+    ?? null;
+
+  if (!tenantId) {
+    return { missing: `teams origins: ${scans.length}, refreshToken: true, tenantId: false` };
+  }
+
+  const { entry: refreshToken, key: refreshTokenKey } = chosen;
   return {
     cacheInfo: {
       refreshToken: refreshToken.secret,

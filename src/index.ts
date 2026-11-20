@@ -8,7 +8,13 @@
  * initial authentication.
  */
 
+import * as path from 'path';
 import { runServer } from './server.js';
+import { CONFIG_DIR } from './auth/session-store.js';
+import { setLogFilePath } from './utils/logger.js';
+
+// MCP clients do not always retain the server's stderr; keep a durable copy.
+setLogFilePath(path.join(CONFIG_DIR, 'logs', 'server.log'));
 
 runServer().catch((error) => {
   console.error('Fatal error:', error);

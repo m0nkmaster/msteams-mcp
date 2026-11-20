@@ -3,7 +3,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { error, warn, info, debug, setLogLevel } from './logger.js';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { error, warn, info, debug, setLogLevel, setLogFilePath } from './logger.js';
 
 describe('logger', () => {
   let consoleSpy: {
@@ -151,6 +154,60 @@ describe('logger', () => {
 
       expect(consoleSpy.log).not.toHaveBeenCalled();
       expect(consoleSpy.debug).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('file logging', () => {
+    let dir: string;
+    let logFile: string;
+
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-logger-'));
+      logFile = path.join(dir, 'logs', 'server.log');
+      setLogFilePath(logFile);
+    });
+
+    afterEach(() => {
+      setLogFilePath(null);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('appends ISO-timestamped, pid-prefixed lines to the log file', () => {
+      info('ctx', 'hello file');
+
+      const content = fs.readFileSync(logFile, 'utf8');
+      expect(content).toMatch(new RegExp(`^\\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z \\[pid ${process.pid}\\] \\[ctx\\] hello file\\n$`, 'm'));
+    });
+
+    it('respects the configured level for file output', () => {
+      setLogLevel('error');
+
+      info('ctx', 'filtered out');
+      error('ctx', 'kept');
+
+      const content = fs.readFileSync(logFile, 'utf8');
+      expect(content).not.toContain('filtered out');
+      expect(content).toContain('[ctx] kept');
+    });
+
+    it('rotates the file past 1 MB, keeping one backup', () => {
+      fs.mkdirSync(path.dirname(logFile), { recursive: true });
+      fs.writeFileSync(logFile, 'x'.repeat(1024 * 1024 + 10));
+
+      info('ctx', 'after-rotate');
+
+      expect(fs.statSync(logFile).size).toBeLessThan(1024);
+      expect(fs.statSync(`${logFile}.1`).size).toBeGreaterThan(1024 * 1024);
+      expect(fs.readFileSync(logFile, 'utf8')).toContain('after-rotate');
+    });
+
+    it('never throws when the file cannot be written', () => {
+      const blocker = path.join(dir, 'blocker');
+      fs.writeFileSync(blocker, 'x');
+      setLogFilePath(path.join(blocker, 'logs', 'server.log'));
+
+      expect(() => info('ctx', 'still works')).not.toThrow();
+      expect(consoleSpy.error).toHaveBeenCalledWith('[ctx] still works');
     });
   });
 });

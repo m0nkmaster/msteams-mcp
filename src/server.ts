@@ -39,6 +39,20 @@ import { getToolDefinitions, invokeTool } from './tools/registry.js';
 import { ErrorCode, createError, type McpError } from './types/errors.js';
 import * as log from './utils/logger.js';
 
+/**
+ * Summarises a formatted tool response for the CallTool end log: 'ok' or
+ * 'error <code>'. Reads only the errorCode our own formatter writes.
+ */
+function describeToolOutcome(response: { isError?: boolean; content?: Array<{ text?: string }> }): string {
+  if (!response.isError) return 'ok';
+  try {
+    const parsed = JSON.parse(response.content?.[0]?.text ?? '') as { errorCode?: string };
+    return `error ${parsed.errorCode ?? 'UNKNOWN'}`;
+  } catch {
+    return 'error';
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MCP Server Class
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,58 +237,76 @@ export class TeamsServer {
     // Handle tool calls (with auto-login retry for auth errors)
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      const startedAt = Date.now();
+      // Metadata only — never log arguments or content (they can hold message text).
+      log.info('tool', `CallTool start: ${name} (pid ${process.pid})`);
 
+      let outcome = 'error';
       try {
-        const result = await invokeTool(name, args);
-
-        if (result.success) {
-          return this.formatSuccess(result.data);
-        }
-
-        // Auto-login retry for auth errors (skip for login/status tools themselves)
-        const isAuthError = result.error.code === ErrorCode.AUTH_REQUIRED || result.error.code === ErrorCode.AUTH_EXPIRED;
-        if (isAuthError && !TeamsServer.AUTH_TOOL_NAMES.has(name)) {
-          log.warn('auto-login', `Tool '${name}' returned ${result.error.code}, attempting automatic re-authentication...`);
-          // HTTP refresh, then headless browser SSO; concurrent calls share one attempt
-          const refresh = await refreshTokensViaBrowser();
-
-          if (refresh.ok) {
-            log.info('auto-login', 'Re-authentication succeeded, retrying tool...');
-            const retryResult = await invokeTool(name, args);
-            if (retryResult.success) {
-              return this.formatSuccess(retryResult.data);
-            }
-            // Retry also failed after successful re-auth — log for diagnostics
-            log.error('auto-login', `Retry failed after successful re-authentication: ${retryResult.error.message}`);
-            return this.formatError(retryResult.error);
-          }
-
-          // Auto-login failed — return a strongly-worded error directing to forceNew
-          log.error('auto-login', 'Automatic re-authentication failed.');
-          return this.formatError(createError(
-            ErrorCode.AUTH_REQUIRED,
-            'ACTION REQUIRED: Teams session has expired and automatic re-authentication failed. You MUST call teams_login with forceNew: true to clear stale state and re-authenticate. Do NOT call teams_login without forceNew — it will return early without fixing the problem.',
-            { suggestions: [
-              'IMMEDIATELY call teams_login with { "forceNew": true }',
-              'After login succeeds, retry the original request',
-              'Do NOT skip this step or tell the user Teams is unavailable — authentication just needs refreshing',
-            ] }
-          ));
-        }
-
-        return this.formatError(result.error);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        return this.formatError(createError(
-          ErrorCode.UNKNOWN,
-          message,
-          { retryable: false }
-        ));
+        const response = await this.handleToolCall(name, args);
+        outcome = describeToolOutcome(response);
+        return response;
+      } finally {
+        log.info('tool', `CallTool end: ${name} ${Date.now() - startedAt}ms ${outcome}`);
       }
     });
 
     return server;
+  }
+
+  /**
+   * Runs one tool call, retrying once through automatic re-authentication
+   * when it fails with an auth error.
+   */
+  private async handleToolCall(name: string, args: unknown) {
+    try {
+      const result = await invokeTool(name, args);
+
+      if (result.success) {
+        return this.formatSuccess(result.data);
+      }
+
+      // Auto-login retry for auth errors (skip for login/status tools themselves)
+      const isAuthError = result.error.code === ErrorCode.AUTH_REQUIRED || result.error.code === ErrorCode.AUTH_EXPIRED;
+      if (isAuthError && !TeamsServer.AUTH_TOOL_NAMES.has(name)) {
+        log.warn('auto-login', `Tool '${name}' returned ${result.error.code}, attempting automatic re-authentication...`);
+        // HTTP refresh, then headless browser SSO; concurrent calls share one attempt
+        const refresh = await refreshTokensViaBrowser();
+
+        if (refresh.ok) {
+          log.info('auto-login', 'Re-authentication succeeded, retrying tool...');
+          const retryResult = await invokeTool(name, args);
+          if (retryResult.success) {
+            return this.formatSuccess(retryResult.data);
+          }
+          // Retry also failed after successful re-auth — log for diagnostics
+          log.error('auto-login', `Retry failed after successful re-authentication: ${retryResult.error.message}`);
+          return this.formatError(retryResult.error);
+        }
+
+        // Auto-login failed — return a strongly-worded error directing to forceNew
+        log.error('auto-login', 'Automatic re-authentication failed.');
+        return this.formatError(createError(
+          ErrorCode.AUTH_REQUIRED,
+          'ACTION REQUIRED: Teams session has expired and automatic re-authentication failed. You MUST call teams_login with forceNew: true to clear stale state and re-authenticate. Do NOT call teams_login without forceNew — it will return early without fixing the problem.',
+          { suggestions: [
+            'IMMEDIATELY call teams_login with { "forceNew": true }',
+            'After login succeeds, retry the original request',
+            'Do NOT skip this step or tell the user Teams is unavailable — authentication just needs refreshing',
+          ] }
+        ));
+      }
+
+      return this.formatError(result.error);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      return this.formatError(createError(
+        ErrorCode.UNKNOWN,
+        message,
+        { retryable: false }
+      ));
+    }
   }
 }
 
