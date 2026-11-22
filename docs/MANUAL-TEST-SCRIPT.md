@@ -29,6 +29,7 @@ This is a test script for verifying all MCP tools work correctly before release.
 | Tool | Purpose |
 |------|---------|
 | `teams_get_thread` | Get messages from a conversation/thread |
+| `teams_get_new_messages` | Get new messages across conversations since the previous call (opaque `after`/`nextAfter` cursor) |
 | `teams_get_unread` | Get unread status (aggregate or specific conversation) |
 | `teams_get_activity` | Get activity feed (mentions, reactions, replies) |
 

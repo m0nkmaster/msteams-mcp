@@ -15,12 +15,15 @@ import { DEFAULT_THREAD_LIMIT } from '../constants.js';
 /** Maximum length of a last-message preview before truncation. */
 const PREVIEW_MAX_LENGTH = 120;
 
+/** Conversation type, derived from the conversation ID. */
+export type ChatType = 'channel' | 'meeting' | 'group' | 'oneOnOne' | 'chat';
+
 /** A summarised conversation as returned by the chat list. */
 export interface ChatSummary {
   conversationId: string;
   /** Channel/group topic, or empty for 1:1 chats. */
   topic: string;
-  chatType: 'channel' | 'meeting' | 'group' | 'oneOnOne' | 'chat';
+  chatType: ChatType;
   /** ISO timestamp of the last message, or empty if unknown. */
   lastMessageTime: string;
   /** Display name of the last message's sender. */
@@ -35,7 +38,7 @@ export interface GetConversationsResult {
 }
 
 /** Classifies a conversation type from its ID. */
-function classifyChatType(id: string): ChatSummary['chatType'] {
+function classifyChatType(id: string): ChatType {
   if (id.includes('meeting_')) return 'meeting';
   if (id.includes('@thread.tacv2')) return 'channel';
   if (id.includes('@unq.gbl.spaces')) return 'oneOnOne';

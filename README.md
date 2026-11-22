@@ -137,6 +137,7 @@ See [CLI Usage](#cli-usage) for commands, or run `msteams` for the command list.
 | `teams_search_email` | Search emails in your mailbox (same auth as Teams - no extra login)                                                                                   |
 | `teams_get_email`    | Get one email's full body, recipients and attachment list, by ID from `teams_search_email`                                                            |
 | `teams_list_chats`   | List recent conversations (1:1, group, meeting, channel) with a last-message preview                                                                  |
+| `teams_get_new_messages` | New messages across conversations since an opaque cursor; cheap polling with compact summaries (`after`/`nextAfter`)                              |
 | `teams_get_message`  | Get a single message by ID with full content (any age); includes reactions                                                                            |
 | `teams_get_thread`   | Get messages from a conversation/thread; includes reactions; `threadRootId` scopes to one channel thread; `fromUrl` accepts a Teams message deep link; `cursor` pages back through older history |
 | `teams_find_channel` | Find channels by name (your teams + org-wide discovery)                                                                                               |

@@ -46,6 +46,7 @@ src/
 │   ├── chatsvc-common.ts # Shared utilities (date formatting)
 │   ├── chatsvc-messaging.ts # Send, edit, delete, threads, 1:1/group chat
 │   ├── chatsvc-conversations.ts # Recent conversation list with last-message preview
+│   ├── chatsvc-new-messages.ts # New-message polling across conversations (opaque cursor)
 │   ├── chatsvc-activity.ts  # Activity feed (mentions, reactions, replies)
 │   ├── chatsvc-reactions.ts # Add/remove emoji reactions
 │   ├── chatsvc-virtual.ts   # Saved messages, followed threads, save/unsave

@@ -24,11 +24,21 @@ import {
   getFollowedThreads,
   getConversations,
   waitForReply,
+  getNewMessages,
 } from '../api/chatsvc-api.js';
 import { getFavorites, addFavorite, removeFavorite, getCustomEmojis } from '../api/csa-api.js';
 import { parseTeamsMessageUrl } from '../utils/parsers.js';
 import { ErrorCode, createError } from '../types/errors.js';
-import { SELF_CHAT_ID, MAX_THREAD_LIMIT, DEFAULT_THREAD_LIMIT, MAX_WAIT_SECONDS, STANDARD_EMOJIS } from '../constants.js';
+import {
+  SELF_CHAT_ID,
+  MAX_THREAD_LIMIT,
+  DEFAULT_THREAD_LIMIT,
+  MAX_WAIT_SECONDS,
+  STANDARD_EMOJIS,
+  DEFAULT_NEW_MESSAGES_MAX_CHATS,
+  DEFAULT_NEW_MESSAGES_PER_CHAT,
+  MAX_NEW_MESSAGES_PER_CHAT,
+} from '../constants.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -130,6 +140,13 @@ export const WaitForReplyInputSchema = z.object({
   includeSelf: z.boolean().optional().default(false),
 }).refine(d => d.conversationId || d.fromUrl, {
   message: 'Provide either conversationId or fromUrl',
+});
+
+export const GetNewMessagesInputSchema = z.object({
+  after: z.string().min(1).optional(),
+  maxChats: z.number().int().min(1).max(MAX_THREAD_LIMIT).optional().default(DEFAULT_NEW_MESSAGES_MAX_CHATS),
+  limitPerChat: z.number().int().min(1).max(MAX_NEW_MESSAGES_PER_CHAT).optional().default(DEFAULT_NEW_MESSAGES_PER_CHAT),
+  includeOwn: z.boolean().optional().default(false),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -542,6 +559,32 @@ const waitForReplyToolDefinition: Tool = {
       includeSelf: {
         type: 'boolean',
         description: 'Include your own messages in the result (default false, since you are usually waiting for someone else\'s reply).',
+      },
+    },
+  },
+};
+
+const getNewMessagesToolDefinition: Tool = {
+  name: 'teams_get_new_messages',
+  description: 'Get new messages across all your chats, group chats, meetings and channels since the previous call. Cheaper than listing chats and reading every thread: one conversations-list request, then only conversations with new activity are fetched. Pass nextAfter from the previous response as after; omit after on the first run to get each conversation\'s most recent page (up to limitPerChat messages). Returns compact items (conversationId, topic, chatType, messageId, senderName, sentAt, snippet up to 200 chars), oldest first, plus nextAfter, truncated (true when more conversations/messages remain - call again with nextAfter to continue) and errors (per-conversation failures; other conversations still return). Your own messages are excluded unless includeOwn=true. Channel results are top-level posts; chatsvc does not return thread replies in the channel feed, so use teams_get_activity for mentions/replies or teams_get_thread with a threadRootId for those. Use teams_get_message with conversationId and messageId for full content, or teams_get_thread for context. Read-only and idempotent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      after: {
+        type: 'string',
+        description: 'Opaque cursor: the nextAfter value from a previous teams_get_new_messages response. Omit on the first run (returns each conversation\'s most recent page).',
+      },
+      maxChats: {
+        type: 'number',
+        description: 'Maximum conversations to scan, most recently active first (default 30, max 200). When more have new activity, truncated is true and nextAfter resumes the rest.',
+      },
+      limitPerChat: {
+        type: 'number',
+        description: 'Maximum messages fetched per conversation (default 50, max 200). When a conversation has more, truncated is true and nextAfter resumes the rest.',
+      },
+      includeOwn: {
+        type: 'boolean',
+        description: 'Include your own messages (default false, since polling is usually for messages from others).',
       },
     },
   },
@@ -1124,6 +1167,31 @@ async function handleWaitForReply(
   };
 }
 
+async function handleGetNewMessages(
+  input: z.infer<typeof GetNewMessagesInputSchema>
+): Promise<ToolResult> {
+  const result = await getNewMessages({
+    after: input.after,
+    maxChats: input.maxChats,
+    limitPerChat: input.limitPerChat,
+    includeOwn: input.includeOwn,
+  });
+
+  if (!result.ok) {
+    return { success: false, error: result.error };
+  }
+
+  return {
+    success: true,
+    data: {
+      items: result.value.items,
+      nextAfter: result.value.nextAfter,
+      truncated: result.value.truncated,
+      errors: result.value.errors,
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Exports
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1254,6 +1322,12 @@ export const waitForReplyTool: RegisteredTool<typeof WaitForReplyInputSchema> = 
   handler: handleWaitForReply,
 };
 
+export const getNewMessagesTool: RegisteredTool<typeof GetNewMessagesInputSchema> = {
+  definition: getNewMessagesToolDefinition,
+  schema: GetNewMessagesInputSchema,
+  handler: handleGetNewMessages,
+};
+
 /** All message-related tools. */
 export const messageTools = [
   sendMessageTool,
@@ -1277,4 +1351,5 @@ export const messageTools = [
   getMessageTool,
   listChatsTool,
   waitForReplyTool,
+  getNewMessagesTool,
 ];
