@@ -134,6 +134,43 @@ export const NEW_MESSAGES_FETCH_CONCURRENCY = 5;
 export const NEW_MESSAGES_FLOOR_SKEW_MS = 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MCP Events (SEP-3415)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Minimum interval between upstream polls for MCP Events (traffic guard). */
+export const MIN_EVENTS_INTERVAL_MS = 15_000;
+
+/** Default interval between upstream polls for MCP Events. */
+export const DEFAULT_EVENTS_INTERVAL_MS = 60_000;
+
+/** Maximum interval between upstream polls for MCP Events. */
+export const MAX_EVENTS_INTERVAL_MS = 15 * 60_000;
+
+/** Cap for the exponential backoff after upstream errors. */
+export const MAX_EVENTS_BACKOFF_MS = 15 * 60_000;
+
+/** Maximum doublings applied to the events interval while backing off. */
+export const MAX_EVENTS_BACKOFF_DOUBLINGS = 10;
+
+/** Default heartbeat interval on an events/stream. */
+export const DEFAULT_EVENTS_HEARTBEAT_MS = 30_000;
+
+/** Minimum heartbeat interval the server grants. */
+export const MIN_EVENTS_HEARTBEAT_MS = 5_000;
+
+/** Maximum heartbeat interval the server grants. */
+export const MAX_EVENTS_HEARTBEAT_MS = 60_000;
+
+/** Default cap on events returned by one events/poll. */
+export const DEFAULT_EVENTS_MAX_EVENTS = 100;
+
+/** Hard cap on events returned by one events/poll. */
+export const MAX_EVENTS_PER_POLL = 500;
+
+/** A cursor timestamp further in the future than this is treated as clock skew. */
+export const CURSOR_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Wait for reply
 // ─────────────────────────────────────────────────────────────────────────────
 
