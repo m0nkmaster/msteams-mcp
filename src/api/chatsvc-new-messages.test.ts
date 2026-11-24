@@ -536,3 +536,85 @@ describe('getNewMessages', () => {
     expect(mockHttp).not.toHaveBeenCalled();
   });
 });
+
+describe('resuming successive polls', () => {
+  const ids = [FLOOR + 3, FLOOR + 2, FLOOR + 1, FLOOR];
+  const knownChat = encodeNewMessagesCursor({ version: 1, since: FLOOR + 10, chats: { [CONVERSATION_ID]: String(FLOOR) } });
+  const now = FLOOR + 120_000;
+
+  it.each([false, true])('drains every page once with an inclusive start time (first request fails: %s)', async failFirst => {
+    let fail = failFirst;
+    let newest = ids[0];
+    mockHttp.mockImplementation(async url => {
+      if (url.includes('/conversations?')) {
+        return httpOk({ conversations: [rawConversation(new Date(newest).toISOString())] });
+      }
+      if (fail) {
+        fail = false;
+        return err(createError(ErrorCode.API_ERROR, 'temporary failure'));
+      }
+      const params = new URL(url).searchParams;
+      const offset = Number(params.get('syncState'));
+      if (offset) newest = FLOOR + 4;
+      const messages = [{ id: String(ids[offset]), messagetype: 'Text' }];
+      const backwardLink = BASE + '/messages?syncState=' + (offset + 1);
+      return httpOk({ messages, _metadata: { backwardLink } });
+    });
+
+    let after = knownChat;
+    const received = [];
+    for (let i = 0; i < 5; i++) {
+      const result = await getNewMessages({ after, limitPerChat: 1, now });
+      if (!result.ok) throw Error(result.error.message);
+      received.push(...result.value.items.map(item => Number(item.messageId)));
+      after = result.value.nextAfter;
+      if (!result.value.truncated && !result.value.errors.length) break;
+    }
+    expect(received).toEqual(ids.slice(0, 3));
+    expect(decodeNewMessagesCursor(after)?.chats[CONVERSATION_ID]).toBe(String(ids[0]));
+    // The new arrival was never part of the older pages.
+    mockHttp.mockImplementation(async url => url.includes('/conversations?')
+      ? httpOk({ conversations: [rawConversation(new Date(newest).toISOString())] })
+      : httpOk({ messages: [{ id: String(newest), messagetype: 'Text' }] }));
+    const next = await getNewMessages({ after, now });
+    if (!next.ok) throw Error(next.error.message);
+    expect(next.value.items.map(i => Number(i.messageId))).toEqual([newest]);
+  });
+
+  it('drains a second conversation-list page and picks up activity during the sweep', async () => {
+    let later = false;
+    const chat = (id: number, time: number) => ({
+      ...rawConversation(new Date(time).toISOString()), id: 'chat-' + id,
+    });
+    mockHttp.mockImplementation(async url => {
+      if (url.includes('/conversations?')) {
+        if (new URL(url).searchParams.get('syncState') === 'second') {
+          return httpOk({ conversations: [chat(201, FLOOR)] });
+        }
+        return httpOk({
+          conversations: [
+            ...(later ? [chat(202, now + 1)] : []),
+            ...Array.from({ length: later ? 199 : 200 }, (_, i) => chat(i, FLOOR + 1)),
+          ],
+          _metadata: { backwardLink: BASE + '/conversations?syncState=second' },
+        });
+      }
+      const id = url.includes('/chat-202/') ? now + 1 : url.includes('/chat-201/') ? FLOOR : FLOOR + 1;
+      return httpOk({ messages: [{ id: String(id), messagetype: 'Text' }] });
+    });
+    const first = await getNewMessages({ maxChats: 200, now });
+    if (!first.ok) throw Error(first.error.message);
+    expect(first.value.items).toHaveLength(200);
+    expect(first.value.truncated).toBe(true);
+
+    later = true;
+    const second = await getNewMessages({ after: first.value.nextAfter, now: now + 120_000 });
+    if (!second.ok) throw Error(second.error.message);
+    expect(second.value.items.map(i => i.conversationId)).toEqual(['chat-201']);
+    expect(second.value.truncated).toBe(false);
+
+    const next = await getNewMessages({ after: second.value.nextAfter, now: now + 120_001 });
+    if (!next.ok) throw Error(next.error.message);
+    expect(next.value.items.map(i => i.conversationId)).toEqual(['chat-202']);
+  });
+});

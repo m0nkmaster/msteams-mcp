@@ -10,6 +10,7 @@ import { CHATSVC_API, getSkypeAuthHeaders } from '../utils/api-config.js';
 import { type Result, ok } from '../types/result.js';
 import { requireMessageAuthWithConfig } from '../utils/auth-guards.js';
 import { stripHtml } from '../utils/parsers.js';
+import { cursorFromBackwardLink } from './chatsvc-messaging.js';
 import { DEFAULT_THREAD_LIMIT } from '../constants.js';
 
 /** Maximum length of a last-message preview before truncation. */
@@ -35,6 +36,7 @@ export interface ChatSummary {
 /** Result of listing conversations. */
 export interface GetConversationsResult {
   conversations: ChatSummary[];
+  nextPage?: string;
 }
 
 /** Classifies a conversation type from its ID. */
@@ -88,7 +90,7 @@ export function parseConversation(raw: Record<string, unknown>): ChatSummary | n
  * channels), newest activity first, capped at `limit`.
  */
 export async function getConversations(
-  options: { limit?: number } = {}
+  options: { limit?: number; page?: string } = {}
 ): Promise<Result<GetConversationsResult>> {
   const authResult = requireMessageAuthWithConfig();
   if (!authResult.ok) {
@@ -97,8 +99,12 @@ export async function getConversations(
   const { auth, region, baseUrl } = authResult.value;
   const limit = options.limit ?? DEFAULT_THREAD_LIMIT;
 
-  const response = await httpRequest<{ conversations?: unknown[] }>(
-    CHATSVC_API.conversations(region, baseUrl),
+  const url = new URL(CHATSVC_API.conversations(region, baseUrl));
+  for (const [key, value] of new URLSearchParams(options.page)) {
+    if (key !== 'pageSize' && key !== 'view') url.searchParams.set(key, value);
+  }
+  const response = await httpRequest<{ conversations?: unknown[]; _metadata?: { backwardLink?: string } }>(
+    url.toString(),
     {
       method: 'GET',
       headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
@@ -118,5 +124,5 @@ export async function getConversations(
     .filter((c): c is ChatSummary => c !== null)
     .slice(0, limit);
 
-  return ok({ conversations });
+  return ok({ conversations, nextPage: cursorFromBackwardLink(response.value.data._metadata?.backwardLink) });
 }

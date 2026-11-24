@@ -18,7 +18,7 @@ import {
   type ChatSummary,
   type ChatType,
 } from './chatsvc-conversations.js';
-import { buildThreadMessagesUrl } from './chatsvc-messaging.js';
+import { buildThreadMessagesUrl, cursorFromBackwardLink } from './chatsvc-messaging.js';
 import type { RawChatsvcMessage } from '../types/api-responses.js';
 import {
   DEFAULT_NEW_MESSAGES_MAX_CHATS,
@@ -45,6 +45,10 @@ export interface NewMessagesCursor {
   version: 1;
   since: number;
   chats: Record<string, string>;
+  /** Older pages still needed before each chat can commit its new high-water mark. */
+  pending?: Record<string, { older: string; through: number }>;
+  page?: string;
+  scanStartedAt?: number;
 }
 
 /** A compact new message as returned by the feed. */
@@ -119,13 +123,27 @@ export function decodeNewMessagesCursor(value: string): NewMessagesCursor | null
   if (typeof raw.since !== 'number' || !Number.isFinite(raw.since) || raw.since < 0) return null;
   if (!raw.chats || typeof raw.chats !== 'object' || Array.isArray(raw.chats)) return null;
 
+  if (raw.page !== undefined && typeof raw.page !== 'string') return null;
+  if (raw.scanStartedAt !== undefined && (typeof raw.scanStartedAt !== 'number' ||
+      !Number.isFinite(raw.scanStartedAt) || raw.scanStartedAt < 0)) return null;
+
   const chats: Record<string, string> = {};
   for (const [conversationId, messageId] of Object.entries(raw.chats as Record<string, unknown>)) {
     if (typeof messageId !== 'string') return null;
     chats[conversationId] = messageId;
   }
 
-  return { version: 1, since: raw.since, chats };
+  const pending: NonNullable<NewMessagesCursor['pending']> = {};
+  if (raw.pending !== undefined) {
+    if (!raw.pending || typeof raw.pending !== 'object' || Array.isArray(raw.pending)) return null;
+    for (const [id, entry] of Object.entries(raw.pending)) {
+      if (!entry || typeof entry.older !== 'string' || !entry.older ||
+          typeof entry.through !== 'number' || !Number.isFinite(entry.through) || entry.through <= 0) return null;
+      pending[id] = { older: entry.older, through: entry.through };
+    }
+  }
+  return { version: 1, since: raw.since, chats, pending: raw.pending ? pending : undefined,
+    page: raw.page, scanStartedAt: raw.scanStartedAt };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -199,7 +217,7 @@ export function parseNewMessage(
 /**
  * Picks the most recently active conversations that may hold something newer
  * than the cursor. A conversation is skipped when its last message is at or
- * before either the poll floor or its own high-water mark.
+ * before its own high-water mark (or the poll floor for an unseen chat).
  */
 export function selectConversationsToScan(
   conversations: readonly ChatSummary[],
@@ -213,13 +231,8 @@ export function selectConversationsToScan(
       lastMessageTime: new Date(conversation.lastMessageTime).getTime(),
     }))
     .filter(({ conversation, lastMessageTime }) => {
-      if (Number.isNaN(lastMessageTime) || lastMessageTime <= floorMs) return false;
-      const watermark = cursor?.chats[conversation.conversationId];
-      if (!watermark) return true;
-      // Message IDs are epoch milliseconds, so the watermark doubles as the
-      // arrival time of the newest message already returned for this chat.
-      const watermarkMs = parseMessageId(watermark);
-      return watermarkMs === null || lastMessageTime > watermarkMs;
+      const watermark = parseMessageId(cursor?.chats[conversation.conversationId]);
+      return Boolean(cursor?.pending?.[conversation.conversationId]) || lastMessageTime > (watermark ?? floorMs);
     })
     .sort((a, b) => b.lastMessageTime - a.lastMessageTime);
 
@@ -312,7 +325,7 @@ export async function getNewMessages(
   // polls instead of dropping them.
   const floorMs = cursor ? cursor.since : 0;
 
-  const conversationsResult = await getConversations({ limit: MAX_THREAD_LIMIT });
+  const conversationsResult = await getConversations({ limit: MAX_THREAD_LIMIT, page: cursor?.page });
   if (!conversationsResult.ok) {
     return conversationsResult;
   }
@@ -325,6 +338,7 @@ export async function getNewMessages(
   );
 
   const chats: Record<string, string> = { ...(cursor?.chats ?? {}) };
+  const pending = { ...cursor?.pending };
   const items: NewMessageItem[] = [];
   const errors: NewMessagesError[] = [];
   let messagesTruncated = false;
@@ -339,12 +353,13 @@ export async function getNewMessages(
     // (floor 0) there is no start bound, so the newest page is returned.
     const startTime = watermarkId ?? (floorMs > 0 ? floorMs : undefined);
 
+    const backlog = pending[conversationId];
     const url = buildThreadMessagesUrl(
       CHATSVC_API.messages(region, conversationId, undefined, baseUrl),
-      { limit: limitPerChat, startTime }
+      { limit: limitPerChat, startTime, cursor: backlog?.older }
     );
 
-    const response = await httpRequest<{ messages?: unknown[] }>(url, {
+    const response = await httpRequest<{ messages?: unknown[]; _metadata?: { backwardLink?: string } }>(url, {
       method: 'GET',
       headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
     });
@@ -362,29 +377,23 @@ export async function getNewMessages(
       ? (response.value.data.messages as RawChatsvcMessage[])
       : [];
 
-    // Advance even past own/system messages so an excluded own reply cannot
-    // make the same conversation look new forever. Include the conversation's
-    // last-message time as well: a channel whose newest activity is a thread
-    // reply returns no top-level message, and would otherwise be refetched on
-    // every poll. Never move a watermark backwards.
     const pageMax = maxMessageId(rawMessages);
-    const conversationLastActivity = new Date(conversation.lastMessageTime).getTime();
-    const existingWatermark = parseMessageId(chats[conversationId]);
-    const nextWatermark = Math.max(
-      existingWatermark ?? 0,
-      pageMax,
-      Number.isNaN(conversationLastActivity) ? 0 : conversationLastActivity
-    );
-    if (nextWatermark > 0) {
-      chats[conversationId] = String(nextWatermark);
-    }
-
-    // A hit page means there may be more messages to resume. On a true first
-    // run the page is the newest one, so older history is intentionally out of
-    // scope and this is not truncation.
-    const resuming = watermarkId !== null || floorMs > 0;
-    if (resuming && rawMessages.length >= limitPerChat) {
+    // Freeze the upper bound on the first page. Messages arriving during the
+    // backward walk belong to the next sweep.
+    const through = backlog?.through ?? Math.max(watermarkId ?? 0, pageMax, Date.parse(conversation.lastMessageTime));
+    const reachedBoundary = startTime !== undefined && rawMessages.some(message => {
+      const id = parseMessageId(message.id);
+      return id !== null && id <= startTime;
+    });
+    const older = rawMessages.length > 0 && !reachedBoundary
+      ? cursorFromBackwardLink(response.value.data._metadata?.backwardLink) : undefined;
+    if (older && startTime !== undefined) {
+      chats[conversationId] = String(startTime);
+      pending[conversationId] = { older, through };
       messagesTruncated = true;
+    } else {
+      delete pending[conversationId];
+      chats[conversationId] = String(through);
     }
 
     const context = {
@@ -395,8 +404,7 @@ export async function getNewMessages(
 
     for (const raw of rawMessages) {
       const id = parseMessageId(raw.id);
-      if (id === null) continue;
-      if (startTime !== undefined && id <= startTime) continue;
+      if (id === null || (startTime !== undefined && id <= startTime)) continue;
       if (!includeOwn && isFromUser(raw.from, auth.userMri)) continue;
 
       const item = parseNewMessage(raw, context);
@@ -404,29 +412,33 @@ export async function getNewMessages(
     }
   });
 
-  // Only advance the poll floor when every active conversation was either
-  // scanned or already covered by its own watermark. Otherwise a chat skipped
-  // this round could have its backlog silently excluded next round.
-  const hasUncoveredFailure = errors.some(error => !(error.conversationId in chats));
-  const nextSince = conversationsTruncated || hasUncoveredFailure
-    ? floorMs
-    : Math.max(0, now - NEW_MESSAGES_FLOOR_SKEW_MS);
+  const list = conversationsResult.value;
+  const retryPage = conversationsTruncated || messagesTruncated;
+  const olderPage = list.conversations.length ? list.nextPage : undefined;
+  const page = retryPage ? cursor?.page : olderPage;
+  const unfinished = retryPage || Boolean(page);
+  // One failed chat must not block discovery of later pages. Hold the floor
+  // across the rest of this sweep so the next one retries that chat.
+  const scanStartedAt = errors.length ? floorMs : cursor?.scanStartedAt ?? now;
+  const nextSince = unfinished ? floorMs : Math.max(floorMs, scanStartedAt - NEW_MESSAGES_FLOOR_SKEW_MS);
 
-  // Keep the cursor bounded to conversations that still exist. Watermarks for
-  // chats outside the list are of no use (they cannot be scanned) and would
-  // otherwise accumulate forever.
-  const liveConversationIds = new Set(
-    conversationsResult.value.conversations.map(conversation => conversation.conversationId)
-  );
-  const nextChats: Record<string, string> = {};
-  for (const [conversationId, messageId] of Object.entries(chats)) {
-    if (liveConversationIds.has(conversationId)) nextChats[conversationId] = messageId;
+  // Keep marks across list pages. Once the sweep finishes, the floor covers
+  // old marks outside the current page, including chats that no longer exist.
+  if (nextSince > floorMs) {
+    const listed = new Set(list.conversations.map(chat => chat.conversationId));
+    for (const [id, mark] of Object.entries(chats)) {
+      if (!listed.has(id) && !pending[id] && Number(mark) <= nextSince) delete chats[id];
+    }
   }
 
   return ok({
     items: orderNewMessages(items),
-    nextAfter: encodeNewMessagesCursor({ version: 1, since: nextSince, chats: nextChats }),
-    truncated: conversationsTruncated || messagesTruncated,
+    nextAfter: encodeNewMessagesCursor({
+      version: 1, since: nextSince, chats, page,
+      pending: Object.keys(pending).length ? pending : undefined,
+      scanStartedAt: unfinished ? scanStartedAt : undefined,
+    }),
+    truncated: conversationsTruncated || messagesTruncated || Boolean(olderPage),
     errors,
   });
 }

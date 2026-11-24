@@ -285,7 +285,7 @@ Conversation ID patterns: channels `19:xxx@thread.tacv2`; meetings `19:meeting_x
 - **Virtual conversations**: IDs like `48:saved`, `48:threads`, `48:mentions`, `48:notifications`, `48:notes` aggregate across conversations; messages include `clumpId` for the source.
 - **User ID formats**: `extractObjectId()` in `parsers.ts` handles raw GUIDs, MRIs (`8:orgid:...`), tenant-suffixed IDs, base64 GUIDs (little-endian), and Skype IDs.
 - **Deleted messages**: returned with empty `content` and a `deletetime` property; filtered out in `getThreadMessages()` to avoid phantom "empty" messages.
-- **Message ordering**: chatsvc returns newest-first by default; ascending when `startTime` is given. `getThreadMessages()` defaults to `order: 'desc'` but accepts `'asc'` for chronological reading.
+- **Message ordering**: chatsvc can return its newest page first even with `startTime`. Follow `_metadata.backwardLink` to reach older messages. `getThreadMessages()` defaults to `order: 'desc'` but accepts `'asc'` for chronological reading.
 
 ### Known limitations
 
