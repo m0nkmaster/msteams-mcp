@@ -38,6 +38,7 @@ export interface SearchPaginationResult {
   total?: number;
   /** Whether more results are available. */
   hasMore: boolean;
+  nextFrom?: number;
 }
 
 /** Classification of an email result. */

@@ -22,6 +22,9 @@ export const DEFAULT_PAGE_SIZE = 25;
 /** Maximum page size for search results. */
 export const MAX_PAGE_SIZE = 100;
 
+/** Maximum upstream pages scanned in one section-filtered message search. */
+export const SECTION_SEARCH_PAGE_LIMIT = 3;
+
 /** Default limit for thread messages. */
 export const DEFAULT_THREAD_LIMIT = 50;
 

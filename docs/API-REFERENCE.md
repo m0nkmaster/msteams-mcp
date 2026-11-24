@@ -1111,10 +1111,11 @@ This is a soft delete. Channel owners/moderators can delete others' messages.
 
 **Auth:** Skype Token + Bearer (CSA)
 
-**Get all folders:**
-```json
-{}
-```
+Read the folder hierarchy with `GET` on the collection. Deleted folders can still appear with `isDeleted: true`. The MCP excludes these from section listing and lookup.
+
+Create a custom section with `POST` to the collection. Send the current `folderHierarchyVersion`, `folderName`, `sortType: "UserDefinedCustomOrder"`, `isExpanded: true`, and `actions: [{"action":"AddFolder"}]`. The response includes the new folder ID. To move a conversation between editable sections, send one versioned POST with an `AddItem` action for the destination followed by a `RemoveItem` action for the source.
+
+Delete a custom section with `DELETE` on `conversationFolders/{encodedFolderId}`, including the hierarchy version in the JSON body. Deleting a populated section leaves its chats and channels accessible.
 
 **Add to Favorites:**
 ```json

@@ -16,6 +16,7 @@ interface RegistryEntry {
   handler: (input: z.output<z.ZodTypeAny>) => Promise<ToolResult>;
 }
 
+import { sectionTools } from './section-tools.js';
 import { searchTools } from './search-tools.js';
 import { messageTools } from './message-tools.js';
 import { peopleTools } from './people-tools.js';
@@ -33,6 +34,7 @@ import { assignmentTools } from './assignment-tools.js';
 const allTools: RegistryEntry[] = [
   ...searchTools,
   ...messageTools,
+  ...sectionTools,
   ...peopleTools,
   ...authTools,
   ...meetingTools,
@@ -48,7 +50,7 @@ const allTools: RegistryEntry[] = [
 export const toolCategories: Array<{ name: string; tools: string[] }> = [
   { name: 'Account', tools: [...authTools, ...peopleTools].map(t => t.definition.name) },
   { name: 'Search', tools: searchTools.map(t => t.definition.name) },
-  { name: 'Messages', tools: messageTools.map(t => t.definition.name) },
+  { name: 'Messages', tools: [...messageTools, ...sectionTools].map(t => t.definition.name) },
   { name: 'Meetings', tools: meetingTools.map(t => t.definition.name) },
   { name: 'Files', tools: [...fileTools, ...tagTools].map(t => t.definition.name) },
   { name: 'Assignments', tools: assignmentTools.map(t => t.definition.name) },

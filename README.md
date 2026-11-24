@@ -179,6 +179,8 @@ See [CLI Usage](#cli-usage) for commands, or run `msteams` for the command list.
 
 | Tool                         | Description                                                  |
 | ---------------------------- | ------------------------------------------------------------ |
+| `teams_get_sections` | List sidebar sections or inspect the conversations in one by name or ID |
+| `teams_update_section` | Create or delete a custom section, or add or remove a conversation |
 | `teams_get_favorites`        | Get pinned/favourite conversations                           |
 | `teams_add_favorite`         | Pin a conversation                                           |
 | `teams_remove_favorite`      | Unpin a conversation                                         |
@@ -313,6 +315,15 @@ msteams login --force        # delete all local login data and sign in from scra
 msteams search "meeting notes"
 msteams search "project" --from 0 --size 50
 
+# Sidebar sections
+msteams get_sections
+msteams update_section --action create --name "Projects"
+msteams get_sections --section "Projects"
+msteams update_section --action add --section "Projects" --conversationId "<chat-or-channel-id>"
+msteams search "launch date" --section "Projects"
+msteams update_section --action remove --section "Projects" --conversationId "<chat-or-channel-id>"
+msteams update_section --action delete --section "<custom-section-id>"
+
 # Search emails
 msteams email "from:sarah@company.com"
 
@@ -329,6 +340,10 @@ msteams unread
 # Machine-readable output, on stdout, for scripts
 msteams search "query" --json | jq '.results[0].conversationId'
 ```
+
+System sections appear in the list with a null item count. Favorites and custom sections support inspection and search. Inspection reports `skippedItems` for entries without a usable conversation ID.
+
+Section searches match conversation IDs, including the parent channel of a thread reply. If some section entries lack a conversation ID, search returns matches from readable entries and reports the number omitted in `skippedItems`. If every entry is unreadable, search returns an error. For sparse matches a page can be empty while `pagination.hasMore` is true. Pass `pagination.nextFrom` to `--from` to continue.
 
 **Command form:** `msteams <command> [value] [--flag value]`.
 
