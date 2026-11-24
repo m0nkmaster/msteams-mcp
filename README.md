@@ -343,7 +343,7 @@ msteams search "query" --json | jq '.results[0].conversationId'
 
 System sections appear in the list with a null item count. Favorites and custom sections support inspection and search. Inspection reports `skippedItems` for entries without a usable conversation ID.
 
-Section searches match conversation IDs, including the parent channel of a thread reply. For sparse matches a page can be empty while `pagination.hasMore` is true. Pass `pagination.nextFrom` to `--from` to continue.
+Section searches match conversation IDs, including the parent channel of a thread reply. If some section entries lack a conversation ID, search returns matches from readable entries and reports the number omitted in `skippedItems`. If every entry is unreadable, search returns an error. For sparse matches a page can be empty while `pagination.hasMore` is true. Pass `pagination.nextFrom` to `--from` to continue.
 
 **Command form:** `msteams <command> [value] [--flag value]`.
 

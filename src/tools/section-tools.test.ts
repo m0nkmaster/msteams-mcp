@@ -99,7 +99,7 @@ function hit(channel: string, id: string) {
     ChannelName: 'General', ClientThreadId: 'thread-' + id, ClientConversationId: channel + ';messageid=123',
   } };
 }
-function page(Results: unknown[], Total: number) {
+function page(Results: unknown[], Total?: number) {
   http.mockResolvedValueOnce(response({ EntitySets: [{ ResultSets: [{ Total, Results }] }] }));
 }
 
@@ -129,6 +129,28 @@ it('returns a usable continuation after a bounded scan with zero matches', async
   hierarchy(projects);
   for (let i = 0; i < 3; i++) page([hit('channel-b', String(i))], 20);
   expect(await search()).toMatchObject({ data: { results: [], pagination: { nextFrom: 3, hasMore: true } } });
+});
+
+it('continues past short pages without totals until the upstream page is empty', async () => {
+  hierarchy(projects);
+  page([hit('channel-b', 'wrong')]);
+  page([hit('channel-a', 'found')]);
+  page([]);
+  expect(await search()).toMatchObject({
+    data: { results: [{ id: 'found' }], pagination: { hasMore: false } },
+  });
+  expect(body(2).entityRequests[0].from).toBe(1);
+  expect(body(3).entityRequests[0].from).toBe(2);
+});
+
+it('distinguishes unreadable membership from partial section search results', async () => {
+  hierarchy({ ...projects, conversationFolderItems: [{}] });
+  expect(await search()).toMatchObject({ success: false, error: { code: ErrorCode.API_ERROR } });
+  expect(http).toHaveBeenCalledTimes(1);
+
+  hierarchy({ ...projects, conversationFolderItems: [{}, ...projects.conversationFolderItems] });
+  page([hit('channel-a', 'found')], 1);
+  expect(await search()).toMatchObject({ data: { skippedItems: 1, results: [{ id: 'found' }] } });
 });
 
 it('short-circuits empty sections and distinguishes unavailable membership', async () => {

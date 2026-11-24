@@ -77,7 +77,7 @@ const searchToolDefinition: Tool = {
       },
       section: {
         type: 'string',
-        description: 'Restrict messages to conversations in this sidebar section (ID or unique name). Continue with pagination.nextFrom even after an empty page if hasMore is true.',
+        description: 'Restrict messages to conversations in this sidebar section (ID or unique name). If membership is partially readable, skippedItems counts omitted entries. Continue with pagination.nextFrom even after an empty page if hasMore is true.',
       },
       maxResults: {
         type: 'number',
@@ -223,17 +223,7 @@ async function handleSearch(
     data: {
       query: input.query,
       resultCount: result.value.results.length,
-      pagination: {
-        from: result.value.pagination.from,
-        size: result.value.pagination.size,
-        returned: result.value.pagination.returned,
-        total: result.value.pagination.total,
-        hasMore: result.value.pagination.hasMore,
-        nextFrom: result.value.pagination.hasMore
-          ? result.value.pagination.nextFrom ?? result.value.pagination.from + result.value.pagination.returned
-          : undefined,
-      },
-      results: result.value.results,
+      ...result.value,
     },
   };
 }

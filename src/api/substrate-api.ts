@@ -6,7 +6,8 @@
 
 import { httpRequest } from '../utils/http.js';
 import { SUBSTRATE_API, getBearerHeaders } from '../utils/api-config.js';
-import { type Result, ok } from '../types/result.js';
+import { createError, ErrorCode } from '../types/errors.js';
+import { type Result, err, ok } from '../types/result.js';
 import { requireSubstrateTokenAsync, getTenantId, getTeamsBaseUrl, handleSubstrateError } from '../utils/auth-guards.js';
 import {
   parseSearchResults,
@@ -26,6 +27,7 @@ import type { TeamsSearchResult, SearchPaginationResult, EmailSearchResult } fro
 /** Search result with pagination. */
 export interface SearchResult {
   results: TeamsSearchResult[];
+  skippedItems?: number;
   pagination: SearchPaginationResult;
 }
 
@@ -53,10 +55,15 @@ export async function searchMessages(
   const from = options.from ?? 0;
   const size = options.size ?? 25;
   let members: Set<string> | undefined;
+  let skippedItems = 0;
   if (options.section) {
     const section = await getSectionMembers(options.section);
     if (!section.ok) return section;
     members = new Set(section.value.items.map(item => item.conversationId));
+    skippedItems = section.value.skippedItems;
+    if (!members.size && skippedItems) {
+      return err(createError(ErrorCode.API_ERROR, 'Teams returned no readable conversation IDs for this section.'));
+    }
     if (!members.size) return ok({ results: [], pagination: { from, size, returned: 0, total: 0, hasMore: false } });
   }
   const token = await requireSubstrateTokenAsync();
@@ -76,12 +83,12 @@ export async function searchMessages(
     const parsed = response.value;
     nextFrom += parsed.examined;
     hasMore = parsed.moreInPage || (parsed.examined > 0 && (parsed.total === undefined
-      ? parsed.examined >= pageSize : nextFrom < parsed.total));
+      ? members !== undefined || parsed.examined >= pageSize : nextFrom < parsed.total));
     if (!members) total = parsed.total;
     results.push(...parsed.results);
     if (!hasMore || results.length >= limit) break;
   }
-  return ok({ results, pagination: { from, size, returned: results.length, total, hasMore,
+  return ok({ results, ...(skippedItems > 0 && { skippedItems }), pagination: { from, size, returned: results.length, total, hasMore,
     nextFrom: hasMore ? nextFrom : undefined } });
 }
 
