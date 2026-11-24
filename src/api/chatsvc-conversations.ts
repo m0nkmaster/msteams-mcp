@@ -10,17 +10,21 @@ import { CHATSVC_API, getSkypeAuthHeaders } from '../utils/api-config.js';
 import { type Result, ok } from '../types/result.js';
 import { requireMessageAuthWithConfig } from '../utils/auth-guards.js';
 import { stripHtml } from '../utils/parsers.js';
+import { cursorFromBackwardLink } from './chatsvc-messaging.js';
 import { DEFAULT_THREAD_LIMIT } from '../constants.js';
 
 /** Maximum length of a last-message preview before truncation. */
 const PREVIEW_MAX_LENGTH = 120;
+
+/** Conversation type, derived from the conversation ID. */
+export type ChatType = 'channel' | 'meeting' | 'group' | 'oneOnOne' | 'chat';
 
 /** A summarised conversation as returned by the chat list. */
 export interface ChatSummary {
   conversationId: string;
   /** Channel/group topic, or empty for 1:1 chats. */
   topic: string;
-  chatType: 'channel' | 'meeting' | 'group' | 'oneOnOne' | 'chat';
+  chatType: ChatType;
   /** ISO timestamp of the last message, or empty if unknown. */
   lastMessageTime: string;
   /** Display name of the last message's sender. */
@@ -32,10 +36,11 @@ export interface ChatSummary {
 /** Result of listing conversations. */
 export interface GetConversationsResult {
   conversations: ChatSummary[];
+  nextPage?: string;
 }
 
 /** Classifies a conversation type from its ID. */
-function classifyChatType(id: string): ChatSummary['chatType'] {
+function classifyChatType(id: string): ChatType {
   if (id.includes('meeting_')) return 'meeting';
   if (id.includes('@thread.tacv2')) return 'channel';
   if (id.includes('@unq.gbl.spaces')) return 'oneOnOne';
@@ -85,7 +90,7 @@ export function parseConversation(raw: Record<string, unknown>): ChatSummary | n
  * channels), newest activity first, capped at `limit`.
  */
 export async function getConversations(
-  options: { limit?: number } = {}
+  options: { limit?: number; page?: string } = {}
 ): Promise<Result<GetConversationsResult>> {
   const authResult = requireMessageAuthWithConfig();
   if (!authResult.ok) {
@@ -94,8 +99,12 @@ export async function getConversations(
   const { auth, region, baseUrl } = authResult.value;
   const limit = options.limit ?? DEFAULT_THREAD_LIMIT;
 
-  const response = await httpRequest<{ conversations?: unknown[] }>(
-    CHATSVC_API.conversations(region, baseUrl),
+  const url = new URL(CHATSVC_API.conversations(region, baseUrl));
+  for (const [key, value] of new URLSearchParams(options.page)) {
+    if (key !== 'pageSize' && key !== 'view') url.searchParams.set(key, value);
+  }
+  const response = await httpRequest<{ conversations?: unknown[]; _metadata?: { backwardLink?: string } }>(
+    url.toString(),
     {
       method: 'GET',
       headers: getSkypeAuthHeaders(auth.skypeToken, auth.authToken, baseUrl),
@@ -115,5 +124,5 @@ export async function getConversations(
     .filter((c): c is ChatSummary => c !== null)
     .slice(0, limit);
 
-  return ok({ conversations });
+  return ok({ conversations, nextPage: cursorFromBackwardLink(response.value.data._metadata?.backwardLink) });
 }

@@ -104,6 +104,33 @@ export const FOLLOWED_THREADS_ID = '48:threads';
 export const DEFAULT_ACTIVITY_LIMIT = 50;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// New messages polling
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Default number of conversations scanned by teams_get_new_messages. */
+export const DEFAULT_NEW_MESSAGES_MAX_CHATS = 30;
+
+/** Default messages fetched per conversation by teams_get_new_messages. */
+export const DEFAULT_NEW_MESSAGES_PER_CHAT = 50;
+
+/** A conversation page holds at most 200 messages. */
+export const MAX_NEW_MESSAGES_PER_CHAT = 200;
+
+/** Maximum length of a new-message snippet, including any ellipsis. */
+export const NEW_MESSAGES_SNIPPET_MAX_LENGTH = 200;
+
+/** Conversations fetched in parallel while polling for new messages. */
+export const NEW_MESSAGES_FETCH_CONCURRENCY = 5;
+
+/**
+ * Overlap kept before the client clock when advancing the new-message poll
+ * floor. Server message IDs can land slightly before a fast local clock; the
+ * overlap means a brand-new conversation is not skipped. Already-seen chats
+ * are filtered by their own watermark, so this cannot duplicate messages.
+ */
+export const NEW_MESSAGES_FLOOR_SKEW_MS = 60 * 1000;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Wait for reply
 // ─────────────────────────────────────────────────────────────────────────────
 
