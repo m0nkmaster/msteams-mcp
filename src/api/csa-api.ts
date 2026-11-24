@@ -7,13 +7,9 @@
 
 import { httpRequest } from '../utils/http.js';
 import { CSA_API, getCsaHeaders } from '../utils/api-config.js';
-import { ErrorCode, createError } from '../types/errors.js';
-import { type Result, ok, err } from '../types/result.js';
+import { type Result, ok } from '../types/result.js';
 import { requireCsaAuth, getApiConfig } from '../utils/auth-guards.js';
-import {
-  getConversationProperties,
-  extractParticipantNames,
-} from './chatsvc-api.js';
+import { getFolderHierarchy, enrichSectionItems, updateSection } from './sections-api.js';
 import {
   parseTeamsList,
   type TeamWithChannels,
@@ -39,76 +35,15 @@ export interface FavoritesResult {
  * Gets the user's favourite/pinned conversations.
  */
 export async function getFavorites(): Promise<Result<FavoritesResult>> {
-  const authResult = requireCsaAuth();
-  if (!authResult.ok) {
-    return authResult;
-  }
-  const { auth, csaToken } = authResult.value;
-
-  const { csaRegion, baseUrl } = getApiConfig();
-  const url = CSA_API.conversationFolders(csaRegion, baseUrl);
-
-  const response = await httpRequest<Record<string, unknown>>(
-    url,
-    {
-      method: 'GET',
-      headers: getCsaHeaders(auth.skypeToken, csaToken, baseUrl),
-    }
-  );
-
-  if (!response.ok) {
-    return response;
-  }
-
-  const data = response.value.data;
-
-  // Find the Favorites folder
-  const folders = data.conversationFolders as unknown[] | undefined;
-  const favoritesFolder = folders?.find((f: unknown) => {
-    const folder = f as Record<string, unknown>;
-    return folder.folderType === 'Favorites';
-  }) as Record<string, unknown> | undefined;
-
-  if (!favoritesFolder) {
-    return ok({
-      favorites: [],
-      folderHierarchyVersion: data.folderHierarchyVersion as number,
-    });
-  }
-
-  const items = favoritesFolder.conversationFolderItems as unknown[] | undefined;
-  const favorites: FavoriteItem[] = (items || []).map((item: unknown) => {
-    const i = item as Record<string, unknown>;
-    return {
-      conversationId: i.conversationId as string,
-      createdTime: i.createdTime as number | undefined,
-      lastUpdatedTime: i.lastUpdatedTime as number | undefined,
-    };
-  });
-
-  // Enrich favorites with display names in parallel
-  const enrichmentPromises = favorites.map(async (fav) => {
-    const props = await getConversationProperties(fav.conversationId);
-    if (props.ok) {
-      fav.displayName = props.value.displayName;
-      fav.conversationType = props.value.conversationType;
-    }
-
-    // Fallback: extract from recent messages if no display name
-    if (!fav.displayName) {
-      const names = await extractParticipantNames(fav.conversationId);
-      if (names.ok && names.value) {
-        fav.displayName = names.value;
-      }
-    }
-  });
-
-  await Promise.allSettled(enrichmentPromises);
-
+  const state = await getFolderHierarchy();
+  if (!state.ok) return state;
+  const folder = state.value.conversationFolders.find(f => f.folderType === 'Favorites');
+  const items = (folder?.conversationFolderItems ?? []).flatMap(item =>
+    item.conversationId ? [{ ...item, conversationId: item.conversationId }] : []);
   return ok({
-    favorites,
-    folderHierarchyVersion: data.folderHierarchyVersion as number,
-    folderId: favoritesFolder.id as string,
+    favorites: await enrichSectionItems(items),
+    folderHierarchyVersion: state.value.folderHierarchyVersion,
+    folderId: folder?.id,
   });
 }
 
@@ -118,71 +53,14 @@ export async function getFavorites(): Promise<Result<FavoritesResult>> {
 export async function addFavorite(
   conversationId: string
 ): Promise<Result<void>> {
-  return modifyFavorite(conversationId, 'AddItem');
+  const result = await updateSection({ action: 'add', conversationId });
+  return result.ok ? ok(undefined) : result;
 }
 
-/**
- * Removes a conversation from the user's favourites.
- */
-export async function removeFavorite(
-  conversationId: string
-): Promise<Result<void>> {
-  return modifyFavorite(conversationId, 'RemoveItem');
-}
-
-/**
- * Internal helper to modify the favourites folder.
- */
-async function modifyFavorite(
-  conversationId: string,
-  action: 'AddItem' | 'RemoveItem'
-): Promise<Result<void>> {
-  const authResult = requireCsaAuth();
-  if (!authResult.ok) {
-    return authResult;
-  }
-  const { auth, csaToken } = authResult.value;
-
-  const { csaRegion, baseUrl } = getApiConfig();
-
-  // Get current folder state
-  const currentState = await getFavorites();
-  if (!currentState.ok) {
-    return err(currentState.error);
-  }
-
-  if (!currentState.value.folderId) {
-    return err(createError(
-      ErrorCode.NOT_FOUND,
-      'Could not find Favorites folder'
-    ));
-  }
-
-  const url = CSA_API.conversationFolders(csaRegion, baseUrl);
-
-  const response = await httpRequest<unknown>(
-    url,
-    {
-      method: 'POST',
-      headers: getCsaHeaders(auth.skypeToken, csaToken, baseUrl),
-      body: JSON.stringify({
-        folderHierarchyVersion: currentState.value.folderHierarchyVersion,
-        actions: [
-          {
-            action,
-            folderId: currentState.value.folderId,
-            itemId: conversationId,
-          },
-        ],
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    return response;
-  }
-
-  return ok(undefined);
+/** Removes a conversation from the built-in Favorites section. */
+export async function removeFavorite(conversationId: string): Promise<Result<void>> {
+  const result = await updateSection({ action: 'remove', conversationId });
+  return result.ok ? ok(undefined) : result;
 }
 
 /** Response from getting the user's teams and channels. */

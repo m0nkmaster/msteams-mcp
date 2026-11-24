@@ -6,8 +6,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handleSubstrateError, getCsaRegion, clearRegionCache } from './auth-guards.js';
+import { clearTokenCache } from '../auth/session-store.js';
 import { extractRegionConfig } from '../auth/token-extractor.js';
 
+vi.mock('../auth/session-store.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../auth/session-store.js')>(),
+  clearTokenCache: vi.fn(),
+}));
 vi.mock('../auth/token-extractor.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../auth/token-extractor.js')>()),
   extractRegionConfig: vi.fn(),
@@ -28,11 +33,12 @@ describe('handleSubstrateError', () => {
     }
   });
 
-  it('returns the error for AUTH_EXPIRED (and would clear cache)', () => {
+  it('returns the error for AUTH_EXPIRED and clears the token cache', () => {
     const error = createError(ErrorCode.AUTH_EXPIRED, 'Token expired');
     const result: Result<string> = err(error);
     const handled = handleSubstrateError(result);
 
+    expect(clearTokenCache).toHaveBeenCalledOnce();
     expect(handled.ok).toBe(false);
     if (!handled.ok) {
       expect(handled.error.code).toBe(ErrorCode.AUTH_EXPIRED);

@@ -26,9 +26,10 @@ import {
 
 export const SearchInputSchema = z.object({
   query: z.string().min(1, 'Query cannot be empty'),
-  maxResults: z.number().optional().default(DEFAULT_PAGE_SIZE),
-  from: z.number().min(0).optional().default(0),
-  size: z.number().min(1).max(MAX_PAGE_SIZE).optional().default(DEFAULT_PAGE_SIZE),
+  section: z.string().trim().min(1).optional(),
+  maxResults: z.number().int().min(1).optional().default(DEFAULT_PAGE_SIZE),
+  from: z.number().int().min(0).optional().default(0),
+  size: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().default(DEFAULT_PAGE_SIZE),
 });
 
 export const GetThreadInputSchema = z.object({
@@ -73,6 +74,10 @@ const searchToolDefinition: Tool = {
       query: {
         type: 'string',
         description: 'Search query with optional operators. WORKING: from:email (or name), to:name (spaces not dots - "to:rob macdonald"), sent:YYYY-MM-DD, sent:>=YYYY-MM-DD, sent:today, is:Messages, is:Meetings, is:Channels, is:Chats (case-sensitive, plural required), hasattachment:true, "Display Name" for @mentions. CHANNEL FILTER: in:channel only works reliably WITH content terms (e.g., "budget in:IT Support"). NEVER quote channel names. NOT WORKING: mentions:, sent:lastweek, @me, from:me, is:meeting (must be is:Meetings). Use teams_get_me first to get email/displayName.',
+      },
+      section: {
+        type: 'string',
+        description: 'Restrict messages to conversations in this sidebar section (ID or unique name). Continue with pagination.nextFrom even after an empty page if hasMore is true.',
       },
       maxResults: {
         type: 'number',
@@ -203,6 +208,7 @@ async function handleSearch(
   input: z.infer<typeof SearchInputSchema>
 ): Promise<ToolResult> {
   const result = await searchMessages(input.query, {
+    ...(input.section && { section: input.section }),
     maxResults: input.maxResults,
     from: input.from,
     size: input.size,
@@ -224,7 +230,7 @@ async function handleSearch(
         total: result.value.pagination.total,
         hasMore: result.value.pagination.hasMore,
         nextFrom: result.value.pagination.hasMore
-          ? result.value.pagination.from + result.value.pagination.returned
+          ? result.value.pagination.nextFrom ?? result.value.pagination.from + result.value.pagination.returned
           : undefined,
       },
       results: result.value.results,

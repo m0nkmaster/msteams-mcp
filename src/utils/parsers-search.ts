@@ -120,13 +120,15 @@ export function parseV2Result(item: Record<string, unknown>, linkContext?: LinkC
  */
 export function parseSearchResults(
   entitySets: unknown[] | undefined,
-  linkContext?: LinkContext
-): { results: TeamsSearchResult[]; total?: number } {
+  linkContext?: LinkContext,
+  options?: { members?: Set<string>; limit: number }
+): { results: TeamsSearchResult[]; total?: number; examined: number; moreInPage: boolean } {
   const results: TeamsSearchResult[] = [];
+  let examined = 0;
   let total: number | undefined;
 
   if (!Array.isArray(entitySets)) {
-    return { results, total };
+    return { results, total, examined, moreInPage: false };
   }
 
   for (const entitySet of entitySets) {
@@ -146,15 +148,28 @@ export function parseSearchResults(
         const items = rs.Results as unknown[] | undefined;
         if (Array.isArray(items)) {
           for (const item of items) {
+            if (options && results.length >= options.limit) return { results, total, examined, moreInPage: true };
+            examined++;
             const parsed = parseV2Result(item as Record<string, unknown>, linkContext);
-            if (parsed) results.push(parsed);
+            if (!parsed) continue;
+            if (options?.members) {
+              const source = (item as Record<string, unknown>).Source as Record<string, unknown> | undefined;
+              // Thread replies can have a different ClientThreadId from their parent channel.
+              const parent = source?.ClientConversationId;
+              const extensions = source?.Extensions as Record<string, unknown> | undefined;
+              const group = extensions?.SkypeSpaces_ConversationPost_Extension_SkypeGroupId;
+              const id = (typeof parent === 'string' && parent.split(';')[0]) ||
+                (typeof group === 'string' && group) || parsed.conversationId;
+              if (!id || !options.members.has(id)) continue;
+            }
+            results.push(parsed);
           }
         }
       }
     }
   }
 
-  return { results, total };
+  return { results, total, examined, moreInPage: false };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

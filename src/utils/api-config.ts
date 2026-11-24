@@ -200,8 +200,8 @@ export const TAGS_API = {
 /** CSA (Chat Service Aggregator) API endpoints. */
 export const CSA_API = {
   /** Conversation folders (favourites) URL. */
-  conversationFolders: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
-    `${baseUrl}/api/csa/${region}/api/v1/teams/users/me/conversationFolders?supportsAdditionalSystemGeneratedFolders=true&supportsSliceItems=true`,
+  conversationFolders: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL, folderId?: string) =>
+    `${baseUrl}/api/csa/${region}/api/v1/teams/users/me/conversationFolders${folderId ? `/${encodeURIComponent(folderId)}` : ''}?supportsAdditionalSystemGeneratedFolders=true&supportsSliceItems=true`,
   
   /** Teams list (all teams/channels user is a member of). */
   teamsList: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>

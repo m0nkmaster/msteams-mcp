@@ -18,6 +18,8 @@ import {
   type ChannelSearchResult,
   type LinkContext,
 } from '../utils/parsers.js';
+import { getSectionMembers } from './sections-api.js';
+import { MAX_PAGE_SIZE, SECTION_SEARCH_PAGE_LIMIT } from '../constants.js';
 import { getMyTeamsAndChannels } from './csa-api.js';
 import type { TeamsSearchResult, SearchPaginationResult, EmailSearchResult } from '../types/teams.js';
 
@@ -46,17 +48,45 @@ export interface PeopleSearchResult {
  */
 export async function searchMessages(
   query: string,
-  options: { from?: number; size?: number; maxResults?: number } = {}
+  options: { from?: number; size?: number; maxResults?: number; section?: string } = {}
 ): Promise<Result<SearchResult>> {
-  const tokenResult = await requireSubstrateTokenAsync();
-  if (!tokenResult.ok) {
-    return tokenResult;
-  }
-  const token = tokenResult.value;
-
   const from = options.from ?? 0;
   const size = options.size ?? 25;
+  let members: Set<string> | undefined;
+  if (options.section) {
+    const section = await getSectionMembers(options.section);
+    if (!section.ok) return section;
+    members = new Set(section.value.items.map(item => item.conversationId));
+    if (!members.size) return ok({ results: [], pagination: { from, size, returned: 0, total: 0, hasMore: false } });
+  }
+  const token = await requireSubstrateTokenAsync();
+  if (!token.ok) return token;
 
+  const results: TeamsSearchResult[] = [];
+  const limit = Math.min(size, options.maxResults ?? size);
+  const pageSize = members ? MAX_PAGE_SIZE : size;
+  let nextFrom = from;
+  let hasMore = false;
+  let total: number | undefined;
+  // Bound sparse searches. nextFrom always points at the first unexamined source hit.
+  for (let page = 0; page < (members ? SECTION_SEARCH_PAGE_LIMIT : 1); page++) {
+    const response = await searchMessagePage(query, token.value, nextFrom, pageSize,
+      { members, limit: limit - results.length });
+    if (!response.ok) return response;
+    const parsed = response.value;
+    nextFrom += parsed.examined;
+    hasMore = parsed.moreInPage || (parsed.examined > 0 && (parsed.total === undefined
+      ? parsed.examined >= pageSize : nextFrom < parsed.total));
+    if (!members) total = parsed.total;
+    results.push(...parsed.results);
+    if (!hasMore || results.length >= limit) break;
+  }
+  return ok({ results, pagination: { from, size, returned: results.length, total, hasMore,
+    nextFrom: hasMore ? nextFrom : undefined } });
+}
+
+async function searchMessagePage(query: string, token: string, from: number, size: number,
+  options: { members?: Set<string>; limit: number }): Promise<Result<ReturnType<typeof parseSearchResults>>> {
   // Generate unique IDs for this request
   const cvid = crypto.randomUUID();
   const logicalId = crypto.randomUUID();
@@ -114,26 +144,7 @@ export async function searchMessages(
     tenantId: getTenantId() ?? undefined,
     teamsBaseUrl: getTeamsBaseUrl(),
   };
-  const { results, total } = parseSearchResults(
-    data.EntitySets as unknown[] | undefined,
-    linkContext
-  );
-
-  const maxResults = options.maxResults ?? size;
-  const limitedResults = results.slice(0, maxResults);
-
-  return ok({
-    results: limitedResults,
-    pagination: {
-      from,
-      size,
-      returned: limitedResults.length,
-      total,
-      hasMore: total !== undefined
-        ? from + results.length < total
-        : results.length >= size,
-    },
-  });
+  return ok(parseSearchResults(data.EntitySets as unknown[] | undefined, linkContext, options));
 }
 
 /**

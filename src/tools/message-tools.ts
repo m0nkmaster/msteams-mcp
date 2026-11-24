@@ -183,7 +183,7 @@ const getFavoritesToolDefinition: Tool = {
 
 const addFavoriteToolDefinition: Tool = {
   name: 'teams_add_favorite',
-  description: 'Add a conversation to the user\'s favourites/pinned list.',
+  description: 'Move a conversation into the built-in Favorites section, removing it from its previous custom section.',
   inputSchema: {
     type: 'object',
     properties: {
