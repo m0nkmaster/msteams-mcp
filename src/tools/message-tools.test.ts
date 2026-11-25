@@ -123,4 +123,44 @@ describe('teams_send_message files', () => {
     // The cache must survive so the server's auto-retry reuses the uploads.
     expect(mockClear).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['a timeout', ErrorCode.TIMEOUT, 'Request timed out after 30000ms'],
+    ['a network error', ErrorCode.NETWORK_ERROR, 'read ECONNRESET'],
+    ['a 5xx response', ErrorCode.API_ERROR, 'HTTP 503: upstream unavailable'],
+  ])('says the message may have been delivered on %s', async (_label, code, message) => {
+    mockSendMessage.mockResolvedValue(err(createError(code, message, { retryable: true })));
+
+    const result = await sendMessageTool.handler({
+      content: 'with file',
+      conversationId: '19:abc@thread.v2',
+      files: ['/tmp/a.txt'],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toContain('may or may not have been delivered');
+      expect(result.error.message).toContain('teams_get_thread');
+      expect(result.error.message).not.toContain('was not sent');
+      expect(result.error.message).toContain('10 minutes');
+    }
+    expect(mockClear).not.toHaveBeenCalled();
+  });
+
+  it('keeps "was not sent" for a definite send rejection', async () => {
+    mockSendMessage.mockResolvedValue(err(createError(ErrorCode.INVALID_INPUT, 'bad conversation')));
+
+    const result = await sendMessageTool.handler({
+      content: 'with file',
+      conversationId: '19:abc@thread.v2',
+      files: ['/tmp/a.txt'],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toContain('was not sent');
+      expect(result.error.message).not.toContain('may or may not');
+    }
+    expect(mockClear).not.toHaveBeenCalled();
+  });
 });

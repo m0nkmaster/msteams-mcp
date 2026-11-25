@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
+import { execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, realpathSync, statSync, symlinkSync, rmSync, promises as nodePromises } from 'node:fs';
 import * as path from 'node:path';
 import { httpRequest } from '../utils/http.js';
@@ -19,12 +20,15 @@ import { chatsvcFilesPropertyEntry } from '../__fixtures__/api-responses.js';
 import { MAX_SIMPLE_UPLOAD_BYTES, SELF_CHAT_ID, ATTACHMENT_REUSE_TTL_MS, UPLOAD_TIMEOUT_MS } from '../constants.js';
 import {
   resolveUploadFile,
+  relativeInside,
   uploadChatFile,
   shareChatFile,
   buildFilesPropertyEntry,
   getChatMemberObjectIds,
   prepareChatAttachments,
   clearPreparedAttachments,
+  clearAllPreparedAttachments,
+  preparedAttachmentCacheSize,
   type UploadedChatFile,
   type ResolvedUploadFile,
 } from './chat-attachments-api.js';
@@ -50,9 +54,13 @@ vi.mock('../auth/session-store.js', () => ({
 }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
+  const realpathSyncMock = Object.assign(
+    vi.fn(actual.realpathSync),
+    { native: vi.fn(actual.realpathSync.native) },
+  );
   return {
     ...actual,
-    realpathSync: vi.fn(actual.realpathSync),
+    realpathSync: realpathSyncMock,
     statSync: vi.fn(actual.statSync),
     promises: { ...actual.promises, readFile: vi.fn(actual.promises.readFile) },
   };
@@ -65,7 +73,7 @@ vi.mock('node:os', async (importOriginal) => {
 const mockHttp = vi.mocked(httpRequest);
 const mockGraphToken = vi.mocked(requireGraphTokenAsync);
 const mockMessageAuth = vi.mocked(requireMessageAuthWithConfig);
-const mockRealpathSync = vi.mocked(realpathSync);
+const mockRealpathNative = vi.mocked(realpathSync.native);
 const mockStatSync = vi.mocked(statSync);
 const mockReadFile = vi.mocked(nodePromises.readFile);
 
@@ -88,6 +96,8 @@ afterEach(() => {
   // clearAllMocks keeps unconsumed mockResolvedValueOnce queues, which would
   // leak into the next test — reset httpRequest's queue explicitly.
   mockHttp.mockReset();
+  // The prepared-attachment cache is module state: keep tests isolated.
+  clearAllPreparedAttachments();
   h.configDir = h.uploadRoot + '/configdir';
 });
 
@@ -254,7 +264,7 @@ describe('resolveUploadFile', () => {
     });
     // The whole point: rejection must happen before realpath/stat, so a
     // hostile path can never trigger filesystem side effects.
-    expect(mockRealpathSync).not.toHaveBeenCalled();
+    expect(mockRealpathNative).not.toHaveBeenCalled();
     expect(mockStatSync).not.toHaveBeenCalled();
   });
 
@@ -273,7 +283,7 @@ describe('resolveUploadFile', () => {
     }
     // realpathSync on a UNC path opens an SMB session and leaks NTLM — it
     // must never be reached.
-    expect(mockRealpathSync).not.toHaveBeenCalled();
+    expect(mockRealpathNative).not.toHaveBeenCalled();
     expect(mockStatSync).not.toHaveBeenCalled();
   });
 
@@ -369,7 +379,7 @@ describe('resolveUploadFile', () => {
       error: { code: ErrorCode.INVALID_INPUT },
     });
     // Lexical containment rejects '..' before any filesystem call.
-    expect(mockRealpathSync).not.toHaveBeenCalled();
+    expect(mockRealpathNative).not.toHaveBeenCalled();
     expect(mockStatSync).not.toHaveBeenCalled();
   });
 
@@ -416,6 +426,92 @@ describe('resolveUploadFile', () => {
       ok: false,
       error: { code: ErrorCode.INVALID_INPUT },
     });
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'rejects 8.3 short names that resolve into dot-directories',
+    () => {
+      vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+      const dotDir = path.join(h.uploadRoot, '.short-name-test');
+      mkdirSync(dotDir, { recursive: true });
+      const file = path.join(dotDir, 'key.txt');
+      writeFileSync(file, 'k');
+
+      // %~sI shortens every segment; keep the real ancestors and swap only
+      // the dot-directory for its 8.3 alias — the shape of the real bypass.
+      let shortDirName: string;
+      try {
+        const shortDir = execSync(`cmd /c for %I in ("${dotDir}") do @echo %~sI`, { encoding: 'utf8' }).trim();
+        shortDirName = path.win32.basename(shortDir);
+      } catch {
+        return; // cannot resolve short names on this system
+      }
+      if (!shortDirName.includes('~')) {
+        return; // 8.3 name generation disabled on this volume
+      }
+      const attackPath = path.join(h.uploadRoot, shortDirName, 'key.txt');
+
+      expect(resolveUploadFile(attackPath)).toMatchObject({
+        ok: false,
+        error: { code: ErrorCode.INVALID_INPUT },
+      });
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'rejects ~N short-name segments and ADS colons before any fs call',
+    () => {
+      vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+      const candidates = [
+        path.join(h.uploadRoot, 'report~1.txt'),
+        `${path.join(h.uploadRoot, 'notes.txt')}:$DATA`,
+        `${path.join(h.uploadRoot, 'dir', 'f.txt')}:stream`,
+      ];
+
+      for (const candidate of candidates) {
+        expect(resolveUploadFile(candidate)).toMatchObject({
+          ok: false,
+          error: { code: ErrorCode.INVALID_INPUT },
+        });
+      }
+      expect(mockRealpathNative).not.toHaveBeenCalled();
+      expect(mockStatSync).not.toHaveBeenCalled();
+    },
+  );
+
+  it.runIf(process.platform === 'darwin')(
+    'rejects files under ~/library spelled lowercase',
+    () => {
+      vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.fakeHome);
+      const file = path.join(h.fakeHome, 'library', 'prefs', 'x.txt');
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, 'x');
+
+      expect(resolveUploadFile(file)).toMatchObject({
+        ok: false,
+        error: { code: ErrorCode.INVALID_INPUT },
+      });
+    },
+  );
+});
+
+describe('relativeInside', () => {
+  it('reports inside paths, escapes and ".."-prefixed siblings correctly', () => {
+    const root = h.uploadRoot;
+    expect(relativeInside(path.join(root, 'a', 'b.txt'), root))
+      .toBe(path.join('a', 'b.txt'));
+    expect(relativeInside(path.join(root, '..foo', 'x'), root))
+      .toBe(path.join('..foo', 'x'));
+    expect(relativeInside(path.join(root, '..', 'outside.txt'), root)).toBeNull();
+    expect(relativeInside(root, root)).toBe('');
+  });
+
+  it('folds case on darwin but not on case-sensitive platforms', () => {
+    // Lower-cased inputs make the comparison case-insensitive on any host.
+    expect(relativeInside('/USERS/x/LIBRARY/k', '/users/x/library', 'darwin')).toBe('k');
+    expect(relativeInside('/USERS/x/OTHER/k', '/users/x/library', 'darwin')).toBeNull();
+    // Non-darwin platforms keep the filesystem's own case semantics; on
+    // Windows path.relative already folds, so only assert the darwin fold.
   });
 });
 
@@ -805,6 +901,56 @@ describe('getChatMemberObjectIds', () => {
     expect(result).toEqual(ok(['11111111-2222-3333-4444-555555555555']));
     expect(mockHttp).not.toHaveBeenCalled();
   });
+
+  it('rejects a 1:1 id that does not include the caller', async () => {
+    mockChatAuth();
+
+    const foreign = '19:11111111-2222-3333-4444-555555555555_22222222-3333-4444-5555-666666666666@unq.gbl.spaces';
+    const result = await getChatMemberObjectIds(foreign);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+    if (!result.ok) {
+      expect(result.error.message).toContain('1:1 chat you are a member of');
+    }
+    expect(mockHttp).not.toHaveBeenCalled();
+  });
+
+  it('rejects a 1:1 id whose two members are both the caller', async () => {
+    mockChatAuth();
+
+    const selfPair = `19:${SELF_GUID}_${SELF_GUID}@unq.gbl.spaces`;
+    expect(await getChatMemberObjectIds(selfPair)).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+    expect(mockHttp).not.toHaveBeenCalled();
+  });
+
+  it('fails with API_ERROR, never AUTH_*, when the session user MRI cannot be parsed', async () => {
+    mockMessageAuth.mockReturnValue(ok({
+      auth: { skypeToken: 'sk', authToken: 'at', userMri: '8:orgid:not-a-guid' },
+      region: 'amer',
+      baseUrl: 'https://teams.microsoft.com',
+    }));
+
+    const oneOnOne = `19:${SELF_GUID}_11111111-2222-3333-4444-555555555555@unq.gbl.spaces`;
+    for (const id of [oneOnOne, CONVERSATION]) {
+      const result = await getChatMemberObjectIds(id);
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: ErrorCode.API_ERROR },
+      });
+      if (!result.ok) {
+        expect(result.error.code).not.toBe(ErrorCode.AUTH_REQUIRED);
+        expect(result.error.code).not.toBe(ErrorCode.AUTH_EXPIRED);
+      }
+    }
+    // The check runs before the thread lookup too — no network at all.
+    expect(mockHttp).not.toHaveBeenCalled();
+  });
 });
 
 describe('prepareChatAttachments', () => {
@@ -920,6 +1066,20 @@ describe('prepareChatAttachments', () => {
       expect(mockHttp.mock.calls[0][0]).toContain('/api/chatsvc/');
     },
   );
+
+  it('makes no Graph calls for a 1:1 chat the caller is not a member of', async () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('prep/foreign.txt');
+    mockGraphOk();
+    mockChatAuth(); // caller is 99999999-..., absent from the id below
+
+    const foreign = '19:11111111-2222-3333-4444-555555555555_22222222-3333-4444-5555-666666666666@unq.gbl.spaces';
+    const result = await prepareChatAttachments(foreign, [file]);
+
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    // Members resolve before any upload: zero HTTP, zero Graph calls.
+    expect(mockHttp).not.toHaveBeenCalled();
+  });
 
   it('fails before any upload when Graph auth is unavailable', async () => {
     vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
@@ -1076,6 +1236,32 @@ describe('prepareChatAttachments', () => {
 
       expect(later).toEqual(ok([chatsvcFilesPropertyEntry]));
       expect(mockHttp).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('evicts expired cache entries on the next prepare', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+      const stale = writeTestFile('prep/evict-stale.txt', 'stale');
+      const fresh = writeTestFile('prep/evict-fresh.txt', 'fresh');
+      mockGraphOk();
+      for (let i = 0; i < 2; i++) {
+        mockHttp
+          .mockResolvedValueOnce(ok({ status: 201, headers: new Headers(), data: { id: DRIVE_ITEM.id } }))
+          .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: DRIVE_ITEM }))
+          .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: SHARE_PERMISSION }));
+      }
+
+      await prepareChatAttachments(SELF_CHAT_ID, [stale]);
+      vi.setSystemTime(Date.now() + ATTACHMENT_REUSE_TTL_MS + 1);
+      await prepareChatAttachments(SELF_CHAT_ID, [fresh]);
+
+      // Every earlier entry is past its TTL under the fake clock, so the
+      // second prepare evicted them all and cached only 'fresh'.
+      expect(preparedAttachmentCacheSize()).toBe(1);
     } finally {
       vi.useRealTimers();
     }

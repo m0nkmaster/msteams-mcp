@@ -111,7 +111,8 @@ export interface ChatsvcFileEntry {
 /** Realpath when possible, plain resolve otherwise (protected dirs may not exist). */
 function resolveReal(p: string): string {
   try {
-    return fs.realpathSync(p);
+    // .native resolves Windows 8.3 short names that plain realpathSync keeps.
+    return fs.realpathSync.native(p);
   } catch {
     return path.resolve(p);
   }
@@ -123,10 +124,23 @@ function isRelativeInside(rel: string): boolean {
     !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
 }
 
-/** True when `child` equals `parent` or sits inside it (both absolute). */
-function isInside(child: string, parent: string): boolean {
-  const rel = path.relative(parent, child);
-  return rel === '' || isRelativeInside(rel);
+/**
+ * Relative path of `child` inside `parent`, or null when it escapes.
+ * Returns '' when child equals parent. On macOS the default filesystem is
+ * case-insensitive, so the comparison folds case there — '~/library' must
+ * not slip past the '~/Library' guard.
+ */
+export function relativeInside(
+  child: string,
+  parent: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const fold = platform === 'darwin';
+  const rel = path.relative(
+    fold ? parent.toLowerCase() : parent,
+    fold ? child.toLowerCase() : child,
+  );
+  return rel === '' || isRelativeInside(rel) ? rel : null;
 }
 
 /** Basenames that must never be uploaded: well-known credential file names. */
@@ -152,24 +166,40 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
       `Attachment path must not be a UNC or device path: ${candidate}`));
   }
 
+  const lexicalCandidate = path.resolve(candidate);
+  const lexicalRoot = path.resolve(root);
+
   // Lexical containment first: path.resolve normalises '.'/'..' without
   // touching the filesystem, so escapes are rejected before realpath runs.
-  if (!isInside(path.resolve(candidate), path.resolve(root))) {
+  if (relativeInside(lexicalCandidate, lexicalRoot) === null) {
     return err(createError(ErrorCode.INVALID_INPUT,
       `Attachment must be inside the upload root (${root}): ${candidate}`));
+  }
+
+  // Windows-only lexical traps, still before any fs call:
+  // - '~<digit>' segments are 8.3 short names that alias dot-directories
+  //   (plain realpathSync keeps them; '.native' resolves them, and the
+  //   dot-rule below is the second layer).
+  // - ':' after the drive prefix is an NTFS alternate data stream.
+  if (process.platform === 'win32' &&
+      (lexicalCandidate.split(/[\\/]/).some(segment => /~\d/.test(segment)) ||
+       lexicalCandidate.indexOf(':', 2) !== -1)) {
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Attachment path must not contain 8.3 short names or alternate data streams: ${candidate}`));
   }
 
   let realRoot: string;
   let realPath: string;
   try {
-    realRoot = fs.realpathSync(root);
-    realPath = fs.realpathSync(candidate);
+    // .native resolves Windows 8.3 short names that plain realpathSync keeps.
+    realRoot = fs.realpathSync.native(root);
+    realPath = fs.realpathSync.native(candidate);
   } catch {
     return err(createError(ErrorCode.INVALID_INPUT, `Attachment does not exist: ${candidate}`));
   }
 
-  const relative = path.relative(realRoot, realPath);
-  if (relative === '' || !isRelativeInside(relative)) {
+  const relative = relativeInside(realPath, realRoot);
+  if (relative === null || relative === '') {
     return err(createError(ErrorCode.INVALID_INPUT,
       `Attachment must be inside the upload root (${realRoot}): ${candidate}`));
   }
@@ -200,8 +230,8 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
   } else if (process.platform === 'darwin') {
     forbiddenRoots.push(path.join(home, 'Library'));
   }
-  for (const root of forbiddenRoots) {
-    if (isInside(realPath, resolveReal(root))) {
+  for (const forbidden of forbiddenRoots) {
+    if (relativeInside(realPath, resolveReal(forbidden)) !== null) {
       return err(createError(ErrorCode.INVALID_INPUT,
         `Attachment path is inside a protected directory and cannot be uploaded: ${candidate}`));
     }
@@ -491,12 +521,25 @@ export async function getChatMemberObjectIds(
   }
   const { auth, region, baseUrl } = authResult.value;
   const selfOid = extractObjectId(auth.userMri);
+  if (!selfOid) {
+    // Never AUTH_*: an unparseable MRI is not fixed by a Teams re-login, and
+    // returning AUTH_* would trigger the server's auto-login retry loop.
+    return err(createError(ErrorCode.API_ERROR,
+      'Cannot determine the current user\'s object ID from the session',
+      { retryable: true }));
+  }
 
   const oneOnOne = extractOneOnOneMemberIds(conversationId);
   if (oneOnOne) {
+    // The deterministic id is caller-supplied: require the caller to be one
+    // of the two members, otherwise the grant would go to arbitrary users.
+    const normalized = oneOnOne.map(extractObjectId);
+    if (normalized.filter(id => id === selfOid).length !== 1) {
+      return err(createError(ErrorCode.INVALID_INPUT,
+        'Not a 1:1 chat you are a member of'));
+    }
     const objectIds = new Set<string>();
-    for (const id of oneOnOne) {
-      const objectId = extractObjectId(id);
+    for (const objectId of normalized) {
       if (objectId && objectId !== selfOid) {
         objectIds.add(objectId);
       }
@@ -554,6 +597,16 @@ function attachmentCacheKey(conversationId: string, file: ResolvedUploadFile): s
   return `${conversationId}\0${file.path}\0${file.size}\0${file.mtimeMs}`;
 }
 
+/** Number of cached prepared attachments. Test hook for cache eviction. */
+export function preparedAttachmentCacheSize(): number {
+  return preparedAttachments.size;
+}
+
+/** Drops every cached prepared attachment. Test hook; TTL is the backstop. */
+export function clearAllPreparedAttachments(): void {
+  preparedAttachments.clear();
+}
+
 /**
  * Validates every path, then uploads, shares and describes each file for a
  * chatsvc `properties.files` entry. All local validation and the channel
@@ -568,6 +621,14 @@ export async function prepareChatAttachments(
   conversationId: string,
   paths: string[],
 ): Promise<Result<ChatsvcFileEntry[]>> {
+  // Bound the cache: entries past their reuse window can never be hit again.
+  const now = Date.now();
+  for (const [key, value] of preparedAttachments) {
+    if (value.expiresAt <= now) {
+      preparedAttachments.delete(key);
+    }
+  }
+
   if (paths.length === 0) {
     return ok([]);
   }
