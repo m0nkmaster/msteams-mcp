@@ -26,6 +26,7 @@ import {
   waitForReply,
 } from '../api/chatsvc-api.js';
 import { getFavorites, addFavorite, removeFavorite, getCustomEmojis } from '../api/csa-api.js';
+import { prepareChatAttachments, type ChatsvcFileEntry } from '../api/chat-attachments-api.js';
 import { parseTeamsMessageUrl } from '../utils/parsers.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { SELF_CHAT_ID, MAX_THREAD_LIMIT, DEFAULT_THREAD_LIMIT, MAX_WAIT_SECONDS, STANDARD_EMOJIS } from '../constants.js';
@@ -41,6 +42,7 @@ export const SendMessageInputSchema = z.object({
   contentType: z.enum(['auto', 'text', 'html', 'markdown']).optional(),
   subject: z.string().optional(),
   scheduleAt: z.string().optional(),
+  files: z.array(z.string().min(1)).min(1).max(10).optional(),
 });
 
 export const FavoriteInputSchema = z.object({
@@ -138,7 +140,7 @@ export const WaitForReplyInputSchema = z.object({
 
 const sendMessageToolDefinition: Tool = {
   name: 'teams_send_message',
-  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, newlines, and tables. Tables use standard markdown table syntax:\n| Item | Price |\n|------|-------|\n| Apple | $1.00 |\n(with a header row, a |---|---| separator row, then data rows — they render as a real table in Teams). Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation.',
+  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, newlines, and tables. Tables use standard markdown table syntax:\n| Item | Price |\n|------|-------|\n| Apple | $1.00 |\n(with a header row, a |---|---| separator row, then data rows — they render as a real table in Teams). Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation. To attach files, provide files (absolute local paths, up to 10).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -165,7 +167,12 @@ const sendMessageToolDefinition: Tool = {
       },
       scheduleAt: {
         type: 'string',
-        description: 'Schedule the message for future delivery. ISO 8601 (e.g. "2026-04-11T09:00:00Z"); a timezone-less value is treated as UTC. Cannot be combined with @mentions or replyToMessageId.',
+        description: 'Schedule the message for future delivery. ISO 8601 (e.g. "2026-04-11T09:00:00Z"); a timezone-less value is treated as UTC. Cannot be combined with @mentions, replyToMessageId or files.',
+      },
+      files: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Absolute local file paths to attach (max 10, each at most 4 MB). Each file must be inside the upload root (TEAMS_MCP_UPLOAD_DIR if set, otherwise your home directory); dotfiles/dot-folders and app-data folders are refused. Files upload to your OneDrive "Microsoft Teams Chat Files" folder and are shared read-only with the chat\'s members. Works in 1:1, group and meeting chats and self-notes; not in channels, and not with scheduleAt. Uses Microsoft Graph via the existing session; if Graph is unavailable the call fails before anything is sent.',
       },
     },
     required: ['content'],
@@ -554,11 +561,28 @@ const waitForReplyToolDefinition: Tool = {
 async function handleSendMessage(
   input: z.infer<typeof SendMessageInputSchema>
 ): Promise<ToolResult> {
+  let files: ChatsvcFileEntry[] | undefined;
+  if (input.files && input.files.length > 0) {
+    if (input.scheduleAt) {
+      return {
+        success: false,
+        error: createError(ErrorCode.INVALID_INPUT,
+          'Attachments cannot be combined with scheduleAt. Remove scheduleAt or files.'),
+      };
+    }
+    const prepared = await prepareChatAttachments(input.conversationId, input.files);
+    if (!prepared.ok) {
+      return { success: false, error: prepared.error };
+    }
+    files = prepared.value;
+  }
+
   const result = await sendMessage(input.conversationId, input.content, {
     replyToMessageId: input.replyToMessageId,
     contentType: input.contentType,
     subject: input.subject,
     scheduleAt: input.scheduleAt,
+    files,
   });
 
   if (!result.ok) {
