@@ -19,9 +19,9 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 **Unknowns to settle first:**
 
 - The exact chatsvc `files` property shape: capture it from one real message that has an attachment (read-only) and copy it.
-- Whether the Graph refresh must stay non-fatal for restricted tenants (see ROADMAP "Hybrid opportunity" and PR #26, which trials `teams_upload_file`).
+- Graph token handling: use the existing optional, on-demand Graph token (`requireGraphTokenAsync()`, as downloads do), not a core refresh scope, so a tenant that refuses Graph cannot break the rest of Teams. Upstream PR #26 added Graph to `REFRESH_SCOPES`; do not copy that.
 - Recipient access: confirm a chat member, not the sender, can open and download the file.
 
 **Done when:** one call posts text plus N files to a 1:1, a group and a meeting chat; recipients can open every file; tests cover the upload, sharing and message body; README and AGENTS.md list the tool.
 
-**Related:** ROADMAP.md, "Future Consideration: Microsoft Graph API (hybrid)", file upload bullet; PR #26.
+**Related:** ROADMAP.md, "Future Consideration: Microsoft Graph API (hybrid)", file upload bullet (its "being trialled in PR #26" wording is stale). [Upstream PR #26](https://github.com/m0nkmaster/msteams-mcp/pull/26) (`teams_upload_file`, by dkattan) was closed unmerged and unreviewed on 2026-09-25: reference code only. Worth reusing: `buildFilesProperty()`, which maps the Graph DriveItem to the chatsvc `properties.files` shape (verify against a real message). Gaps: Graph added to core refresh, no sharing/permission call for recipients, 4 MB simple-upload limit, no new tests.
