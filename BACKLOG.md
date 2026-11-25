@@ -44,3 +44,13 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 **Done when:** one call posts text plus N files to a 1:1, a group and a meeting chat; recipients can open every file; tests cover the upload, sharing and message body; README and AGENTS.md list the tool.
 
 **Related:** ROADMAP.md, "Future Consideration: Microsoft Graph API (hybrid)", file upload bullet (its "being trialled in PR #26" wording is stale). [Upstream PR #26](https://github.com/m0nkmaster/msteams-mcp/pull/26) (`teams_upload_file`, by dkattan) was closed unmerged and unreviewed on 2026-09-25: reference code only. Worth reusing: `buildFilesProperty()`, which maps the Graph DriveItem to the chatsvc `properties.files` shape (verify against a real message). Gaps: Graph added to core refresh, no sharing/permission call for recipients, 4 MB simple-upload limit, no new tests.
+
+## Stop default auth-error advice from recommending `forceNew`
+
+**Added:** 2026-11-25 (George Murga).
+
+**Problem:** `getDefaultSuggestions()` in `src/types/errors.ts` (lines 78-89) tells the AI, for `AUTH_REQUIRED` and `AUTH_EXPIRED`, to "IMMEDIATELY call teams_login with { "forceNew": true }". `forceNew` deletes the whole config directory (browser profile, cookies, every signed-in account, session state) and forces an interactive sign-in. That contradicts the AGENTS.md rule "`forceNew` is destructive ... use it only when the user asks or approves" and the Troubleshooting order (plain `teams_login` first, which tries headless SSO). Seen in practice on 2026-11-25: an expired Graph token was fixed by a plain `teams_login` with no prompt; `forceNew` would have wiped the profile for nothing.
+
+**Proposal:** change both suggestion lists to: call `teams_login` (without `forceNew`) first; use `forceNew: true` only if that fails and the user approves (wrong account or corrupted session). Check other places that recommend `forceNew` (tool descriptions in `src/tools/auth-tools.ts`, README, `docs/`) and align them.
+
+**Done when:** a test pins the new suggestions for `AUTH_REQUIRED` and `AUTH_EXPIRED` (written first, seen failing); no default suggestion recommends `forceNew` without user approval; README/docs wording matches AGENTS.md.
