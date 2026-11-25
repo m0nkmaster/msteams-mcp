@@ -21,6 +21,8 @@ import { MAX_SIMPLE_UPLOAD_BYTES, SELF_CHAT_ID, ATTACHMENT_REUSE_TTL_MS, UPLOAD_
 import {
   resolveUploadFile,
   relativeInside,
+  windowsLexicalRefusal,
+  forbiddenRoots,
   uploadChatFile,
   shareChatFile,
   buildFilesPropertyEntry,
@@ -73,6 +75,7 @@ vi.mock('node:os', async (importOriginal) => {
 const mockHttp = vi.mocked(httpRequest);
 const mockGraphToken = vi.mocked(requireGraphTokenAsync);
 const mockMessageAuth = vi.mocked(requireMessageAuthWithConfig);
+const mockRealpathSync = vi.mocked(realpathSync);
 const mockRealpathNative = vi.mocked(realpathSync.native);
 const mockStatSync = vi.mocked(statSync);
 const mockReadFile = vi.mocked(nodePromises.readFile);
@@ -326,7 +329,7 @@ describe('resolveUploadFile', () => {
     }
   });
 
-  it('rejects a junction inside the root that points outside it', () => {
+  it('rejects a junction inside the root that points outside it', (ctx) => {
     vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
     const outsideDir = path.join(h.root, 'junction-target');
     mkdirSync(outsideDir, { recursive: true });
@@ -337,7 +340,10 @@ describe('resolveUploadFile', () => {
       symlinkSync(outsideDir, link, 'junction');
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
-      if (code === 'EPERM' || code === 'EACCES') return; // symlinks not permitted
+      if (code === 'EPERM' || code === 'EACCES') {
+        ctx.skip('symlinks not permitted on this host');
+        return;
+      }
       throw e;
     }
 
@@ -347,7 +353,7 @@ describe('resolveUploadFile', () => {
     });
   });
 
-  it('rejects a junction inside the root that resolves into a dot-directory', () => {
+  it('rejects a junction inside the root that resolves into a dot-directory', (ctx) => {
     vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
     const dotDir = path.join(h.uploadRoot, 'sub', '.ssh');
     mkdirSync(dotDir, { recursive: true });
@@ -358,7 +364,10 @@ describe('resolveUploadFile', () => {
       symlinkSync(dotDir, link, 'junction');
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
-      if (code === 'EPERM' || code === 'EACCES') return; // symlinks not permitted
+      if (code === 'EPERM' || code === 'EACCES') {
+        ctx.skip('symlinks not permitted on this host');
+        return;
+      }
       throw e;
     }
 
@@ -430,7 +439,7 @@ describe('resolveUploadFile', () => {
 
   it.runIf(process.platform === 'win32')(
     'rejects 8.3 short names that resolve into dot-directories',
-    () => {
+    (ctx) => {
       vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
       const dotDir = path.join(h.uploadRoot, '.short-name-test');
       mkdirSync(dotDir, { recursive: true });
@@ -444,10 +453,12 @@ describe('resolveUploadFile', () => {
         const shortDir = execSync(`cmd /c for %I in ("${dotDir}") do @echo %~sI`, { encoding: 'utf8' }).trim();
         shortDirName = path.win32.basename(shortDir);
       } catch {
-        return; // cannot resolve short names on this system
+        ctx.skip('cannot resolve short names on this system');
+        return;
       }
       if (!shortDirName.includes('~')) {
-        return; // 8.3 name generation disabled on this volume
+        ctx.skip('8.3 name generation disabled on this volume');
+        return;
       }
       const attackPath = path.join(h.uploadRoot, shortDirName, 'key.txt');
 
@@ -458,12 +469,94 @@ describe('resolveUploadFile', () => {
     },
   );
 
+  it('resolves paths through realpathSync.native, never the JS wrapper', () => {
+    // Plain realpathSync keeps Windows 8.3 short names; only .native
+    // resolves them. If the impl ever drops .native this spy fails.
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('native-resolve.txt', 'x');
+
+    const result = resolveUploadFile(file);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(mockRealpathNative).toHaveBeenCalled();
+    expect(mockRealpathSync).not.toHaveBeenCalled();
+  });
+
+  function errnoError(code: string): NodeJS.ErrnoException {
+    const e = new Error(code) as NodeJS.ErrnoException;
+    e.code = code;
+    return e;
+  }
+
+  it('reports an upload-root realpath failure with its errno code', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('root-fail.txt');
+    // The first .native call resolves the root.
+    mockRealpathNative.mockImplementationOnce(() => {
+      throw errnoError('EACCES');
+    });
+
+    const result = resolveUploadFile(file);
+
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    if (!result.ok) {
+      expect(result.error.message).toContain('Upload root could not be resolved (EACCES)');
+    }
+  });
+
+  it.each(['ENOENT', 'ENOTDIR', 'EPERM'])(
+    'maps a candidate realpath %s to the right message',
+    async (code) => {
+      vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+      const file = writeTestFile(`err-${code}.txt`);
+      const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+      // Call order: root first, then the candidate — both once-queued so
+      // nothing leaks into later tests.
+      mockRealpathNative
+        .mockImplementationOnce((p) => actualFs.realpathSync.native(p))
+        .mockImplementationOnce(() => {
+          throw errnoError(code);
+        });
+
+      const result = resolveUploadFile(file);
+
+      expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+      if (!result.ok) {
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
+          expect(result.error.message).toContain('does not exist');
+        } else {
+          expect(result.error.message).toContain(`could not be resolved (${code})`);
+        }
+      }
+    },
+  );
+
+  it('accepts filenames that merely contain a tilde-digit', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('report~1 final.docx', 'x');
+
+    expect(resolveUploadFile(file)).toMatchObject({ ok: true });
+  });
+
+  it('accepts an upload root whose own name contains a tilde-digit', () => {
+    // A root like 'C:\Uploads~1' is legitimate; only segments BELOW the root
+    // are checked for 8.3 shapes.
+    const tildeRoot = path.join(h.uploadRoot, 'root~1');
+    mkdirSync(tildeRoot, { recursive: true });
+    const file = path.join(tildeRoot, 'inside.txt');
+    writeFileSync(file, 'x');
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', tildeRoot);
+
+    expect(resolveUploadFile(file)).toMatchObject({ ok: true });
+  });
+
   it.runIf(process.platform === 'win32')(
     'rejects ~N short-name segments and ADS colons before any fs call',
     () => {
       vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
       const candidates = [
         path.join(h.uploadRoot, 'report~1.txt'),
+        path.join(h.uploadRoot, 'SSH~1', 'key.txt'),
         `${path.join(h.uploadRoot, 'notes.txt')}:$DATA`,
         `${path.join(h.uploadRoot, 'dir', 'f.txt')}:stream`,
       ];
@@ -473,6 +566,10 @@ describe('resolveUploadFile', () => {
           ok: false,
           error: { code: ErrorCode.INVALID_INPUT },
         });
+      }
+      const shortName = resolveUploadFile(path.join(h.uploadRoot, 'SSH~1', 'key.txt'));
+      if (!shortName.ok) {
+        expect(shortName.error.message).toContain('8.3 short name');
       }
       expect(mockRealpathNative).not.toHaveBeenCalled();
       expect(mockStatSync).not.toHaveBeenCalled();
@@ -493,6 +590,73 @@ describe('resolveUploadFile', () => {
       });
     },
   );
+});
+
+describe('windowsLexicalRefusal', () => {
+  // Pure win32-semantics checks: callable on any host.
+  const ROOT = 'C:\\Users\\me\\Uploads';
+
+  it('accepts ordinary paths inside the root', () => {
+    expect(windowsLexicalRefusal(`${ROOT}\\dir\\file.txt`, ROOT)).toBeNull();
+    expect(windowsLexicalRefusal(`${ROOT}\\report~1 final.docx`, ROOT)).toBeNull();
+    // The root's own ~N segment is not scanned — only segments below it.
+    expect(windowsLexicalRefusal('C:\\Up~1\\Uploads\\file.txt', 'C:\\Up~1\\Uploads')).toBeNull();
+  });
+
+  it('refuses UNC and device paths', () => {
+    for (const p of [
+      '\\\\host\\share\\a.txt',
+      '//host/share/a.txt',
+      '\\\\?\\UNC\\host\\share\\a.txt',
+      '\\\\.\\PhysicalDrive0',
+    ]) {
+      expect(windowsLexicalRefusal(p, ROOT)).toContain('UNC or device');
+    }
+  });
+
+  it('refuses only true 8.3 shapes below the root', () => {
+    expect(windowsLexicalRefusal(`${ROOT}\\SSH~1\\key.txt`, ROOT)).toContain('8.3 short name');
+    expect(windowsLexicalRefusal(`${ROOT}\\report~1.txt`, ROOT)).toContain('8.3 short name');
+    expect(windowsLexicalRefusal(`${ROOT}\\ABCDEF~12`, ROOT)).toContain('8.3 short name');
+    // Near-misses are ordinary names.
+    expect(windowsLexicalRefusal(`${ROOT}\\toolongname~1.txt`, ROOT)).toBeNull();
+    expect(windowsLexicalRefusal(`${ROOT}\\file~1234567.txt`, ROOT)).toBeNull();
+    expect(windowsLexicalRefusal(`${ROOT}\\archive~1.longext`, ROOT)).toBeNull();
+  });
+
+  it('refuses NTFS alternate data streams', () => {
+    expect(windowsLexicalRefusal(`${ROOT}\\notes.txt:$DATA`, ROOT)).toContain('alternate data stream');
+    expect(windowsLexicalRefusal(`${ROOT}\\dir\\f.txt:stream`, ROOT)).toContain('alternate data stream');
+  });
+});
+
+describe('forbiddenRoots', () => {
+  it('always includes the config dir', () => {
+    expect(forbiddenRoots('linux', '/home/me', {}, '/cfg')).toEqual(['/cfg']);
+  });
+
+  it('adds the win32 app-data trees', () => {
+    const roots = forbiddenRoots('win32', 'C:\\Users\\me',
+      { APPDATA: 'C:\\Users\\me\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' },
+      '/cfg');
+    expect(roots).toEqual([
+      '/cfg',
+      path.join('C:\\Users\\me', 'AppData'),
+      'C:\\Users\\me\\AppData\\Roaming',
+      'C:\\Users\\me\\AppData\\Local',
+    ]);
+  });
+
+  it('skips unset win32 env roots but keeps the home AppData tree', () => {
+    expect(forbiddenRoots('win32', '/home/me', {}, '/cfg'))
+      .toEqual(['/cfg', path.join('/home/me', 'AppData')]);
+  });
+
+  it('adds ~/Library on darwin and ignores win32 env there', () => {
+    expect(forbiddenRoots('darwin', '/Users/me',
+      { APPDATA: 'C:\\x', LOCALAPPDATA: 'C:\\y' }, '/cfg'))
+      .toEqual(['/cfg', path.join('/Users/me', 'Library')]);
+  });
 });
 
 describe('relativeInside', () => {

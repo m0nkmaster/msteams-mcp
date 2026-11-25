@@ -146,6 +146,61 @@ export function relativeInside(
 /** Basenames that must never be uploaded: well-known credential file names. */
 const CREDENTIAL_FILE_BASENAMES = /^(_netrc|_git-credentials)$/i;
 
+/**
+ * True 8.3 short-name shape: a <=6-char base, '~', 1-6 digits, optional
+ * <=3-char extension ('SSH~1', 'SHORT-~1.TXT'). Tildes elsewhere — spaces,
+ * longer bases, 4+-char extensions — are ordinary filenames.
+ */
+const SHORT_NAME_SEGMENT = /^[^.~\s]{1,6}~\d{1,6}(\.[^.\s]{1,3})?$/i;
+
+/**
+ * Windows-only lexical refusals for an upload candidate, evaluated with
+ * win32 path semantics so the check is identical on any host. Returns the
+ * refusal reason (appended to "Attachment path ..."), or null. Order:
+ * UNC/device prefixes first — realpath/stat on those opens an SMB session
+ * and leaks NTLM — then 8.3 short-name segments below the root, then NTFS
+ * alternate data streams.
+ */
+export function windowsLexicalRefusal(candidate: string, root: string): string | null {
+  if (candidate.startsWith('\\\\') || candidate.startsWith('//')) {
+    return 'must not be a UNC or device path';
+  }
+  const lexicalCandidate = path.win32.resolve(candidate);
+  const lexicalRoot = path.win32.resolve(root);
+  const relative = path.win32.relative(lexicalRoot, lexicalCandidate);
+  const segments = relative.split(/[\\/]/).filter(s => s !== '' && s !== '.');
+  if (segments.some(segment => SHORT_NAME_SEGMENT.test(segment))) {
+    return 'looks like an 8.3 short name; pass the long path';
+  }
+  if (lexicalCandidate.indexOf(':', 2) !== -1) {
+    return 'must not contain an alternate data stream';
+  }
+  return null;
+}
+
+/**
+ * Directories that must never be uploaded from: the server's own config
+ * plus the per-OS credential trees — Windows AppData (the env vars and the
+ * home-derived Roaming/Local/LocalLow parent) and macOS ~/Library. Pure so
+ * the platform branching is unit-testable on any host.
+ */
+export function forbiddenRoots(
+  platform: NodeJS.Platform,
+  home: string,
+  env: NodeJS.ProcessEnv,
+  configDir: string,
+): string[] {
+  const roots = [configDir];
+  if (platform === 'win32') {
+    roots.push(path.join(home, 'AppData'));
+    if (env.APPDATA) roots.push(env.APPDATA);
+    if (env.LOCALAPPDATA) roots.push(env.LOCALAPPDATA);
+  } else if (platform === 'darwin') {
+    roots.push(path.join(home, 'Library'));
+  }
+  return roots;
+}
+
 export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile> {
   if (!path.isAbsolute(candidate)) {
     return err(createError(ErrorCode.INVALID_INPUT, `Attachment path must be absolute: ${candidate}`));
@@ -158,12 +213,15 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
       `TEAMS_MCP_UPLOAD_DIR must be an absolute path: ${uploadDir}`));
   }
 
-  // On Windows, realpath/stat on a UNC or device path opens an SMB session and
-  // leaks NTLM credentials — reject those lexically before any fs call.
-  if (process.platform === 'win32' &&
-      (candidate.startsWith('\\\\') || candidate.startsWith('//'))) {
-    return err(createError(ErrorCode.INVALID_INPUT,
-      `Attachment path must not be a UNC or device path: ${candidate}`));
+  // Windows lexical traps before any fs call: UNC/device paths would open
+  // an SMB session on realpath/stat, and 8.3/ADS shapes bypass the
+  // dot/config guards below.
+  if (process.platform === 'win32') {
+    const refusal = windowsLexicalRefusal(candidate, root);
+    if (refusal) {
+      return err(createError(ErrorCode.INVALID_INPUT,
+        `Attachment path ${refusal}: ${candidate}`));
+    }
   }
 
   const lexicalCandidate = path.resolve(candidate);
@@ -176,26 +234,26 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
       `Attachment must be inside the upload root (${root}): ${candidate}`));
   }
 
-  // Windows-only lexical traps, still before any fs call:
-  // - '~<digit>' segments are 8.3 short names that alias dot-directories
-  //   (plain realpathSync keeps them; '.native' resolves them, and the
-  //   dot-rule below is the second layer).
-  // - ':' after the drive prefix is an NTFS alternate data stream.
-  if (process.platform === 'win32' &&
-      (lexicalCandidate.split(/[\\/]/).some(segment => /~\d/.test(segment)) ||
-       lexicalCandidate.indexOf(':', 2) !== -1)) {
-    return err(createError(ErrorCode.INVALID_INPUT,
-      `Attachment path must not contain 8.3 short names or alternate data streams: ${candidate}`));
-  }
-
   let realRoot: string;
-  let realPath: string;
   try {
     // .native resolves Windows 8.3 short names that plain realpathSync keeps.
     realRoot = fs.realpathSync.native(root);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code ?? 'unknown';
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Upload root could not be resolved (${code}): ${root}`));
+  }
+
+  let realPath: string;
+  try {
     realPath = fs.realpathSync.native(candidate);
-  } catch {
-    return err(createError(ErrorCode.INVALID_INPUT, `Attachment does not exist: ${candidate}`));
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return err(createError(ErrorCode.INVALID_INPUT, `Attachment does not exist: ${candidate}`));
+    }
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Attachment could not be resolved (${code ?? 'unknown'}): ${candidate}`));
   }
 
   const relative = relativeInside(realPath, realRoot);
@@ -221,16 +279,7 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
 
   // Never upload the server's own config (session state, tokens) or the
   // per-user application-data / library trees where OS credentials live.
-  const home = os.homedir();
-  const forbiddenRoots = [CONFIG_DIR];
-  if (process.platform === 'win32') {
-    forbiddenRoots.push(path.join(home, 'AppData'));
-    if (process.env.APPDATA) forbiddenRoots.push(process.env.APPDATA);
-    if (process.env.LOCALAPPDATA) forbiddenRoots.push(process.env.LOCALAPPDATA);
-  } else if (process.platform === 'darwin') {
-    forbiddenRoots.push(path.join(home, 'Library'));
-  }
-  for (const forbidden of forbiddenRoots) {
+  for (const forbidden of forbiddenRoots(process.platform, os.homedir(), process.env, CONFIG_DIR)) {
     if (relativeInside(realPath, resolveReal(forbidden)) !== null) {
       return err(createError(ErrorCode.INVALID_INPUT,
         `Attachment path is inside a protected directory and cannot be uploaded: ${candidate}`));
