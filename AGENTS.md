@@ -58,6 +58,7 @@ src/
 │   ├── tags-api.ts       # Channel tags (mt/part teams/{groupId}/tags)
 │   ├── assignments-api.ts # EDU Assignments (assignments.edu.cloud.microsoft, OneNote EDU)
 │   ├── graph-files-api.ts # File downloads via Microsoft Graph (shared files and assignment attachments)
+│   ├── chat-attachments-api.ts # Chat attachments: path guards, Graph upload + share, chatsvc files entries
 │   └── profile-api.ts    # Resolve MRIs to profiles (middleTier fetchShortProfile)
 ├── browser/              # Playwright browser automation (login only)
 │   ├── context.ts        # Persistent browser profile management
@@ -144,6 +145,7 @@ Different Teams APIs use different auth mechanisms:
 | **Profiles** (mt/part fetchShortProfile) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuthWithConfig()` |
 | **Tags** (mt/part teams/{groupId}/tags) | Skype Spaces token + `skypetoken_asm` | `requireSkypeSpacesAuth()` |
 | **File downloads** (Graph drive items; SharePoint URLs resolved via `/shares`) | Teams client's Graph JWT (aud `https://graph.microsoft.com`); the resulting `downloadUrl` is pre-authenticated and gets no header | `requireGraphTokenAsync()` |
+| **Chat attachments** (Graph `PUT /me/drive/root:/Microsoft Teams Chat Files/{name}:/content`, `createLink` view/users, `/shares/u!{…}/permission/grant`; members from chatsvc `v1/threads/{id}`) | Teams client's Graph JWT for upload and sharing; `skypetoken_asm` for the member lookup and the send | `requireGraphTokenAsync()` + `requireMessageAuthWithConfig()` |
 | **Assignments** (assignments.edu.cloud.microsoft) | JWT Bearer for the Assignments app (aud `8f348934-…`) + `MS-Int-AppID: assignments-ui` header | `requireAssignmentsTokenAsync()` |
 
 The `extract*`/`getValid*` helpers live in `auth/token-extractor`; the `require*` guards live in `utils/auth-guards`. Notes:
@@ -295,6 +297,7 @@ Conversation ID patterns: channels `19:xxx@thread.tacv2`; meetings `19:meeting_x
 
 ### Known limitations
 
+- **Chat attachments**: files over 4 MB are refused (Graph simple upload; upload sessions are not implemented). Channels and scheduled messages are not supported. Sharing copies the Teams client (a `view` link of scope `users` granted to the chat's other members); whether `grant` accepts `objectId` recipients and how it handles guests and very large meeting chats is unverified until the manual recipient test in BACKLOG.md. A failed send leaves the uploaded copies in OneDrive (reused for 10 minutes so a retry does not duplicate them).
 - **Presence/status**: real-time via WebSocket, not available over HTTP.
 - **Assignments**: EDU-tenant feature only (education tenants that use Teams Assignments). List, get, attachments, attachment download, and the submission `submit`/`unsubmit` actions are verified live against an education tenant; the submission "view" action is verified against a captured web session. `submit`/`unsubmit` act on the user's real account (a re-submit records a new submitted date the teacher sees), are not replayed by HTTP retries, and only report success after reading back the expected submission state.
 
