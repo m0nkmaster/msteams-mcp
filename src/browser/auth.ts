@@ -4,14 +4,13 @@
  */
 
 import type { Page, BrowserContext } from 'playwright';
-import { saveSessionState } from './context.js';
+import { saveAuthenticatedSession } from './context.js';
 import {
   OVERLAY_STEP_PAUSE_MS,
   OVERLAY_COMPLETE_PAUSE_MS,
   TEAMS_HOSTS,
+  LOGIN_TIMEOUT_MS,
 } from '../constants.js';
-import { extractSubstrateToken } from '../auth/token-extractor.js';
-import { decryptStorageState } from '../auth/msal-cache-crypto.js';
 import * as logger from '../utils/logger.js';
 
 /**
@@ -31,17 +30,13 @@ const TEAMS_URL = 'https://teams.microsoft.com';
 const PROGRESS_OVERLAY_ID = 'mcp-login-progress-overlay';
 
 /** Phases for the login progress overlay. */
-type OverlayPhase = 'signed-in' | 'saving' | 'complete' | 'error';
+type OverlayPhase = 'waiting' | 'complete' | 'error';
 
 /** Content for each overlay phase. */
 const OVERLAY_CONTENT: Record<OverlayPhase, { message: string; detail: string }> = {
-  'signed-in': {
-    message: "You're signed in!",
-    detail: 'Setting up your connection to Teams...',
-  },
-  'saving': {
-    message: 'Saving your session...',
-    detail: "So you won't need to log in again.",
+  waiting: {
+    message: 'Waiting for Teams credentials',
+    detail: 'Complete sign-in if prompted. This window will close when Teams is ready.',
   },
   'complete': {
     message: 'All done!',
@@ -68,14 +63,16 @@ async function showLoginProgress(
   const isError = phase === 'error';
 
   try {
-    await page.evaluate(({ id, message, detail, complete, error }) => {
+    await page.evaluate(({ id, message, detail, complete, error, waiting }) => {
       // Remove existing overlay if present
       const existing = document.getElementById(id);
-      if (existing) existing.remove();
+      if (waiting && existing?.dataset.phase === 'waiting') return;
+      existing?.remove();
 
       // Create overlay container
       const overlay = document.createElement('div');
       overlay.id = id;
+      if (waiting) overlay.dataset.phase = 'waiting';
       Object.assign(overlay.style, {
         position: 'fixed',
         top: '0',
@@ -89,6 +86,14 @@ async function showLoginProgress(
         zIndex: '999999',
         fontFamily: "'Segoe UI', system-ui, sans-serif",
       });
+
+      if (waiting) {
+        Object.assign(overlay.style, {
+          inset: '16px 16px auto',
+          pointerEvents: 'none',
+          background: 'transparent',
+        });
+      }
 
       // Create modal card
       const modal = document.createElement('div');
@@ -138,16 +143,22 @@ async function showLoginProgress(
       });
       detailEl.textContent = detail;
 
+      if (waiting) {
+        icon.style.display = 'none';
+        modal.style.padding = '12px 20px';
+      }
+
       // Assemble and append
       modal.appendChild(icon);
       modal.appendChild(title);
       modal.appendChild(detailEl);
       overlay.appendChild(modal);
-      document.body.appendChild(overlay);
+      document.documentElement.appendChild(overlay);
     }, {
       id: PROGRESS_OVERLAY_ID,
       message: content.message,
       detail: content.detail,
+      waiting: phase === 'waiting',
       complete: isComplete,
       error: isError,
     });
@@ -166,67 +177,6 @@ async function showLoginProgress(
 // Authentication Detection
 // ─────────────────────────────────────────────────────────────────────────────
 
-// URLs that indicate we're in a login flow
-const LOGIN_URL_PATTERNS = [
-  'login.microsoftonline.com',
-  'login.live.com',
-  'login.microsoft.com',
-];
-
-interface AuthStatus {
-  isAuthenticated: boolean;
-  isOnLoginPage: boolean;
-  currentUrl: string;
-}
-
-/**
- * Checks if the current page URL indicates a login flow.
- */
-function isLoginUrl(url: string): boolean {
-  return LOGIN_URL_PATTERNS.some(pattern => url.includes(pattern));
-}
-
-/**
- * Gets the current authentication status.
- */
-export async function getAuthStatus(page: Page): Promise<AuthStatus> {
-  const currentUrl = page.url();
-  const onLoginPage = isLoginUrl(currentUrl);
-
-  // If on login page, definitely not authenticated
-  if (onLoginPage) {
-    return {
-      isAuthenticated: false,
-      isOnLoginPage: true,
-      currentUrl,
-    };
-  }
-
-  // On a Teams domain, a live MSAL token is the proof of sign-in: it is what
-  // every API call needs and what the saved session is for. Teams' own DOM
-  // markers are not a usable signal — new Teams renders none of the `data-tid`
-  // elements earlier versions exposed, so waiting for them left a completed
-  // login undetected and the browser window open until the manual-login
-  // timeout.
-  if (isTeamsUrl(currentUrl)) {
-    return {
-      isAuthenticated: await checkBrowserTokenExpiry(page) > 0,
-      isOnLoginPage: false,
-      currentUrl,
-    };
-  }
-
-  // Unknown state
-  return {
-    isAuthenticated: false,
-    isOnLoginPage: false,
-    currentUrl,
-  };
-}
-
-/** Timeout for detecting login redirect (ms). */
-const LOGIN_REDIRECT_TIMEOUT_MS = 5000;
-
 /**
  * Checks if a URL is a Teams domain.
  */
@@ -239,323 +189,41 @@ export function isTeamsUrl(url: string): boolean {
   }
 }
 
-/**
- * Navigates to Teams and checks authentication status.
- * 
- * Uses a fast redirect-based detection: if we're not redirected to a login
- * page within a few seconds, the session is valid. This is much faster than
- * waiting for the full Teams SPA to render (which can take 30+ seconds).
- * 
- * Returns isAuthenticated: false if we can't confirm we're on Teams, to avoid
- * silently failing with an invisible browser stuck on an unexpected page.
- */
-async function navigateToTeams(page: Page): Promise<AuthStatus> {
-  await page.goto(TEAMS_URL, { waitUntil: 'domcontentloaded' });
+/** The profile reached Teams, but silent SSO did not produce usable credentials. */
+export class StaleTeamsSession extends Error {}
+export class TeamsLoginTimeout extends Error {}
 
-  // Login redirect happens ~3-4 seconds after navigation when the session is
-  // invalid (MSAL tries silent auth first, then redirects). No redirect within
-  // the timeout = session valid.
-  const redirectDetected = await page.waitForURL(url => isLoginUrl(url.href), {
-    timeout: LOGIN_REDIRECT_TIMEOUT_MS,
-    waitUntil: 'commit',
-  }).then(() => true, () => false);
-
-  // Check final state
-  const currentUrl = page.url();
-  
-  // Definitely on login page
-  if (redirectDetected || isLoginUrl(currentUrl)) {
-    return {
-      isAuthenticated: false,
-      isOnLoginPage: true,
-      currentUrl,
-    };
-  }
-
-  // Verify we're actually on a Teams page (not some unexpected redirect)
-  // If we ended up somewhere unexpected, treat as unauthenticated to avoid
-  // silently failing with a headless browser stuck on the wrong page
-  if (!isTeamsUrl(currentUrl)) {
-    return {
-      isAuthenticated: false,
-      isOnLoginPage: false,  // Not on login, but also not on Teams
-      currentUrl,
-    };
-  }
-
-  // On a Teams URL and no redirect to login = session is valid
-  return {
-    isAuthenticated: true,
-    isOnLoginPage: false,
-    currentUrl,
-  };
-}
-
-/** Maximum time to wait for the user to complete manual login (ms). */
-const MANUAL_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
-
-/**
- * Waits for the user to complete manual authentication.
- * Returns when authenticated or throws after timeout.
- *
- * @param page - The page to monitor
- * @param context - Browser context for saving session
- * @param onProgress - Callback for progress updates
- * @param showOverlay - Whether to show progress overlay (default: true for visible browsers)
- */
-async function waitForManualLogin(
-  page: Page,
-  context: BrowserContext,
-  onProgress?: (message: string) => void,
-  showOverlay: boolean = true
-): Promise<void> {
-  const startTime = Date.now();
-  const log = onProgress ?? ((msg: string) => logger.info('auth', msg));
-
-  log('Waiting for manual login...');
-
-  while (Date.now() - startTime < MANUAL_LOGIN_TIMEOUT_MS) {
-    const status = await getAuthStatus(page);
-
-    if (status.isAuthenticated) {
-      log('Authentication successful!');
-
-      if (showOverlay) {
-        await showLoginProgress(page, 'signed-in', { pause: true });
-        await showLoginProgress(page, 'saving');
-      }
-
-      // Wait for MSAL to store tokens in localStorage before saving session.
-      // After a fresh interactive login, Teams UI can appear before token
-      // acquisition completes — polling ensures tokens are captured.
-      const tokensReady = await waitForTokenRefresh(page, context, onProgress);
-      if (!tokensReady) {
-        // Tokens didn't appear within timeout — save whatever state we have
-        await saveSessionState(context);
-      }
-      log('Session state saved.');
-
-      if (showOverlay) {
-        await showLoginProgress(page, 'complete', { pause: true });
-      }
-
-      return;
-    }
-
-    // Check every 2 seconds
-    await page.waitForTimeout(2000);
-  }
-
-  // Show error overlay before throwing (only if overlay enabled)
-  if (showOverlay) {
-    await showLoginProgress(page, 'error', { pause: true });
-  }
-
-  throw new Error('Authentication timeout: user did not complete login within the allowed time');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Token Refresh Polling (for headless browser fallback)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Timeout for waiting for MSAL to refresh tokens (ms). */
-const TOKEN_REFRESH_WAIT_TIMEOUT_MS = 20000;
-
-/** Interval for checking if tokens have been refreshed (ms). */
-const TOKEN_REFRESH_POLL_INTERVAL_MS = 1000;
-
-/**
- * Checks in-browser localStorage for a valid Substrate token.
- * 
- * Evaluates directly in the page context to avoid serialising the full
- * session state (~600KB) to disk on every poll. Returns the token expiry
- * in minutes, or -1 if no valid token found.
- */
-async function checkBrowserTokenExpiry(page: Page): Promise<number> {
-  try {
-    const plaintext = await page.evaluate(() => {
-      const now = Date.now();
-      let bestExpiry = -1;
-
-      for (let i = 0; i < localStorage.length; i++) {
-        const value = localStorage.getItem(localStorage.key(i)!);
-        if (!value) continue;
-
-        try {
-          const entry = JSON.parse(value);
-          const target = entry.target as string | undefined;
-          if (!target?.toLowerCase().includes('substratesearch')) continue;
-
-          const secret = entry.secret as string | undefined;
-          if (!secret?.startsWith('ey')) continue;
-
-          // Decode JWT exp claim
-          const b64 = secret.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-          const payload = JSON.parse(atob(b64));
-          if (typeof payload.exp !== 'number') continue;
-
-          const expiryMs = payload.exp * 1000;
-          if (expiryMs <= now) continue;
-
-          const minsRemaining = Math.round((expiryMs - now) / 60000);
-          if (minsRemaining > bestExpiry) {
-            bestExpiry = minsRemaining;
-          }
-        } catch {
-          continue;
-        }
-      }
-
-      return bestExpiry;
-    });
-    if (plaintext > 0) return plaintext;
-    return await checkEncryptedTokenExpiry(page);
-  } catch {
-    return -1;
-  }
-}
-
-/**
- * MSAL.js v4+ encrypts its localStorage cache, so the plaintext scan above
- * sees no tokens even after a completed sign-in. Reads the page's
- * localStorage and the `msal.cache.encryption` cookie, decrypts in Node, and
- * returns the Substrate token's minutes remaining (or -1).
- */
-async function checkEncryptedTokenExpiry(page: Page): Promise<number> {
-  if (typeof page.context !== 'function') return -1;
-  const items = await page.evaluate(() => {
-    const out: Array<{ name: string; value: string }> = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const name = localStorage.key(i);
-      if (name === null) continue;
-      out.push({ name, value: localStorage.getItem(name) ?? '' });
-    }
-    return out;
-  });
-  if (!Array.isArray(items) || items.length === 0) return -1;
-
-  const cookies = await page.context().cookies();
-  const state = {
-    cookies,
-    origins: [{ origin: new URL(page.url()).origin, localStorage: items }],
-  };
-  if (decryptStorageState(state).decrypted === 0) return -1;
-
-  const token = extractSubstrateToken(state);
-  if (!token) return -1;
-  const mins = Math.round((token.expiry.getTime() - Date.now()) / 60000);
-  return mins > 0 ? mins : -1;
-}
-
-/**
- * Waits for MSAL to refresh tokens in the browser.
- * 
- * When the browser is "authenticated" (session cookies valid) but MSAL tokens
- * are expired, we need to wait for Teams JS to load and trigger silent token
- * acquisition. Polls in-browser localStorage directly to avoid unnecessary
- * disk I/O, then saves session state once when tokens appear.
- * 
- * @returns true if tokens were refreshed, false if timeout
- */
-async function waitForTokenRefresh(
-  page: Page,
-  context: BrowserContext,
-  onProgress?: (message: string) => void,
-): Promise<boolean> {
-  const log = onProgress ?? ((msg: string) => logger.debug('auth', msg));
-  
-  log('Waiting for MSAL to refresh tokens...');
-  const startTime = Date.now();
-  
-  while (Date.now() - startTime < TOKEN_REFRESH_WAIT_TIMEOUT_MS) {
-    // Check localStorage directly in the browser (no disk I/O)
-    const minsRemaining = await checkBrowserTokenExpiry(page);
-    
-    if (minsRemaining > 0) {
-      // Token found - save session state once
-      await saveSessionState(context);
-      log(`Token refresh detected (${minsRemaining} mins valid).`);
-      return true;
-    }
-    
-    // Wait and retry
-    await page.waitForTimeout(TOKEN_REFRESH_POLL_INTERVAL_MS);
-  }
-  
-  log('Token refresh timed out.');
-  return false;
-}
-
-/**
- * Performs a full authentication flow:
- * 1. Navigate to Teams
- * 2. Check if already authenticated
- * 3. If not, wait for manual login (or throw if headless)
- *
- * @param page - The page to use
- * @param context - Browser context for session management
- * @param onProgress - Callback for progress updates
- * @param showOverlay - Whether to show progress overlay (default: true for visible browsers)
- * @param headless - If true, throw immediately if user interaction is required (default: false)
- */
 export async function ensureAuthenticated(
   page: Page,
   context: BrowserContext,
   onProgress?: (message: string) => void,
-  showOverlay: boolean = true,
-  headless: boolean = false
+  showOverlay = true,
+  headless = false,
+  deadline = Date.now() + LOGIN_TIMEOUT_MS,
 ): Promise<void> {
-  const log = onProgress ?? ((msg: string) => logger.info('auth', msg));
-
+  const log = onProgress ?? ((message: string) => logger.info('auth', message));
   log('Navigating to Teams...');
-  const status = await navigateToTeams(page);
-
-  if (status.isAuthenticated) {
-    log('Teams loaded — saving session state.');
-    await saveSessionState(context);
-    
-    // Check if the saved tokens are actually valid
-    // Browser session cookies can outlive MSAL tokens (cookies last days, tokens ~1 hour)
-    const token = extractSubstrateToken();
-    const tokenValid = token && token.expiry.getTime() > Date.now();
-    
-    if (tokenValid) {
-      log('Session state saved.');
-      return;
-    }
-    
-    // Tokens are expired - in headless mode, wait for MSAL to refresh them
-    // Teams JS will silently acquire new tokens using the session cookies
-    if (headless) {
-      log('Tokens expired, waiting for MSAL to refresh...');
-      const refreshed = await waitForTokenRefresh(page, context, onProgress);
-      
-      if (refreshed) {
+  const stopAt = headless ? Math.min(deadline, Date.now() + 20_000) : deadline;
+  const remaining = stopAt - Date.now();
+  if (remaining > 0) {
+    await page.goto(TEAMS_URL, { waitUntil: 'commit', timeout: Math.min(30_000, remaining) });
+  }
+  log(headless ? 'Waiting for Teams credentials...' : 'Complete sign-in in the browser if prompted.');
+  while (Date.now() < stopAt) {
+    if (isTeamsUrl(page.url())) {
+      if (showOverlay) await showLoginProgress(page, 'waiting');
+      if (await saveAuthenticatedSession(context, !headless)) {
+        log('Session state saved.');
+        if (showOverlay) await showLoginProgress(page, 'complete', { pause: true });
         return;
       }
-      
-      // Still no valid tokens after waiting
-      throw new Error('Headless SSO failed: MSAL token refresh timed out');
     }
-    
-    // No redirect to login does not mean signed in: Teams can render with the
-    // Microsoft SSO session gone and only a dead SPA refresh token in its cache.
-    // Keep the window open until a live token appears (silently or by sign-in).
-    log('Tokens expired. Sign in in the browser window if prompted.');
-    await waitForManualLogin(page, context, onProgress, showOverlay);
-    return;
+    await page.waitForTimeout(headless ? 1000 : 2000);
   }
-
-  // User interaction required - fail fast if headless
   if (headless) {
-    const reason = status.isOnLoginPage 
-      ? 'Login page detected - user credentials required'
-      : `Unexpected page at ${new URL(status.currentUrl).origin}`;
-    throw new Error(`Headless SSO failed: ${reason}`);
+    if (isTeamsUrl(page.url())) throw new StaleTeamsSession('Teams opened but silent SSO produced no live search credential.');
+    throw new Error('Silent SSO did not return to Teams. Interactive sign-in is required.');
   }
-
-  log(status.isOnLoginPage
-    ? 'Login required. Please complete authentication in the browser window.'
-    : 'Unexpected page state. Waiting for authentication...');
-  await waitForManualLogin(page, context, onProgress, showOverlay);
+  if (showOverlay && isTeamsUrl(page.url())) await showLoginProgress(page, 'error', { pause: true });
+  throw new TeamsLoginTimeout('Teams sign-in timed out before Teams provided usable credentials.');
 }

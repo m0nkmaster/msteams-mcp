@@ -17,9 +17,10 @@ vi.mock('../auth/token-extractor.js', () => ({
 
 vi.mock('../auth/token-refresh-http.js', () => ({ refreshTokensViaHttp: vi.fn() }));
 vi.mock('../browser/context.js', () => ({ createBrowserContext: vi.fn(), closeBrowser: vi.fn() }));
-vi.mock('../browser/auth.js', () => ({ ensureAuthenticated: vi.fn() }));
+vi.mock('../browser/auth.js', async importOriginal => ({ ...await importOriginal<typeof import('../browser/auth.js')>(), ensureAuthenticated: vi.fn() }));
 vi.mock('../utils/auth-guards.js', () => ({ resetAssignmentsAvailability: vi.fn(), clearRegionCache: vi.fn() }));
 
+import { ensureAuthenticated, StaleTeamsSession, TeamsLoginTimeout } from '../browser/auth.js';
 import { loginTool } from './auth-tools.js';
 import { clearAllLocalData } from '../auth/session-store.js';
 import {
@@ -45,6 +46,29 @@ describe('teams_login core credential top-up', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+  });
+
+  it('recovers expired credentials over HTTP without opening a browser', async () => {
+    sessionMissingCsaToken();
+    vi.mocked(getSubstrateTokenStatus).mockReturnValueOnce({ hasToken: false });
+    const result = await loginTool.handler({ forceNew: false });
+    expect(result.success).toBe(true);
+    expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
+    expect(createBrowserContext).not.toHaveBeenCalled();
+  });
+
+  it('uses a clean visible sign-in after stale SSO and closes both windows on failure', async () => {
+    vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+    vi.mocked(ensureAuthenticated).mockRejectedValueOnce(new StaleTeamsSession())
+      .mockRejectedValueOnce(new TeamsLoginTimeout('sign-in timed out'));
+    expect(await loginTool.handler({ forceNew: false })).toMatchObject({
+      success: false, error: { code: 'TIMEOUT', message: 'sign-in timed out' },
+    });
+    expect(createBrowserContext).toHaveBeenLastCalledWith({ headless: false, freshProfile: true });
+    expect(closeBrowser).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(ensureAuthenticated).mock.calls[1][5]).toBe(vi.mocked(ensureAuthenticated).mock.calls[0][5]);
+    expect(clearAllLocalData).not.toHaveBeenCalled();
   });
 
   it('mints the missing CSA token when the session is otherwise valid', async () => {
@@ -95,7 +119,7 @@ describe('teams_login core credential top-up', () => {
     // Valid-looking tokens from the old session must not short-circuit the login,
     // and a wiped profile has nothing for headless SSO to use.
     expect(createBrowserContext).toHaveBeenCalledOnce();
-    expect(createBrowserContext).toHaveBeenCalledWith({ headless: false });
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: false, freshProfile: false });
   });
 
   it('reports usable capabilities and the reason a top-up failed', async () => {

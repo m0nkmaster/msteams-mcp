@@ -15,24 +15,14 @@ import {
   type SessionState,
 } from './session-store.js';
 import { parseJwtProfile, type UserProfile } from '../utils/parsers.js';
+import { decodeJwtPayload } from '../utils/parsers-people.js';
 import { MRI_TYPE_PREFIX, ORGID_PREFIX, MRI_ORGID_PREFIX, ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES } from '../constants.js';
+
+export { decodeJwtPayload };
 
 // ============================================================================
 // JWT Utilities
 // ============================================================================
-
-/**
- * Decodes a JWT token's payload without verifying the signature.
- */
-export function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length < 2) return null;
-    return JSON.parse(Buffer.from(parts[1], 'base64url').toString());
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Gets the expiry date from a JWT token's `exp` claim.

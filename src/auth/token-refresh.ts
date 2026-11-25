@@ -113,7 +113,7 @@ async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
       msg => log.debug('token-refresh', msg), false, true);
 
     // ensureAuthenticated already saved the session
-    await closeBrowser(manager, false);
+    await closeBrowser(manager);
     manager = null;
     clearTokenCache();
 
@@ -126,7 +126,7 @@ async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
     return ok(undefined);
   } catch (error) {
     if (manager) {
-      await closeBrowser(manager, false).catch(() => {});
+      await closeBrowser(manager).catch(() => {});
     }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return err(createError(

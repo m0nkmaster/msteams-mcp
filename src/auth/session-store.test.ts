@@ -50,6 +50,18 @@ describe('getTeamsOrigin', () => {
     expect(chosen?.origin).toBe('https://teams.cloud.microsoft');
   });
 
+  it('uses the live Teams origin when the old host still has expired tokens', () => {
+    const entry = makeSubstrateEntry();
+    const payload = Buffer.from(JSON.stringify({ exp: Date.now() / 1000 + 3600 })).toString('base64url');
+    const live = { ...entry, value: JSON.stringify({ ...JSON.parse(entry.value), secret: `eyJ0.${payload}.sig` }) };
+    const state = { cookies: [], origins: [
+      makeOrigin('https://example.org', [live]),
+      makeOrigin('https://teams.microsoft.com', [entry]),
+      makeOrigin('https://teams.cloud.microsoft', [live]),
+    ] };
+    expect(getTeamsOrigin(state)?.origin).toBe('https://teams.cloud.microsoft');
+  });
+
   it('falls back to teams.cloud.microsoft when no Substrate token exists', () => {
     const state: SessionState = {
       cookies: [],

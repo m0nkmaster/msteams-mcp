@@ -56,6 +56,9 @@ export const MAX_CHANNEL_LIMIT = 50;
 /** Cancel a file download after this long without receiving any data. */
 export const DOWNLOAD_INACTIVITY_TIMEOUT_MS = 30000;
 
+/** Shared budget for silent recovery and interactive sign-in. */
+export const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+
 /** Pause after showing progress overlay step (ms). */
 export const OVERLAY_STEP_PAUSE_MS = 1500;
 

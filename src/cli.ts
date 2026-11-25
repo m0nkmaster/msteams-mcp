@@ -22,6 +22,7 @@ import { createRequire } from 'module';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { LOGIN_TIMEOUT_MS } from './constants.js';
 import { createServer } from './server.js';
 import { toolCategories } from './tools/registry.js';
 import { UsageError, parseToolArgs, resolveToolName, shortName } from './cli/resolve.js';
@@ -30,9 +31,6 @@ import { renderIndex, renderToolHelp } from './cli/help.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
-
-/** Login can wait on SSO/MFA in a browser; everything else uses the default. */
-const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 async function connect(): Promise<{ client: Client; cleanup: () => Promise<void> }> {
   const server = await createServer();
@@ -102,7 +100,8 @@ async function run(argv: string[]): Promise<number> {
       return 0;
     }
 
-    const timeout = name === 'teams_login' ? LOGIN_TIMEOUT_MS : undefined;
+    // Allow browser cleanup and the final core credential refresh to finish.
+    const timeout = name === 'teams_login' ? LOGIN_TIMEOUT_MS + 90_000 : undefined;
     const result = await client.callTool({ name, arguments: args }, undefined, { timeout });
     const payload = toolPayload(result);
     if (!payload) return result.isError ? 1 : 0;

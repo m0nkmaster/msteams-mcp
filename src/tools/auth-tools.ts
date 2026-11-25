@@ -26,7 +26,8 @@ import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import * as log from '../utils/logger.js';
 import { resetAssignmentsAvailability, clearRegionCache } from '../utils/auth-guards.js';
-import { ensureAuthenticated } from '../browser/auth.js';
+import { LOGIN_TIMEOUT_MS } from '../constants.js';
+import { ensureAuthenticated, StaleTeamsSession, TeamsLoginTimeout } from '../browser/auth.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -82,10 +83,10 @@ export function getAuthCapabilities() {
   };
 }
 
-async function finishLogin(message: string, tokenStatus?: ReturnType<typeof getSubstrateTokenStatus>): Promise<ToolResult> {
+async function finishLogin(message: string, tokenStatus?: ReturnType<typeof getSubstrateTokenStatus>, topUp = true): Promise<ToolResult> {
   let capabilities = getAuthCapabilities();
   let refreshError: string | undefined;
-  if (Object.values(capabilities).some(capability => !capability.available)) {
+  if (topUp && Object.values(capabilities).some(capability => !capability.available)) {
     // Teams acquires some tokens lazily. Even a successful refresh can fill only some gaps.
     const refresh = await refreshTokensViaHttp();
     if (!refresh.ok) {
@@ -114,12 +115,13 @@ async function handleLogin(
   // A fresh login may have changed what the account can access (e.g. new consent)
   resetAssignmentsAvailability();
 
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   if (input.forceNew) {
     // Start from nothing: no profile, cookies, MSAL cache or session from any
     // earlier account can survive to be mixed into the new login.
     clearAllLocalData();
     clearRegionCache();
-    return loginInVisibleBrowser();
+    return loginInVisibleBrowser(deadline);
   }
 
   // Fast path: if tokens are still valid, skip browser entirely
@@ -128,9 +130,14 @@ async function handleLogin(
     return finishLogin(`Already authenticated. Token valid for ${tokenStatus.minutesRemaining} more minutes.`, tokenStatus);
   }
 
-  // Headless-first strategy:
-  // The persistent browser profile retains Microsoft's long-lived session cookies,
-  // so headless SSO can succeed even without a session-state file.
+  if (hasSessionState()) {
+    const refreshed = await refreshTokensViaHttp();
+    if (!refreshed.ok) log.info('login', `Saved-session refresh failed (${refreshed.error.code}). Trying browser SSO.`);
+    if (refreshed.ok && getSubstrateTokenStatus().hasToken) {
+      return finishLogin('Saved Teams session refreshed.', undefined, false);
+    }
+  }
+
   const headless = await createBrowserContext({ headless: true });
   try {
     await ensureAuthenticated(
@@ -138,26 +145,31 @@ async function handleLogin(
       headless.context,
       (msg) => log.info('login:headless', msg),
       false, // No overlay in headless
-      true   // Headless mode - throw immediately if user interaction required
+      true,
+      deadline,
     );
-    await closeBrowser(headless, true);
-    return finishLogin('Login completed silently via SSO. Session has been saved.');
   } catch (error) {
     log.warn('login:headless', `Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
-    await closeBrowser(headless, false).catch(() => {});
+    await closeBrowser(headless);
+    return loginInVisibleBrowser(deadline, error instanceof StaleTeamsSession);
   }
-
-  return loginInVisibleBrowser();
+  await closeBrowser(headless);
+  return finishLogin('Login completed silently via SSO. Session has been saved.');
 }
 
 /** Opens a visible browser for the user to sign in, then saves the session. */
-async function loginInVisibleBrowser(): Promise<ToolResult> {
-  const visible = await createBrowserContext({ headless: false });
+async function loginInVisibleBrowser(deadline: number, freshProfile = false): Promise<ToolResult> {
+  const visible = await createBrowserContext({ headless: false, freshProfile });
   try {
-    await ensureAuthenticated(visible.page, visible.context, (msg) => log.info('login', msg));
+    await ensureAuthenticated(visible.page, visible.context, (msg) => log.info('login', msg), true, false, deadline);
+  } catch (error) {
+    if (error instanceof TeamsLoginTimeout) {
+      return { success: false, error: createError(ErrorCode.TIMEOUT, error.message) };
+    }
+    throw error;
   } finally {
     // Close browser after login - we only need the saved session/tokens
-    await closeBrowser(visible, true);
+    await closeBrowser(visible);
   }
 
   return finishLogin('Login completed successfully. Session has been saved.');

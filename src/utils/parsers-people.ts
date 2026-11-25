@@ -4,6 +4,19 @@
 
 import { extractObjectId } from './parsers-identifiers.js';
 
+/**
+ * Decodes a JWT token's payload without verifying the signature.
+ */
+export function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+  } catch {
+    return null;
+  }
+}
+
 /** Person search result from Substrate suggestions API. */
 export interface PersonSearchResult {
   id: string;              // Azure AD object ID

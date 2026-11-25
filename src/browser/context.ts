@@ -22,8 +22,11 @@ import {
   ensureConfigDir,
   CONFIG_DIR,
   writeSessionState,
+  clearTokenCache,
+  readSessionState,
 } from '../auth/session-store.js';
 import { clearRegionCache } from '../utils/auth-guards.js';
+import { extractSubstrateToken, extractSkypeSpacesToken } from '../auth/token-extractor.js';
 import { decryptStorageState } from '../auth/msal-cache-crypto.js';
 import * as log from '../utils/logger.js';
 
@@ -46,78 +49,7 @@ const BROWSER_PROFILE_DIR = path.join(CONFIG_DIR, 'browser-profile');
 /** Firefox needs its own profile directory: the on-disk format differs from Chromium's. */
 const FIREFOX_PROFILE_DIR = path.join(CONFIG_DIR, 'browser-profile-firefox');
 
-/**
- * Path to the Chromium SingletonLock file.
- * This file prevents multiple processes from using the same profile.
- */
-const SINGLETON_LOCK_PATH = path.join(BROWSER_PROFILE_DIR, 'SingletonLock');
-
-/**
- * Checks if a process with the given PID is running.
- */
-function isProcessRunning(pid: number): boolean {
-  try {
-    // kill with signal 0 checks if process exists without killing it
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Cleans up stale SingletonLock files left by crashed browser sessions.
- * 
- * On Unix systems, SingletonLock is a symlink whose target contains the PID.
- * On Windows, it's a regular file. If the owning process is no longer running,
- * we can safely remove the lock.
- * 
- * @returns true if a stale lock was removed, false otherwise
- */
-function cleanupStaleSingletonLock(): boolean {
-  if (!fs.existsSync(SINGLETON_LOCK_PATH)) {
-    return false;
-  }
-
-  try {
-    // On Unix, SingletonLock is a symlink like "hostname-12345"
-    // The number after the last dash is the PID
-    const linkTarget = fs.readlinkSync(SINGLETON_LOCK_PATH);
-    const pidMatch = linkTarget.match(/-(\d+)$/);
-    
-    if (pidMatch) {
-      const pid = parseInt(pidMatch[1], 10);
-      
-      if (isProcessRunning(pid)) {
-        // Process is still running - lock is valid
-        return false;
-      }
-      
-      // Process is dead - remove stale lock
-      log.info('browser', `Removing stale SingletonLock (PID ${pid} not running)`);
-      fs.unlinkSync(SINGLETON_LOCK_PATH);
-      return true;
-    }
-  } catch {
-    // On Windows or if readlink fails, try checking file age
-    // If the lock file is old and we can't verify the process, remove it
-    try {
-      const stats = fs.lstatSync(SINGLETON_LOCK_PATH);
-      const ageMs = Date.now() - stats.mtimeMs;
-      const oneHourMs = 60 * 60 * 1000;
-      
-      if (ageMs > oneHourMs) {
-        log.info('browser', `Removing old SingletonLock (${Math.round(ageMs / 60000)} minutes old)`);
-        fs.unlinkSync(SINGLETON_LOCK_PATH);
-        return true;
-      }
-    } catch {
-      // Can't read stats, leave it alone
-    }
-  }
-
-  return false;
-}
+const recoveryProfiles = new WeakMap<BrowserContext, { name: string; discardOnClose: boolean }>();
 
 export type BrowserChoice = 'chrome' | 'msedge' | 'firefox';
 
@@ -174,55 +106,43 @@ const INSTALL_HINTS: Record<BrowserChoice, string> = {
  * @throws Error if the browser is not found (with helpful suggestions)
  */
 export async function createBrowserContext(
-  { headless = true }: { headless?: boolean } = {}
+  { headless = true, freshProfile = false }: { headless?: boolean; freshProfile?: boolean } = {}
 ): Promise<BrowserManager> {
   ensureConfigDir();
 
   const browser = getBrowserChoice();
   const isFirefox = browser === 'firefox';
 
-  // Clean up any stale lock files before attempting to launch
-  if (!isFirefox) {
-    cleanupStaleSingletonLock();
+  const defaultDir = isFirefox ? FIREFOX_PROFILE_DIR : BROWSER_PROFILE_DIR;
+  const prefix = `recovery-${browser}-`;
+  const savedProfile = readSessionState()?.browserProfile;
+  let profileDir = defaultDir;
+  if (typeof savedProfile === 'string' && new RegExp(`^${prefix}[a-zA-Z0-9]{6}$`).test(savedProfile)) {
+    profileDir = path.join(CONFIG_DIR, savedProfile);
   }
+  if (freshProfile) profileDir = fs.mkdtempSync(path.join(CONFIG_DIR, prefix));
 
-  const launchBrowser = async (): Promise<BrowserManager> => {
+  try {
     const options = {
       headless,
       viewport: { width: 1280, height: 800 },
       acceptDownloads: false,
     };
     const context = isFirefox
-      ? await firefox.launchPersistentContext(FIREFOX_PROFILE_DIR, options)
-      : await chromium.launchPersistentContext(BROWSER_PROFILE_DIR, { ...options, channel: browser });
+      ? await firefox.launchPersistentContext(profileDir, options)
+      : await chromium.launchPersistentContext(profileDir, { ...options, channel: browser });
 
     // Persistent contexts start with one page; use it or create one
     const page = context.pages()[0] ?? await context.newPage();
 
+    if (profileDir !== defaultDir) {
+      recoveryProfiles.set(context, { name: path.basename(profileDir), discardOnClose: freshProfile });
+    }
     return { context, page };
-  };
-
-  try {
-    return await launchBrowser();
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     
-    // Check if this is a profile lock error and try to recover
-    if (!isFirefox && (errorMessage.includes('ProcessSingleton') || errorMessage.includes('SingletonLock'))) {
-      log.warn('browser', 'Profile lock detected, attempting to clean up and retry...');
-      
-      // Force remove the lock file and retry once
-      try {
-        if (fs.existsSync(SINGLETON_LOCK_PATH)) {
-          fs.unlinkSync(SINGLETON_LOCK_PATH);
-          log.info('browser', 'Removed SingletonLock file, retrying browser launch...');
-          return await launchBrowser();
-        }
-      } catch (cleanupError) {
-        log.error('browser', `Failed to clean up SingletonLock: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
-      }
-    }
-
+    if (freshProfile) fs.rmSync(profileDir, { recursive: true, force: true });
     throw new Error(
       `Could not launch ${BROWSER_NAMES[browser]}. ${INSTALL_HINTS[browser]}\n\n` +
       `Original error: ${errorMessage}`
@@ -233,7 +153,7 @@ export async function createBrowserContext(
 /**
  * Saves the current browser context's session state.
  */
-export async function saveSessionState(context: BrowserContext): Promise<void> {
+export async function saveAuthenticatedSession(context: BrowserContext, allowPartial: boolean): Promise<boolean> {
   const state = await context.storageState();
   // MSAL.js v4+ encrypts its localStorage cache; store plaintext entries so
   // token extraction and HTTP refresh can read them. Entries that cannot be
@@ -242,20 +162,18 @@ export async function saveSessionState(context: BrowserContext): Promise<void> {
   if (stats.encrypted > 0) {
     log.debug('browser', `MSAL cache entries: ${stats.encrypted} encrypted, ${stats.decrypted} decrypted`);
   }
-  writeSessionState(state);
+  if (!extractSubstrateToken(state) && !(allowPartial && extractSkypeSpacesToken(state))) return false;
+  const profile = recoveryProfiles.get(context);
+  writeSessionState({ ...state, browserProfile: profile?.name });
+  if (profile) profile.discardOnClose = false;
+  clearTokenCache();
   // Clear cached region config so new session values are picked up
   clearRegionCache();
+  return true;
 }
 
-/**
- * Closes the browser context and optionally saves session state.
- */
-export async function closeBrowser(
-  manager: BrowserManager,
-  saveSession: boolean = true
-): Promise<void> {
-  if (saveSession) {
-    await saveSessionState(manager.context);
-  }
+export async function closeBrowser(manager: BrowserManager): Promise<void> {
   await manager.context.close();
+  const profile = recoveryProfiles.get(manager.context);
+  if (profile?.discardOnClose) fs.rmSync(path.join(CONFIG_DIR, profile.name), { recursive: true, force: true });
 }

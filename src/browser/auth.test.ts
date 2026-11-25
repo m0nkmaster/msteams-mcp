@@ -1,22 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright';
+import { ensureAuthenticated, isTeamsUrl, StaleTeamsSession } from './auth.js';
+import { saveAuthenticatedSession } from './context.js';
 
-vi.mock('./context.js', () => ({ saveSessionState: vi.fn() }));
-vi.mock('../auth/token-extractor.js', () => ({ extractSubstrateToken: vi.fn() }));
-vi.mock('../auth/msal-cache-crypto.js', () => ({ decryptStorageState: vi.fn() }));
-
-import { ensureAuthenticated, getAuthStatus, isTeamsUrl } from './auth.js';
-import { extractSubstrateToken } from '../auth/token-extractor.js';
-import { decryptStorageState } from '../auth/msal-cache-crypto.js';
-
-/** A page on `url` with no Teams DOM markers and `tokenMinutes` left on MSAL. */
-function fakePage(url: string, tokenMinutes: number): Page {
-  return {
-    url: () => url,
-    locator: () => ({ count: async () => 0 }),
-    evaluate: async () => tokenMinutes,
-  } as unknown as Page;
-}
+vi.mock('./context.js', () => ({ saveAuthenticatedSession: vi.fn() }));
 
 describe('isTeamsUrl', () => {
   it('covers every host Microsoft redirects Teams users to', () => {
@@ -40,63 +27,39 @@ describe('isTeamsUrl', () => {
   });
 });
 
-describe('getAuthStatus', () => {
-  it.each(['https://teams.cloud.microsoft/', 'https://teams.live.com/v2/'])(
-    'detects a completed login at %s from the MSAL token alone', async url => {
-      const status = await getAuthStatus(fakePage(url, 55));
-
-      expect(status.isAuthenticated).toBe(true);
-      expect(status.isOnLoginPage).toBe(false);
-    },
-  );
-
-  it('stays unauthenticated on a Teams host with no token', async () => {
-    const status = await getAuthStatus(fakePage('https://teams.cloud.microsoft/', -1));
-
-    expect(status.isAuthenticated).toBe(false);
-  });
-
-  it('detects a login whose MSAL v4 tokens are encrypted in localStorage', async () => {
-    // In-page scan finds no plaintext token (-1); the Node-side decrypt does.
-    const results: unknown[] = [-1, [{ name: 'k', value: '{"id":"a","nonce":"b","data":"c"}' }]];
-    const page = {
-      url: () => 'https://teams.cloud.microsoft/',
-      evaluate: async () => results.shift(),
-      context: () => ({ cookies: async () => [] }),
-    } as unknown as Page;
-    vi.mocked(decryptStorageState).mockReturnValueOnce({ encrypted: 1, decrypted: 1 });
-    vi.mocked(extractSubstrateToken).mockReturnValueOnce({ token: 'fake', expiry: new Date(Date.now() + 30 * 60000) });
-
-    const status = await getAuthStatus(page);
-
-    expect(status.isAuthenticated).toBe(true);
-  });
-
-  it('reports the login page', async () => {
-    const status = await getAuthStatus(fakePage('https://login.microsoftonline.com/common/oauth2', 99));
-
-    expect(status).toMatchObject({ isAuthenticated: false, isOnLoginPage: true });
-  });
-});
-
 describe('ensureAuthenticated', () => {
-  it('keeps a visible browser open for sign-in when Teams loads with expired tokens', async () => {
-    // Teams can render without redirecting to login while the Microsoft SSO
-    // session is gone; only a fresh MSAL token proves the user has signed in.
-    const tokenMinutes = [-1, -1, 55];
+  function setup(url = 'https://teams.cloud.microsoft') {
     const page = {
-      goto: async () => null,
-      waitForURL: async () => { throw new Error('timeout'); },
-      url: () => 'https://teams.cloud.microsoft/',
-      evaluate: async () => tokenMinutes.length > 1 ? tokenMinutes.shift()! : tokenMinutes[0],
-      waitForTimeout: async () => {},
-    } as unknown as Page;
-    const messages: string[] = [];
+      url: () => url,
+      goto: vi.fn(),
+      waitForURL: vi.fn().mockRejectedValue(new Error('no redirect')),
+      evaluate: vi.fn(),
+      waitForTimeout: vi.fn(),
+    };
+    const context = {} as BrowserContext;
+    return { page, login: (headless: boolean, deadline?: number) =>
+      ensureAuthenticated(page as unknown as Page, context, vi.fn(), !headless, headless, deadline) };
+  }
 
-    await ensureAuthenticated(page, {} as never, msg => messages.push(msg), false, false);
+  it('shows waiting progress before success, including on a silent visible sign-in', async () => {
+    const { page, login } = setup();
+    vi.mocked(saveAuthenticatedSession).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await login(false);
+    expect(page.evaluate.mock.calls.map(call => call[1].message)).toEqual([
+      'Waiting for Teams credentials', 'Waiting for Teams credentials', 'All done!',
+    ]);
+    expect(saveAuthenticatedSession).toHaveBeenLastCalledWith({}, true);
+  });
 
-    expect(messages).toContain('Waiting for manual login...');
-    expect(messages).toContain('Authentication successful!');
-    expect(tokenMinutes).toEqual([55]);
+  it('reports a stale profile after silent SSO expires', async () => {
+    const { page, login } = setup();
+    await expect(login(true, Date.now() - 1)).rejects.toBeInstanceOf(StaleTeamsSession);
+    expect(page.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('returns a sign-in timeout without covering the identity provider page', async () => {
+    const { page, login } = setup('https://login.microsoftonline.com/common');
+    await expect(login(false, Date.now() - 1)).rejects.toThrow('before Teams provided usable credentials');
+    expect(page.evaluate).not.toHaveBeenCalled();
   });
 });

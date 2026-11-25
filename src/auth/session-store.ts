@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { encrypt, decrypt } from './crypto.js';
+import { decodeJwtPayload } from '../utils/parsers-people.js';
 import { decryptStorageState } from './msal-cache-crypto.js';
 import { SESSION_EXPIRY_HOURS, TEAMS_HOSTS } from '../constants.js';
 import * as log from '../utils/logger.js';
@@ -41,6 +42,8 @@ export function ensureConfigDir(): void {
 
 /** Session state as stored by Playwright. */
 export interface SessionState {
+  /** Persistent profile selected by a successful interactive recovery. */
+  browserProfile?: string;
   cookies: Array<{
     name: string;
     value: string;
@@ -189,9 +192,10 @@ const TEAMS_ORIGINS = TEAMS_HOSTS.map(host => `https://${host}`);
 /**
  * Returns true if localStorage has a SubstrateSearch MSAL token entry.
  */
-function hasSubstrateSearchToken(
+function substrateTokenStatus(
   localStorage: SessionState['origins'][number]['localStorage'] | undefined
-): boolean {
+): 'live' | 'stale' | undefined {
+  let stale: 'stale' | undefined;
   for (const item of localStorage ?? []) {
     try {
       const entry = JSON.parse(item.value) as { target?: string; secret?: string };
@@ -200,13 +204,15 @@ function hasSubstrateSearchToken(
         typeof entry.secret === 'string' &&
         entry.secret.startsWith('ey')
       ) {
-        return true;
+        const exp = decodeJwtPayload(entry.secret)?.exp;
+        if (typeof exp === 'number' && exp * 1000 > Date.now()) return 'live';
+        stale = 'stale';
       }
     } catch {
       // ignore non-JSON localStorage values
     }
   }
-  return false;
+  return stale;
 }
 
 /**
@@ -221,8 +227,14 @@ function hasSubstrateSearchToken(
 export function getTeamsOrigin(state: SessionState): SessionState['origins'][number] | null {
   if (!state.origins) return null;
 
-  const withSubstrate = state.origins.find(o => hasSubstrateSearchToken(o.localStorage));
-  if (withSubstrate) return withSubstrate;
+  let staleOrigin: SessionState['origins'][number] | undefined;
+  for (const origin of state.origins) {
+    if (!TEAMS_ORIGINS.includes(origin.origin)) continue;
+    const status = substrateTokenStatus(origin.localStorage);
+    if (status === 'live') return origin;
+    if (status === 'stale') staleOrigin ??= origin;
+  }
+  if (staleOrigin) return staleOrigin;
 
   // Try known Teams origins in priority order
   for (const knownOrigin of TEAMS_ORIGINS) {
