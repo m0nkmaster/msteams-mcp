@@ -15,6 +15,7 @@ import { stripHtml, extractLinks, buildMessageLink, buildOneOnOneConversationId,
 import { resolveNames } from './profile-api.js';
 import { SELF_CHAT_ID, MRI_ORGID_PREFIX, DEFAULT_WAIT_SECONDS, DEFAULT_WAIT_INTERVAL_SECONDS, MAX_WAIT_SECONDS } from '../constants.js';
 import { formatHumanReadableDate } from './chatsvc-common.js';
+import type { ChatsvcFileEntry } from './chat-attachments-api.js';
 import type { RawChatsvcMessage, RawConversationResponse, RawCreateThreadResponse } from '../types/api-responses.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,6 +126,13 @@ export interface SendMessageOptions {
    * combined with mentions or a thread reply.
    */
   scheduleAt?: string;
+  /**
+   * chatsvc `properties.files` entries for chat attachments, built by
+   * `prepareChatAttachments` in chat-attachments-api. Serialised to a JSON
+   * string on the wire, as the Teams client does. Not supported on scheduled
+   * messages.
+   */
+  files?: ChatsvcFileEntry[];
 }
 
 /** Result of getting a 1:1 conversation. */
@@ -185,7 +193,7 @@ export async function sendMessage(
   }
   const { auth, region, baseUrl } = authResult.value;
 
-  const { replyToMessageId, contentType = 'markdown', subject, scheduleAt } = options;
+  const { replyToMessageId, contentType = 'markdown', subject, scheduleAt, files } = options;
   const displayName = getUserDisplayName() || 'User';
 
   const clientMessageId = generateClientMessageId();
@@ -200,6 +208,12 @@ export async function sendMessage(
       return err(createError(
         ErrorCode.INVALID_INPUT,
         'Scheduled messages cannot include @mentions or be thread replies. Remove scheduleAt, or the mention/replyToMessageId.'
+      ));
+    }
+    if (files && files.length > 0) {
+      return err(createError(
+        ErrorCode.INVALID_INPUT,
+        'Scheduled messages cannot include file attachments. Remove scheduleAt or files.'
       ));
     }
     const parsedTime = parseScheduleTime(scheduleAt);
@@ -239,13 +253,16 @@ export async function sendMessage(
     clientmessageid: clientMessageId,
   };
 
-  // Message properties: mentions and/or a channel thread subject.
+  // Message properties: mentions, a channel thread subject, and/or files.
   const properties: Record<string, unknown> = {};
   if (resolved.mentions.length > 0) {
     properties.mentions = buildMentionsProperty(resolved.mentions);
   }
   if (subject && subject.trim()) {
     properties.subject = subject.trim();
+  }
+  if (files && files.length > 0) {
+    properties.files = JSON.stringify(files);
   }
   if (Object.keys(properties).length > 0) {
     body.properties = properties;
