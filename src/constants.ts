@@ -140,6 +140,12 @@ export const DEFAULT_FILES_PAGE_SIZE = 25;
 /** Maximum page size for shared files. */
 export const MAX_FILES_PAGE_SIZE = 100;
 
+/**
+ * Maximum size of a single chat-message attachment (4 MB). Larger files would
+ * need Graph upload sessions, which are not supported yet.
+ */
+export const MAX_SIMPLE_UPLOAD_BYTES = 4 * 1024 * 1024;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Token Refresh
 // ─────────────────────────────────────────────────────────────────────────────

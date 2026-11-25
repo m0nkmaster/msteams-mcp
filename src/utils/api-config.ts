@@ -122,6 +122,10 @@ export const CHATSVC_API = {
   singleMessage: (region: string, conversationId: string, messageId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}`,
 
+  /** Get thread details, including its members list. */
+  thread: (region: string, threadId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/api/chatsvc/${region}/v1/threads/${encodeURIComponent(threadId)}`,
+
   /** List all recent conversations with inline properties. */
   conversations: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=200`,
