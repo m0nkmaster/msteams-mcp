@@ -26,6 +26,19 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 
 **Follow-ups (out of scope):** upload sessions for files over 4 MB (simple upload limit); channel attachments; attachments on scheduled messages.
 
+**Pre-mortem (2026-11-25, after three review rounds). Assume the feature shipped and failed. Ranked causes and decisions:**
+
+- P0 `grant` refuses `objectId` recipients, so members cannot open the files. Checkpoint: the manual recipient test. Fallback if it fails: resolve member emails through `profile-api` and grant by `email`.
+- P0 chatsvc accepts `properties.files` from this client but Teams does not render the file chiclet (for example because it expects extra properties). Checkpoint: the live self-notes send, read back and opened in Teams.
+- P1 Tenant sharing policy blocks "specific people" links, or members are guests from another tenant, so `createLink`/`grant` fail. Decision: fail closed (nothing is sent, the error names the file). Revisit if users report it.
+- P1 Large meeting chats exceed an undocumented per-call recipient limit on `grant`. Checkpoint: the manual test in a meeting chat. Fallback: batch the recipients.
+- P1 Prompt injection asks to attach an ordinary-looking file inside the home directory (for example `Documents\passwords.xlsx`). Path guards cannot tell; the AGENTS.md rule (attach only files the user named) and a narrow `TEAMS_MCP_UPLOAD_DIR` are the controls. Decision: accepted; recommend setting `TEAMS_MCP_UPLOAD_DIR` in shared setups.
+- P2 An ambiguous send failure (timeout, 5xx) followed by a retry posts the message twice. The error tells the caller to check the chat first. Decision: accepted.
+- P2 Failed sends leave orphan copies in "Microsoft Teams Chat Files" (reused for 10 minutes, then left). Decision: accepted; the error says where they are.
+- P2 OneDrive localises "Microsoft Teams Chat Files" for non-English users, so files land in a second, English-named folder. Unverified. Decision: accepted until reported.
+- P2 Editing a file without changing its size or mtime within 10 minutes reuses the earlier upload. Decision: accepted.
+- P2 The 8.3-shape rule refuses a genuine file named like `ABCDEF~1.TXT`. Decision: accepted; the error says to pass the long path.
+
 **Done when:** one call posts text plus N files to a 1:1, a group and a meeting chat; recipients can open every file; tests cover the upload, sharing and message body; README and AGENTS.md list the tool.
 
 **Related:** ROADMAP.md, "Future Consideration: Microsoft Graph API (hybrid)", file upload bullet (its "being trialled in PR #26" wording is stale). [Upstream PR #26](https://github.com/m0nkmaster/msteams-mcp/pull/26) (`teams_upload_file`, by dkattan) was closed unmerged and unreviewed on 2026-09-25: reference code only. Worth reusing: `buildFilesProperty()`, which maps the Graph DriveItem to the chatsvc `properties.files` shape (verify against a real message). Gaps: Graph added to core refresh, no sharing/permission call for recipients, 4 MB simple-upload limit, no new tests.
