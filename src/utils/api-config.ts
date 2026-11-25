@@ -259,6 +259,39 @@ export const ASSIGNMENTS_API = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Microsoft Graph API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Microsoft Graph v1.0 endpoints for OneDrive file operations (downloads and
+ * chat-message attachments). Graph is a single worldwide endpoint — there are
+ * no regional variants like chatsvc.
+ */
+export const GRAPH_API = {
+  base: 'https://graph.microsoft.com/v1.0',
+
+  /**
+   * Simple-upload content endpoint for a file inside the sender's OneDrive
+   * "Microsoft Teams Chat Files" folder. `conflictBehavior=rename` keeps a
+   * same-name upload safe.
+   */
+  uploadChatFileContent: (name: string) =>
+    `${GRAPH_API.base}/me/drive/root:/Microsoft%20Teams%20Chat%20Files/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=rename`,
+
+  /** Drive item read-back (sharepointIds requires $select at the call site). */
+  driveItem: (itemId: string) =>
+    `${GRAPH_API.base}/me/drive/items/${itemId}`,
+
+  /** Creates a sharing link on a drive item. */
+  createLink: (itemId: string) =>
+    `${GRAPH_API.base}/me/drive/items/${itemId}/createLink`,
+
+  /** Grants permission on a share id (`u!<base64url(webUrl)>`). */
+  grantPermission: (shareId: string) =>
+    `${GRAPH_API.base}/shares/${shareId}/permission/grant`,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Request Headers
 // ─────────────────────────────────────────────────────────────────────────────
 

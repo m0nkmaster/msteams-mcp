@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, writeFileSync, realpathSync, statSync, symlinkSync, rmSync, promises as nodePromises } from 'node:fs';
 import * as path from 'node:path';
 import { httpRequest } from '../utils/http.js';
 import { requireGraphTokenAsync, requireMessageAuthWithConfig } from '../utils/auth-guards.js';
@@ -16,7 +16,7 @@ import { invalidateAccessToken } from '../auth/token-extractor.js';
 import { ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { chatsvcFilesPropertyEntry } from '../__fixtures__/api-responses.js';
-import { MAX_SIMPLE_UPLOAD_BYTES, SELF_CHAT_ID } from '../constants.js';
+import { MAX_SIMPLE_UPLOAD_BYTES, SELF_CHAT_ID, ATTACHMENT_REUSE_TTL_MS, UPLOAD_TIMEOUT_MS } from '../constants.js';
 import {
   resolveUploadFile,
   uploadChatFile,
@@ -24,7 +24,9 @@ import {
   buildFilesPropertyEntry,
   getChatMemberObjectIds,
   prepareChatAttachments,
+  clearPreparedAttachments,
   type UploadedChatFile,
+  type ResolvedUploadFile,
 } from './chat-attachments-api.js';
 
 const h = vi.hoisted(() => {
@@ -43,7 +45,18 @@ vi.mock('../utils/auth-guards.js', () => ({
   requireMessageAuthWithConfig: vi.fn(),
 }));
 vi.mock('../auth/token-extractor.js', () => ({ invalidateAccessToken: vi.fn() }));
-vi.mock('../auth/session-store.js', () => ({ CONFIG_DIR: h.configDir }));
+vi.mock('../auth/session-store.js', () => ({
+  get CONFIG_DIR() { return h.configDir; },
+}));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    realpathSync: vi.fn(actual.realpathSync),
+    statSync: vi.fn(actual.statSync),
+    promises: { ...actual.promises, readFile: vi.fn(actual.promises.readFile) },
+  };
+});
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>();
   return { ...actual, homedir: () => h.fakeHome };
@@ -52,6 +65,9 @@ vi.mock('node:os', async (importOriginal) => {
 const mockHttp = vi.mocked(httpRequest);
 const mockGraphToken = vi.mocked(requireGraphTokenAsync);
 const mockMessageAuth = vi.mocked(requireMessageAuthWithConfig);
+const mockRealpathSync = vi.mocked(realpathSync);
+const mockStatSync = vi.mocked(statSync);
+const mockReadFile = vi.mocked(nodePromises.readFile);
 
 function writeTestFile(rel: string, content = 'hello'): string {
   const file = path.join(h.uploadRoot, rel);
@@ -69,6 +85,10 @@ beforeAll(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
+  // clearAllMocks keeps unconsumed mockResolvedValueOnce queues, which would
+  // leak into the next test — reset httpRequest's queue explicitly.
+  mockHttp.mockReset();
+  h.configDir = h.uploadRoot + '/configdir';
 });
 
 describe('resolveUploadFile', () => {
@@ -82,6 +102,7 @@ describe('resolveUploadFile', () => {
       path: realpathSync(file),
       name: 'notes.md',
       size: 5,
+      mtimeMs: expect.any(Number),
     }));
   });
 
@@ -119,10 +140,15 @@ describe('resolveUploadFile', () => {
     vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', 'relative/uploads');
     const file = writeTestFile('env.md');
 
-    expect(resolveUploadFile(file)).toMatchObject({
+    const result = resolveUploadFile(file);
+
+    expect(result).toMatchObject({
       ok: false,
       error: { code: ErrorCode.INVALID_INPUT },
     });
+    if (!result.ok) {
+      expect(result.error.message).toContain('TEAMS_MCP_UPLOAD_DIR must be an absolute path');
+    }
   });
 
   it('rejects dotfiles and dot-directories inside the root', () => {
@@ -216,6 +242,181 @@ describe('resolveUploadFile', () => {
       error: { code: ErrorCode.INVALID_INPUT },
     });
   });
+
+  it('rejects paths outside the root lexically, before any filesystem call', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const outside = path.join(h.root, 'outside-lexical.md');
+    writeFileSync(outside, 'x');
+
+    expect(resolveUploadFile(outside)).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+    // The whole point: rejection must happen before realpath/stat, so a
+    // hostile path can never trigger filesystem side effects.
+    expect(mockRealpathSync).not.toHaveBeenCalled();
+    expect(mockStatSync).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform === 'win32')('rejects UNC and device paths without touching the filesystem', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    for (const p of [
+      '\\\\host\\share\\a.txt',
+      '\\\\?\\UNC\\host\\share\\a.txt',
+      '\\\\.\\PhysicalDrive0',
+      '//host/share/a.txt',
+    ]) {
+      expect(resolveUploadFile(p)).toMatchObject({
+        ok: false,
+        error: { code: ErrorCode.INVALID_INPUT },
+      });
+    }
+    // realpathSync on a UNC path opens an SMB session and leaks NTLM — it
+    // must never be reached.
+    expect(mockRealpathSync).not.toHaveBeenCalled();
+    expect(mockStatSync).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform === 'win32')('rejects files under the home AppData tree even with env vars unset', () => {
+    // Upload root is h.root so fakeHome/AppData sits inside it; with
+    // APPDATA/LOCALAPPDATA stubbed empty only the home-derived rule can fire.
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.root);
+    vi.stubEnv('APPDATA', '');
+    vi.stubEnv('LOCALAPPDATA', '');
+    const evil = path.join(h.fakeHome, 'AppData', 'LocalLow', 'evil.dat');
+    mkdirSync(path.dirname(evil), { recursive: true });
+    writeFileSync(evil, 'x');
+
+    expect(resolveUploadFile(evil)).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+  });
+
+  it.runIf(process.platform === 'darwin')('rejects files under ~/Library on macOS', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.root);
+    const evil = path.join(h.fakeHome, 'Library', 'Keychains', 'login.keychain-db');
+    mkdirSync(path.dirname(evil), { recursive: true });
+    writeFileSync(evil, 'x');
+
+    expect(resolveUploadFile(evil)).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+  });
+
+  it('rejects credential files named _netrc or _git-credentials', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    for (const name of ['_netrc', '_git-credentials', '_NETRC', '_Git-Credentials']) {
+      const file = writeTestFile(`cred/${name}`);
+      expect(resolveUploadFile(file)).toMatchObject({
+        ok: false,
+        error: { code: ErrorCode.INVALID_INPUT },
+      });
+    }
+  });
+
+  it('rejects a junction inside the root that points outside it', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const outsideDir = path.join(h.root, 'junction-target');
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(path.join(outsideDir, 'secret.txt'), 's');
+    const link = path.join(h.uploadRoot, 'innocent-dir');
+    try {
+      rmSync(link, { recursive: true, force: true });
+      symlinkSync(outsideDir, link, 'junction');
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES') return; // symlinks not permitted
+      throw e;
+    }
+
+    expect(resolveUploadFile(path.join(link, 'secret.txt'))).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+  });
+
+  it('rejects a junction inside the root that resolves into a dot-directory', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const dotDir = path.join(h.uploadRoot, 'sub', '.ssh');
+    mkdirSync(dotDir, { recursive: true });
+    writeFileSync(path.join(dotDir, 'key'), 'k');
+    const link = path.join(h.uploadRoot, 'looks-safe');
+    try {
+      rmSync(link, { recursive: true, force: true });
+      symlinkSync(dotDir, link, 'junction');
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES') return; // symlinks not permitted
+      throw e;
+    }
+
+    expect(resolveUploadFile(path.join(link, 'key'))).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+  });
+
+  it('rejects .. traversal that escapes the root', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const outside = path.join(h.root, 'trav.md');
+    writeFileSync(outside, 'x');
+    const sneaky = `${h.uploadRoot}/sub/../../trav.md`;
+
+    expect(resolveUploadFile(sneaky)).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+    // Lexical containment rejects '..' before any filesystem call.
+    expect(mockRealpathSync).not.toHaveBeenCalled();
+    expect(mockStatSync).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the home directory when TEAMS_MCP_UPLOAD_DIR is empty', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', '');
+    const home = path.join(h.fakeHome, 'desktop', 'empty-env.txt');
+    mkdirSync(path.dirname(home), { recursive: true });
+    writeFileSync(home, 'hi');
+    const elsewhere = writeTestFile('empty-env-outside.txt');
+
+    expect(resolveUploadFile(home)).toMatchObject({ ok: true });
+    expect(resolveUploadFile(elsewhere)).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+  });
+
+  it('does not fail when CONFIG_DIR does not exist yet', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    h.configDir = path.join(h.uploadRoot, 'config', 'not-yet-created');
+    const file = writeTestFile('after-missing-config.txt');
+
+    expect(resolveUploadFile(file)).toMatchObject({ ok: true });
+  });
+
+  it('returns INVALID_INPUT when statSync fails', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('stat-fails.txt');
+    mockStatSync.mockImplementationOnce(() => {
+      throw new Error('EACCES');
+    });
+
+    expect(resolveUploadFile(file)).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+  });
+
+  it('rejects a child directory named "..foo"', () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('..foo/inner.txt');
+
+    expect(resolveUploadFile(file)).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.INVALID_INPUT },
+    });
+  });
 });
 
 describe('uploadChatFile', () => {
@@ -233,7 +434,7 @@ describe('uploadChatFile', () => {
     parentReference: { driveId: 'b!drive1' },
   };
 
-  function localFile(): { path: string; name: string; size: number } {
+  function localFile(): ResolvedUploadFile {
     vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
     const file = writeTestFile('up/notes.md', 'file bytes');
     const resolved = resolveUploadFile(file);
@@ -265,6 +466,7 @@ describe('uploadChatFile', () => {
     expect(putOpts).toMatchObject({
       method: 'PUT',
       maxRetries: 1,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
       headers: expect.objectContaining({
         Authorization: 'Bearer graph-token',
         'Content-Type': 'application/octet-stream',
@@ -278,6 +480,33 @@ describe('uploadChatFile', () => {
     expect(get.searchParams.get('$select')).toContain('sharepointIds');
     expect(get.searchParams.get('$select')).toContain('parentReference');
     expect((getOpts as { headers: Record<string, string> }).headers.Authorization).toBe('Bearer graph-token');
+  });
+
+  it('returns INVALID_INPUT when the file cannot be read', async () => {
+    const file: ResolvedUploadFile = {
+      path: path.join(h.uploadRoot, 'up', 'deleted.txt'),
+      name: 'deleted.txt',
+      size: 4,
+      mtimeMs: 0,
+    };
+
+    const result = await uploadChatFile(file, 'graph-token');
+
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    if (!result.ok) {
+      expect(result.error.message).toContain('deleted.txt');
+    }
+    expect(mockHttp).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the file grew past the upload limit before reading', async () => {
+    const file = localFile();
+    mockReadFile.mockImplementationOnce(async () => Buffer.alloc(MAX_SIMPLE_UPLOAD_BYTES + 1));
+
+    const result = await uploadChatFile(file, 'graph-token');
+
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    expect(mockHttp).not.toHaveBeenCalled();
   });
 
   it('stops when the PUT fails and never reads the item back', async () => {
@@ -477,7 +706,8 @@ describe('buildFilesPropertyEntry', () => {
 
 describe('getChatMemberObjectIds', () => {
   const CONVERSATION = '19:abc@thread.v2';
-  const SELF_MRI = '8:orgid:99999999-8888-7777-6666-555555555555';
+  const SELF_GUID = 'fedcba98-7654-3210-fedc-ba9876543210';
+  const SELF_MRI = `8:orgid:${SELF_GUID}`;
 
   function mockChatAuth() {
     mockMessageAuth.mockReturnValue(ok({
@@ -548,6 +778,33 @@ describe('getChatMemberObjectIds', () => {
       error: { code: ErrorCode.API_ERROR },
     });
   });
+
+  it('excludes self even when the member id casing differs', async () => {
+    mockChatAuth();
+    mockHttp.mockResolvedValueOnce(ok({
+      status: 200,
+      headers: new Headers(),
+      data: {
+        members: [
+          { id: `8:orgid:${SELF_GUID.toUpperCase()}` },
+          { id: '8:orgid:11111111-2222-3333-4444-555555555555' },
+        ],
+      },
+    }));
+
+    expect(await getChatMemberObjectIds(CONVERSATION)).toEqual(
+      ok(['11111111-2222-3333-4444-555555555555']));
+  });
+
+  it('derives 1:1 chat members locally without calling the thread endpoint', async () => {
+    mockChatAuth();
+
+    const oneOnOne = `19:${SELF_GUID}_11111111-2222-3333-4444-555555555555@unq.gbl.spaces`;
+    const result = await getChatMemberObjectIds(oneOnOne);
+
+    expect(result).toEqual(ok(['11111111-2222-3333-4444-555555555555']));
+    expect(mockHttp).not.toHaveBeenCalled();
+  });
 });
 
 describe('prepareChatAttachments', () => {
@@ -604,17 +861,65 @@ describe('prepareChatAttachments', () => {
     vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
     const file = writeTestFile('prep/note.txt');
 
-    for (const id of ['19:chan@thread.tacv2', '19:chan@thread.skype']) {
-      const result = await prepareChatAttachments(id, [file]);
-      expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
-      if (!result.ok) {
-        expect(result.error.message).toContain('channel');
-      }
+    const result = await prepareChatAttachments('19:chan@thread.tacv2', [file]);
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+    if (!result.ok) {
+      expect(result.error.message).toContain('channel');
     }
     expect(mockHttp).not.toHaveBeenCalled();
     expect(mockGraphToken).not.toHaveBeenCalled();
     expect(mockMessageAuth).not.toHaveBeenCalled();
   });
+
+  it('still supports legacy group chats whose id ends @thread.skype', async () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('prep/legacy.md');
+    mockGraphOk();
+    mockChatAuth();
+    mockHttp
+      .mockResolvedValueOnce(ok({
+        status: 200,
+        headers: new Headers(),
+        data: { members: [{ id: '8:orgid:11111111-2222-3333-4444-555555555555' }] },
+      }))
+      .mockResolvedValueOnce(ok({ status: 201, headers: new Headers(), data: { id: DRIVE_ITEM.id } }))
+      .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: DRIVE_ITEM }))
+      .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: SHARE_PERMISSION }))
+      .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: {} }));
+
+    const result = await prepareChatAttachments('19:legacy@thread.skype', [file]);
+
+    expect(result.ok).toBe(true);
+    expect(mockHttp).toHaveBeenCalledTimes(5);
+  });
+
+  it.each(['space', 'topic'])(
+    'rejects a thread whose threadType is %s before any upload',
+    async (threadType) => {
+      vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+      const file = writeTestFile(`prep/chan-${threadType}.txt`);
+      mockGraphOk();
+      mockChatAuth();
+      mockHttp.mockResolvedValueOnce(ok({
+        status: 200,
+        headers: new Headers(),
+        data: {
+          threadProperties: { threadType },
+          members: [{ id: '8:orgid:11111111-2222-3333-4444-555555555555' }],
+        },
+      }));
+
+      const result = await prepareChatAttachments(CHAT, [file]);
+
+      expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.INVALID_INPUT } });
+      if (!result.ok) {
+        expect(result.error.message).toContain('channel');
+      }
+      // Only the threads lookup ran; no Graph upload was attempted.
+      expect(mockHttp).toHaveBeenCalledTimes(1);
+      expect(mockHttp.mock.calls[0][0]).toContain('/api/chatsvc/');
+    },
+  );
 
   it('fails before any upload when Graph auth is unavailable', async () => {
     vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
@@ -663,7 +968,7 @@ describe('prepareChatAttachments', () => {
 
     const result = await prepareChatAttachments(CHAT, [file]);
 
-    expect(result.ok).toBe(true);
+    expect(result).toEqual(ok([chatsvcFilesPropertyEntry]));
     // threads lookup + PUT + GET + createLink + grant
     expect(mockHttp).toHaveBeenCalledTimes(5);
     const grantBody = JSON.parse((mockHttp.mock.calls[4][1] as { body: string }).body);
@@ -671,7 +976,8 @@ describe('prepareChatAttachments', () => {
       recipients: [{ objectId: '11111111-2222-3333-4444-555555555555' }],
       roles: ['read'],
     });
-    expect(mockHttp.mock.calls[4][0]).toContain('/permission/grant');
+    const shareId = `u!${Buffer.from(SHARE_PERMISSION.link.webUrl).toString('base64url')}`;
+    expect(mockHttp.mock.calls[4][0]).toContain(`/shares/${shareId}/permission/grant`);
   });
 
   it('names the failing file and reports that nothing was sent', async () => {
@@ -712,5 +1018,66 @@ describe('prepareChatAttachments', () => {
     // Only the chatsvc threads call ran; no Graph upload was attempted.
     expect(mockHttp).toHaveBeenCalledTimes(1);
     expect(mockHttp.mock.calls[0][0]).toContain('/api/chatsvc/');
+  });
+
+  it('reuses a prepared file instead of re-uploading within the TTL', async () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('prep/cached.txt', 'cached');
+    mockGraphOk();
+    mockHttp
+      .mockResolvedValueOnce(ok({ status: 201, headers: new Headers(), data: { id: DRIVE_ITEM.id } }))
+      .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: DRIVE_ITEM }))
+      .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: SHARE_PERMISSION }));
+
+    const first = await prepareChatAttachments(SELF_CHAT_ID, [file]);
+    const second = await prepareChatAttachments(SELF_CHAT_ID, [file]);
+
+    expect(first).toEqual(ok([chatsvcFilesPropertyEntry]));
+    expect(second).toEqual(first);
+    // PUT + GET + createLink ran once; the replay hit the cache.
+    expect(mockHttp).toHaveBeenCalledTimes(3);
+  });
+
+  it('uploads again once the prepared entries are cleared', async () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('prep/cleared.txt', 'cleared');
+    mockGraphOk();
+    for (let i = 0; i < 2; i++) {
+      mockHttp
+        .mockResolvedValueOnce(ok({ status: 201, headers: new Headers(), data: { id: DRIVE_ITEM.id } }))
+        .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: DRIVE_ITEM }))
+        .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: SHARE_PERMISSION }));
+    }
+
+    await prepareChatAttachments(SELF_CHAT_ID, [file]);
+    clearPreparedAttachments(SELF_CHAT_ID, [file]);
+    const again = await prepareChatAttachments(SELF_CHAT_ID, [file]);
+
+    expect(again).toEqual(ok([chatsvcFilesPropertyEntry]));
+    expect(mockHttp).toHaveBeenCalledTimes(6);
+  });
+
+  it('re-uploads after the reuse TTL expires', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+      const file = writeTestFile('prep/ttl.txt', 'ttl');
+      mockGraphOk();
+      for (let i = 0; i < 2; i++) {
+        mockHttp
+          .mockResolvedValueOnce(ok({ status: 201, headers: new Headers(), data: { id: DRIVE_ITEM.id } }))
+          .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: DRIVE_ITEM }))
+          .mockResolvedValueOnce(ok({ status: 200, headers: new Headers(), data: SHARE_PERMISSION }));
+      }
+
+      await prepareChatAttachments(SELF_CHAT_ID, [file]);
+      vi.setSystemTime(Date.now() + ATTACHMENT_REUSE_TTL_MS + 1);
+      const later = await prepareChatAttachments(SELF_CHAT_ID, [file]);
+
+      expect(later).toEqual(ok([chatsvcFilesPropertyEntry]));
+      expect(mockHttp).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

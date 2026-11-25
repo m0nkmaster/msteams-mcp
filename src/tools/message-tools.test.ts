@@ -13,14 +13,18 @@ vi.mock('../api/chatsvc-api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/chatsvc-api.js')>();
   return { ...actual, sendMessage: vi.fn() };
 });
-vi.mock('../api/chat-attachments-api.js', () => ({ prepareChatAttachments: vi.fn() }));
+vi.mock('../api/chat-attachments-api.js', () => ({
+  prepareChatAttachments: vi.fn(),
+  clearPreparedAttachments: vi.fn(),
+}));
 
 import { sendMessageTool } from './message-tools.js';
 import { sendMessage } from '../api/chatsvc-api.js';
-import { prepareChatAttachments } from '../api/chat-attachments-api.js';
+import { prepareChatAttachments, clearPreparedAttachments } from '../api/chat-attachments-api.js';
 
 const mockSendMessage = vi.mocked(sendMessage);
 const mockPrepare = vi.mocked(prepareChatAttachments);
+const mockClear = vi.mocked(clearPreparedAttachments);
 
 const ENTRIES = [chatsvcFilesPropertyEntry];
 
@@ -81,5 +85,42 @@ describe('teams_send_message files', () => {
     expect(mockPrepare).not.toHaveBeenCalled();
     expect(mockSendMessage).toHaveBeenCalledWith('19:abc@thread.v2', 'plain',
       expect.objectContaining({ files: undefined }));
+    expect(mockClear).not.toHaveBeenCalled();
+  });
+
+  it('clears the prepared attachments after a successful send', async () => {
+    const result = await sendMessageTool.handler({
+      content: 'with file',
+      conversationId: '19:abc@thread.v2',
+      files: ['/tmp/a.txt'],
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockClear).toHaveBeenCalledWith('19:abc@thread.v2', ['/tmp/a.txt']);
+  });
+
+  it('does not clear prepared attachments when the send fails, and says the files are reusable', async () => {
+    mockSendMessage.mockResolvedValue(err(createError(ErrorCode.API_ERROR, 'chatsvc HTTP 500', {
+      retryable: true,
+      suggestions: ['Try again later'],
+    })));
+
+    const result = await sendMessageTool.handler({
+      content: 'with file',
+      conversationId: '19:abc@thread.v2',
+      files: ['/tmp/a.txt'],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe(ErrorCode.API_ERROR);
+      expect(result.error.retryable).toBe(true);
+      expect(result.error.suggestions).toEqual(['Try again later']);
+      expect(result.error.message).toContain('chatsvc HTTP 500');
+      expect(result.error.message).toContain(
+        '1 file(s) were uploaded to your OneDrive "Microsoft Teams Chat Files" folder and shared, but the message was not sent; retrying within 10 minutes reuses them.');
+    }
+    // The cache must survive so the server's auto-retry reuses the uploads.
+    expect(mockClear).not.toHaveBeenCalled();
   });
 });

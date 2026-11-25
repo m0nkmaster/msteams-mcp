@@ -146,6 +146,16 @@ export const MAX_FILES_PAGE_SIZE = 100;
  */
 export const MAX_SIMPLE_UPLOAD_BYTES = 4 * 1024 * 1024;
 
+/**
+ * How long a prepared chat attachment (uploaded + shared) may be reused for
+ * the same file in the same conversation. Covers the server's auto-retry of a
+ * tool call that failed after the uploads already happened.
+ */
+export const ATTACHMENT_REUSE_TTL_MS = 10 * 60 * 1000;
+
+/** Per-request timeout for Graph attachment uploads (large-ish binary PUTs). */
+export const UPLOAD_TIMEOUT_MS = 120_000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Token Refresh
 // ─────────────────────────────────────────────────────────────────────────────

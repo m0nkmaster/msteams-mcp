@@ -13,12 +13,19 @@ import * as path from 'node:path';
 import { ErrorCode, createError, type McpError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import { CONFIG_DIR } from '../auth/session-store.js';
-import { MAX_SIMPLE_UPLOAD_BYTES, MRI_ORGID_PREFIX, SELF_CHAT_ID } from '../constants.js';
+import {
+  ATTACHMENT_REUSE_TTL_MS,
+  MAX_SIMPLE_UPLOAD_BYTES,
+  MRI_ORGID_PREFIX,
+  SELF_CHAT_ID,
+  UPLOAD_TIMEOUT_MS,
+} from '../constants.js';
 import { httpRequest } from '../utils/http.js';
 import { invalidateAccessToken } from '../auth/token-extractor.js';
 import { requireGraphTokenAsync, requireMessageAuthWithConfig } from '../utils/auth-guards.js';
-import { CHATSVC_API, getSkypeAuthHeaders } from '../utils/api-config.js';
+import { CHATSVC_API, GRAPH_API, getSkypeAuthHeaders } from '../utils/api-config.js';
 import { extractObjectId } from '../utils/parsers.js';
+import { extractOneOnOneMemberIds } from './chatsvc-messaging.js';
 
 /** A local file that passed {@link resolveUploadFile} validation. */
 export interface ResolvedUploadFile {
@@ -28,6 +35,8 @@ export interface ResolvedUploadFile {
   name: string;
   /** Size in bytes. */
   size: number;
+  /** Modification time in ms — part of the prepared-attachment cache key. */
+  mtimeMs: number;
 }
 
 /** A file uploaded to OneDrive, as returned by Microsoft Graph. */
@@ -108,11 +117,20 @@ function resolveReal(p: string): string {
   }
 }
 
+/** True when `rel` stays inside its base (not '..', not '../...', not absolute). */
+function isRelativeInside(rel: string): boolean {
+  return rel !== '' && rel !== '..' &&
+    !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
+
 /** True when `child` equals `parent` or sits inside it (both absolute). */
 function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || isRelativeInside(rel);
 }
+
+/** Basenames that must never be uploaded: well-known credential file names. */
+const CREDENTIAL_FILE_BASENAMES = /^(_netrc|_git-credentials)$/i;
 
 export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile> {
   if (!path.isAbsolute(candidate)) {
@@ -126,6 +144,21 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
       `TEAMS_MCP_UPLOAD_DIR must be an absolute path: ${uploadDir}`));
   }
 
+  // On Windows, realpath/stat on a UNC or device path opens an SMB session and
+  // leaks NTLM credentials — reject those lexically before any fs call.
+  if (process.platform === 'win32' &&
+      (candidate.startsWith('\\\\') || candidate.startsWith('//'))) {
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Attachment path must not be a UNC or device path: ${candidate}`));
+  }
+
+  // Lexical containment first: path.resolve normalises '.'/'..' without
+  // touching the filesystem, so escapes are rejected before realpath runs.
+  if (!isInside(path.resolve(candidate), path.resolve(root))) {
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Attachment must be inside the upload root (${root}): ${candidate}`));
+  }
+
   let realRoot: string;
   let realPath: string;
   try {
@@ -136,7 +169,7 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
   }
 
   const relative = path.relative(realRoot, realPath);
-  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+  if (relative === '' || !isRelativeInside(relative)) {
     return err(createError(ErrorCode.INVALID_INPUT,
       `Attachment must be inside the upload root (${realRoot}): ${candidate}`));
   }
@@ -149,12 +182,23 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
       `Attachment path must not contain dotfiles or dot-directories: ${candidate}`));
   }
 
-  // Never upload the server's own config (session state, tokens) or, on
-  // Windows, anything under the per-user application-data roots.
+  // Well-known credential file names (_netrc, _git-credentials) are refused
+  // wherever they appear inside the root.
+  if (CREDENTIAL_FILE_BASENAMES.test(path.basename(realPath))) {
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Attachment is a credential file and cannot be uploaded: ${candidate}`));
+  }
+
+  // Never upload the server's own config (session state, tokens) or the
+  // per-user application-data / library trees where OS credentials live.
+  const home = os.homedir();
   const forbiddenRoots = [CONFIG_DIR];
   if (process.platform === 'win32') {
+    forbiddenRoots.push(path.join(home, 'AppData'));
     if (process.env.APPDATA) forbiddenRoots.push(process.env.APPDATA);
     if (process.env.LOCALAPPDATA) forbiddenRoots.push(process.env.LOCALAPPDATA);
+  } else if (process.platform === 'darwin') {
+    forbiddenRoots.push(path.join(home, 'Library'));
   }
   for (const root of forbiddenRoots) {
     if (isInside(realPath, resolveReal(root))) {
@@ -163,7 +207,13 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
     }
   }
 
-  const stat = fs.statSync(realPath);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(realPath);
+  } catch {
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Attachment could not be read: ${candidate}`));
+  }
   if (!stat.isFile()) {
     return err(createError(ErrorCode.INVALID_INPUT, `Attachment is not a regular file: ${candidate}`));
   }
@@ -172,10 +222,13 @@ export function resolveUploadFile(candidate: string): Result<ResolvedUploadFile>
       `Attachment exceeds the ${MAX_SIMPLE_UPLOAD_BYTES / (1024 * 1024)} MB limit; upload sessions for larger files are not supported yet: ${candidate}`));
   }
 
-  return ok({ path: realPath, name: path.basename(realPath), size: stat.size });
+  return ok({
+    path: realPath,
+    name: path.basename(realPath),
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  });
 }
-
-const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
 /**
  * Graph failures must never surface as AUTH_REQUIRED/AUTH_EXPIRED: the server
@@ -222,18 +275,30 @@ export async function uploadChatFile(
   file: ResolvedUploadFile,
   graphToken: string,
 ): Promise<Result<UploadedChatFile>> {
-  const bytes = await fs.promises.readFile(file.path);
+  let bytes: Uint8Array<ArrayBuffer>;
+  try {
+    bytes = await fs.promises.readFile(file.path);
+  } catch {
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Attachment could not be read: ${file.name}`));
+  }
+  // The file may have grown between resolveUploadFile and now.
+  if (bytes.length > MAX_SIMPLE_UPLOAD_BYTES) {
+    return err(createError(ErrorCode.INVALID_INPUT,
+      `Attachment exceeds the ${MAX_SIMPLE_UPLOAD_BYTES / (1024 * 1024)} MB limit; upload sessions for larger files are not supported yet: ${file.name}`));
+  }
   const headers = {
     Authorization: `Bearer ${graphToken}`,
     'Content-Type': 'application/octet-stream',
   };
 
-  const putUrl = `${GRAPH_BASE}/me/drive/root:/Microsoft%20Teams%20Chat%20Files/${encodeURIComponent(file.name)}:/content?@microsoft.graph.conflictBehavior=rename`;
+  const putUrl = GRAPH_API.uploadChatFileContent(file.name);
   const put = await httpRequest<{ id?: string }>(putUrl, {
     method: 'PUT',
     headers,
     body: bytes,
     maxRetries: 1,
+    timeoutMs: UPLOAD_TIMEOUT_MS,
   });
   if (!put.ok) {
     return err(remapGraphError(put.error, graphToken, `upload "${file.name}"`));
@@ -246,7 +311,7 @@ export async function uploadChatFile(
 
   const select = new URLSearchParams({ $select: 'id,name,webUrl,sharepointIds,parentReference' });
   const get = await httpRequest<RawUploadedItem>(
-    `${GRAPH_BASE}/me/drive/items/${itemId}?${select.toString()}`,
+    `${GRAPH_API.driveItem(itemId)}?${select.toString()}`,
     { method: 'GET', headers: { Authorization: `Bearer ${graphToken}`, Accept: 'application/json' } },
   );
   if (!get.ok) {
@@ -299,7 +364,7 @@ export async function shareChatFile(
   };
 
   const link = await httpRequest<RawPermission>(
-    `${GRAPH_BASE}/me/drive/items/${itemId}/createLink`,
+    GRAPH_API.createLink(itemId),
     {
       method: 'POST',
       headers,
@@ -320,7 +385,7 @@ export async function shareChatFile(
   if (recipientObjectIds.length > 0) {
     const shareId = `u!${Buffer.from(shareUrl).toString('base64url')}`;
     const grant = await httpRequest<unknown>(
-      `${GRAPH_BASE}/shares/${shareId}/permission/grant`,
+      GRAPH_API.grantPermission(shareId),
       {
         method: 'POST',
         headers,
@@ -400,14 +465,22 @@ export function buildFilesPropertyEntry(
 
 interface RawThreadDetails {
   members?: Array<{ id?: string }>;
+  threadProperties?: { threadType?: string };
 }
 
+const CHANNEL_ATTACHMENT_MESSAGE =
+  'Attachments are supported in 1:1, group and meeting chats and self-notes; channel files live in the team\'s SharePoint';
+
 /**
- * Object IDs of a chat's other members, for Graph sharing grants. Reads the
- * chatsvc thread endpoint (the conversations list carries no members). Only
- * `8:orgid:` user MRIs map to Graph object IDs; bots, tags and the caller are
- * excluded. Errors pass through unchanged — this is core Teams auth, so
- * AUTH_REQUIRED/AUTH_EXPIRED are legitimate here.
+ * Object IDs of a chat's other members, for Graph sharing grants. 1:1 chats
+ * (`19:<a>_<b>@unq.gbl.spaces`) derive members from the deterministic id —
+ * the thread endpoint 404s before the first message. Other chats read the
+ * chatsvc thread endpoint (the conversations list carries no members); a
+ * thread reporting a space/topic type is a channel and is refused. Only
+ * `8:orgid:` user MRIs map to Graph object IDs; bots, tags and the caller
+ * (matched on the normalised object ID, so casing cannot sneak self back
+ * in) are excluded. Errors pass through unchanged — this is core Teams
+ * auth, so AUTH_REQUIRED/AUTH_EXPIRED are legitimate here.
  */
 export async function getChatMemberObjectIds(
   conversationId: string,
@@ -417,6 +490,19 @@ export async function getChatMemberObjectIds(
     return authResult;
   }
   const { auth, region, baseUrl } = authResult.value;
+  const selfOid = extractObjectId(auth.userMri);
+
+  const oneOnOne = extractOneOnOneMemberIds(conversationId);
+  if (oneOnOne) {
+    const objectIds = new Set<string>();
+    for (const id of oneOnOne) {
+      const objectId = extractObjectId(id);
+      if (objectId && objectId !== selfOid) {
+        objectIds.add(objectId);
+      }
+    }
+    return ok([...objectIds]);
+  }
 
   const response = await httpRequest<RawThreadDetails>(
     `${CHATSVC_API.thread(region, conversationId, baseUrl)}?view=msnp24Equivalent`,
@@ -429,7 +515,13 @@ export async function getChatMemberObjectIds(
     return response;
   }
 
-  const members = response.value.data.members;
+  const data = response.value.data;
+  const threadType = data.threadProperties?.threadType;
+  if (threadType === 'space' || threadType === 'topic') {
+    return err(createError(ErrorCode.INVALID_INPUT, CHANNEL_ATTACHMENT_MESSAGE));
+  }
+
+  const members = data.members;
   if (!Array.isArray(members)) {
     return err(createError(ErrorCode.API_ERROR,
       'Teams did not return a members list for this chat', { retryable: true }));
@@ -438,15 +530,28 @@ export async function getChatMemberObjectIds(
   const objectIds = new Set<string>();
   for (const member of members) {
     const id = member?.id;
-    if (typeof id !== 'string' || !id.startsWith(MRI_ORGID_PREFIX) || id === auth.userMri) {
+    if (typeof id !== 'string' || !id.startsWith(MRI_ORGID_PREFIX)) {
       continue;
     }
     const objectId = extractObjectId(id);
-    if (objectId) {
-      objectIds.add(objectId);
+    if (!objectId || objectId === selfOid) {
+      continue;
     }
+    objectIds.add(objectId);
   }
   return ok([...objectIds]);
+}
+
+/**
+ * Prepared attachments keyed by conversation + file identity. The server
+ * auto-retries a whole tool call when sendMessage fails with an auth error —
+ * without this cache the retry would re-upload ("name 1.ext") and re-share
+ * files that already reached OneDrive.
+ */
+const preparedAttachments = new Map<string, { entry: ChatsvcFileEntry; expiresAt: number }>();
+
+function attachmentCacheKey(conversationId: string, file: ResolvedUploadFile): string {
+  return `${conversationId}\0${file.path}\0${file.size}\0${file.mtimeMs}`;
 }
 
 /**
@@ -455,6 +560,9 @@ export async function getChatMemberObjectIds(
  * check happen before any network call; files are processed sequentially.
  * A mid-way failure returns an error naming the file — the message is never
  * sent, but earlier uploads stay in OneDrive "Microsoft Teams Chat Files".
+ * Files prepared within {@link ATTACHMENT_REUSE_TTL_MS} are reused so a
+ * retried send does not duplicate them; handleSendMessage clears them after
+ * a successful send via {@link clearPreparedAttachments}.
  */
 export async function prepareChatAttachments(
   conversationId: string,
@@ -473,9 +581,8 @@ export async function prepareChatAttachments(
     files.push(resolved.value);
   }
 
-  if (conversationId.endsWith('@thread.tacv2') || conversationId.endsWith('@thread.skype')) {
-    return err(createError(ErrorCode.INVALID_INPUT,
-      'Attachments are supported in 1:1, group and meeting chats and self-notes; channel files live in the team\'s SharePoint'));
+  if (conversationId.endsWith('@thread.tacv2')) {
+    return err(createError(ErrorCode.INVALID_INPUT, CHANNEL_ATTACHMENT_MESSAGE));
   }
 
   // Optional resource: requireGraphTokenAsync never returns AUTH_* (that would
@@ -499,6 +606,13 @@ export async function prepareChatAttachments(
 
   const entries: ChatsvcFileEntry[] = [];
   for (const file of files) {
+    const key = attachmentCacheKey(conversationId, file);
+    const cached = preparedAttachments.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      entries.push(cached.entry);
+      continue;
+    }
+
     const uploaded = await uploadChatFile(file, graphToken);
     if (!uploaded.ok) {
       return err(attachmentFailure(file, uploaded.error));
@@ -507,9 +621,25 @@ export async function prepareChatAttachments(
     if (!share.ok) {
       return err(attachmentFailure(file, share.error));
     }
-    entries.push(buildFilesPropertyEntry(uploaded.value, share.value));
+    const entry = buildFilesPropertyEntry(uploaded.value, share.value);
+    preparedAttachments.set(key, { entry, expiresAt: Date.now() + ATTACHMENT_REUSE_TTL_MS });
+    entries.push(entry);
   }
   return ok(entries);
+}
+
+/**
+ * Drops cached prepared attachments for the given paths. Called after a
+ * successful send so the next send of the same file uploads a fresh copy;
+ * paths that no longer resolve are skipped (their entries expire by TTL).
+ */
+export function clearPreparedAttachments(conversationId: string, paths: string[]): void {
+  for (const candidate of paths) {
+    const resolved = resolveUploadFile(candidate);
+    if (resolved.ok) {
+      preparedAttachments.delete(attachmentCacheKey(conversationId, resolved.value));
+    }
+  }
 }
 
 /** Wraps a per-file Graph failure: names the file and states nothing was sent. */

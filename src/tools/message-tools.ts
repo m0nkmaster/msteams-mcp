@@ -26,7 +26,7 @@ import {
   waitForReply,
 } from '../api/chatsvc-api.js';
 import { getFavorites, addFavorite, removeFavorite, getCustomEmojis } from '../api/csa-api.js';
-import { prepareChatAttachments, type ChatsvcFileEntry } from '../api/chat-attachments-api.js';
+import { prepareChatAttachments, clearPreparedAttachments, type ChatsvcFileEntry } from '../api/chat-attachments-api.js';
 import { parseTeamsMessageUrl } from '../utils/parsers.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { SELF_CHAT_ID, MAX_THREAD_LIMIT, DEFAULT_THREAD_LIMIT, MAX_WAIT_SECONDS, STANDARD_EMOJIS } from '../constants.js';
@@ -562,6 +562,7 @@ async function handleSendMessage(
   input: z.infer<typeof SendMessageInputSchema>
 ): Promise<ToolResult> {
   let files: ChatsvcFileEntry[] | undefined;
+  let attachmentPaths: string[] | undefined;
   if (input.files && input.files.length > 0) {
     if (input.scheduleAt) {
       return {
@@ -575,6 +576,7 @@ async function handleSendMessage(
       return { success: false, error: prepared.error };
     }
     files = prepared.value;
+    attachmentPaths = input.files;
   }
 
   const result = await sendMessage(input.conversationId, input.content, {
@@ -586,7 +588,25 @@ async function handleSendMessage(
   });
 
   if (!result.ok) {
+    if (files && files.length > 0) {
+      // The uploads already happened and stay cached for the retry window;
+      // say so, or the caller will assume nothing was sent at all.
+      return {
+        success: false,
+        error: createError(result.error.code,
+          `${result.error.message} ${files.length} file(s) were uploaded to your OneDrive "Microsoft Teams Chat Files" folder and shared, but the message was not sent; retrying within 10 minutes reuses them.`,
+          {
+            retryable: result.error.retryable,
+            retryAfterMs: result.error.retryAfterMs,
+            suggestions: result.error.suggestions,
+          }),
+      };
+    }
     return { success: false, error: result.error };
+  }
+
+  if (files && files.length > 0 && attachmentPaths) {
+    clearPreparedAttachments(input.conversationId, attachmentPaths);
   }
 
   // Scheduled messages return a draft confirmation, not a sent message.
