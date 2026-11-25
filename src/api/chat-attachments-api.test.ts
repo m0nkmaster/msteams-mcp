@@ -1257,6 +1257,43 @@ describe('prepareChatAttachments', () => {
     expect(mockMessageAuth).not.toHaveBeenCalled();
   });
 
+  it('rewraps a Graph-token failure with attachment-specific guidance', async () => {
+    vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
+    const file = writeTestFile('prep/graph-auth.txt');
+    // AUTH_INTERACTION_REQUIRED's default suggestions talk about EDU
+    // Assignments — wrong context here (seen live: Graph SPA refresh-token
+    // 24h limit; a plain teams_login fixed it).
+    mockGraphToken.mockResolvedValue(err(createError(
+      ErrorCode.AUTH_INTERACTION_REQUIRED,
+      'Graph token needs interaction',
+      { retryable: false },
+    )));
+
+    const result = await prepareChatAttachments(CHAT, [file]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: ErrorCode.AUTH_INTERACTION_REQUIRED,
+        retryable: false,
+        message: expect.stringContaining(
+          'Attachments need Microsoft Graph, which could not be authorized:'),
+        suggestions: [
+          'Call teams_login (without forceNew) to refresh the session silently, then retry the send',
+          'Nothing was sent; other Teams tools are unaffected',
+          'To send without attachments, retry without files',
+        ],
+      },
+    });
+    // Never AUTH_REQUIRED/AUTH_EXPIRED — those trigger server auto-login.
+    if (!result.ok) {
+      expect(result.error.code).not.toBe(ErrorCode.AUTH_REQUIRED);
+      expect(result.error.code).not.toBe(ErrorCode.AUTH_EXPIRED);
+    }
+    expect(mockHttp).not.toHaveBeenCalled();
+    expect(mockMessageAuth).not.toHaveBeenCalled();
+  });
+
   it('uploads and shares each file for self-notes without a members lookup', async () => {
     vi.stubEnv('TEAMS_MCP_UPLOAD_DIR', h.uploadRoot);
     const file = writeTestFile('prep/design-notes.md', 'notes');

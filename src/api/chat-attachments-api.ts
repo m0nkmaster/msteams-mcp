@@ -696,10 +696,24 @@ export async function prepareChatAttachments(
   }
 
   // Optional resource: requireGraphTokenAsync never returns AUTH_* (that would
-  // trigger the server's Teams re-login), same contract as downloadFile.
+  // trigger the server's Teams re-login), same contract as downloadFile. Its
+  // error still carries the code's DEFAULT suggestions — for
+  // AUTH_INTERACTION_REQUIRED those talk about EDU Assignments, which is the
+  // wrong context here, so replace them with attachment-specific guidance.
   const tokenResult = await requireGraphTokenAsync();
   if (!tokenResult.ok) {
-    return tokenResult;
+    const cause = tokenResult.error;
+    return err(createError(cause.code,
+      `Attachments need Microsoft Graph, which could not be authorized: ${cause.message}`,
+      {
+        retryable: cause.retryable,
+        retryAfterMs: cause.retryAfterMs,
+        suggestions: [
+          'Call teams_login (without forceNew) to refresh the session silently, then retry the send',
+          'Nothing was sent; other Teams tools are unaffected',
+          'To send without attachments, retry without files',
+        ],
+      }));
   }
   const graphToken = tokenResult.value;
 
