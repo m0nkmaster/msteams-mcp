@@ -24,6 +24,7 @@ import { loginTool } from './auth-tools.js';
 import { clearAllLocalData } from '../auth/session-store.js';
 import {
   getSubstrateTokenStatus,
+  getMessageAuthStatus,
   extractMessageAuth,
   extractCsaToken,
   extractSubstrateToken,
@@ -35,6 +36,7 @@ import { createBrowserContext, closeBrowser } from '../browser/context.js';
 /** A session holding every core credential except the CSA (favourites) token. */
 function sessionMissingCsaToken(): void {
   vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: true, minutesRemaining: 60 });
+  vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: true, minutesRemaining: 600 });
   vi.mocked(extractSubstrateToken).mockReturnValue({ token: 'substrate', expiry: new Date(Date.now() + 3.6e6) });
   vi.mocked(extractSkypeSpacesToken).mockReturnValue('spaces');
   vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
@@ -104,5 +106,63 @@ describe('teams_login core credential top-up', () => {
     const result = await loginTool.handler({ forceNew: false });
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe('teams_login fast path requires usable messaging', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+    vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
+    vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: true, minutesRemaining: 60 });
+    vi.mocked(extractSubstrateToken).mockReturnValue({ token: 'substrate', expiry: new Date(Date.now() + 3.6e6) });
+    vi.mocked(extractSkypeSpacesToken).mockReturnValue('spaces');
+    vi.mocked(extractCsaToken).mockReturnValue('csa');
+  });
+
+  it('falls through to headless SSO when messaging cookies are missing and the top-up fails', async () => {
+    vi.mocked(extractMessageAuth).mockReturnValue(null);
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: { code: 'NETWORK_ERROR', message: 'offline' },
+    } as never);
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(true);
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
+    if (result.success) {
+      expect(String(result.data.message)).not.toContain('Already authenticated');
+    }
+  });
+
+  it.each([
+    ['has expired', { hasToken: false, expiresAt: '2026-01-01T00:00:00.000Z', minutesRemaining: 0 }],
+    ['is about to expire', { hasToken: true, expiresAt: '2026-01-01T00:00:00.000Z', minutesRemaining: 5 }],
+  ])('falls through to headless SSO when the messaging cookie %s', async (_label, status) => {
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus).mockReturnValue(status);
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(true);
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
+    if (result.success) {
+      expect(String(result.data.message)).not.toContain('Already authenticated');
+    }
+  });
+});
+
+describe('teams_login tool definition', () => {
+  it('warns that forceNew is destructive and needs approval', () => {
+    const props = loginTool.definition.inputSchema.properties as Record<string, { description?: string }>;
+    expect(props.forceNew.description).toMatch(/destructive/i);
+    expect(props.forceNew.description).toMatch(/approv/i);
+  });
+
+  it('describes plain login as the default path', () => {
+    expect(loginTool.definition.description).toMatch(/without forceNew/i);
   });
 });

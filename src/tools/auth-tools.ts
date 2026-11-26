@@ -40,13 +40,13 @@ export const LoginInputSchema = z.object({
 
 const loginToolDefinition: Tool = {
   name: 'teams_login',
-  description: 'Trigger manual login flow for Microsoft Teams. Use this if the session has expired or you need to switch accounts.',
+  description: 'Sign in to Microsoft Teams or refresh an expired session. Call without forceNew for normal re-login: it tries silent SSO first and opens a browser window only if needed.',
   inputSchema: {
     type: 'object',
     properties: {
       forceNew: {
         type: 'boolean',
-        description: 'Delete all previous login data (browser profile, cookies, saved session, every previously signed-in account) and sign in from scratch in a visible browser. Use to switch accounts or recover a broken session (default: false)',
+        description: 'DESTRUCTIVE: deletes all local login data (browser profile, cookies, saved session, every previously signed-in account) and forces an interactive sign-in in a visible browser. Use only with the user\'s approval, after a plain teams_login has failed or signed in the wrong account, or to switch accounts (default: false)',
       },
     },
   },
@@ -68,6 +68,18 @@ const statusToolDefinition: Tool = {
 /** Minimum minutes remaining on token to consider it valid (skip browser). */
 const TOKEN_VALID_THRESHOLD_MINUTES = 10;
 
+/**
+ * Whether messaging auth (skypetoken_asm/authtoken cookies) is present and
+ * not near expiry. extractMessageAuth only checks presence, so the JWT expiry
+ * is checked separately via getMessageAuthStatus.
+ */
+function messagingUsable(): boolean {
+  if (extractMessageAuth() === null) return false;
+  const status = getMessageAuthStatus();
+  return status.hasToken
+    && (status.minutesRemaining === undefined || status.minutesRemaining >= TOKEN_VALID_THRESHOLD_MINUTES);
+}
+
 async function handleLogin(
   input: z.infer<typeof LoginInputSchema>,
 ): Promise<ToolResult> {
@@ -82,20 +94,24 @@ async function handleLogin(
     return loginInVisibleBrowser();
   }
 
-  // Fast path: if tokens are still valid, skip browser entirely
+  // Fast path: if tokens are still valid, skip browser entirely — but only
+  // when messaging auth is usable too, otherwise a browser login is needed.
   const tokenStatus = getSubstrateTokenStatus();
   if (tokenStatus.hasToken && tokenStatus.minutesRemaining! >= TOKEN_VALID_THRESHOLD_MINUTES) {
     await fillCoreCredentialGaps();
-    return {
-      success: true,
-      data: {
-        message: `Already authenticated. Token valid for ${tokenStatus.minutesRemaining} more minutes.`,
-        tokenStatus: {
-          expiresAt: tokenStatus.expiresAt,
-          minutesRemaining: tokenStatus.minutesRemaining,
+    if (messagingUsable()) {
+      return {
+        success: true,
+        data: {
+          message: `Already authenticated. Token valid for ${tokenStatus.minutesRemaining} more minutes.`,
+          tokenStatus: {
+            expiresAt: tokenStatus.expiresAt,
+            minutesRemaining: tokenStatus.minutesRemaining,
+          },
         },
-      },
-    };
+      };
+    }
+    log.warn('login', 'Substrate token is valid but messaging auth is unusable; continuing to browser login');
   }
 
   // Headless-first strategy:

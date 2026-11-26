@@ -284,15 +284,16 @@ export class TeamsServer {
           return this.formatError(retryResult.error);
         }
 
-        // Auto-login failed — return a strongly-worded error directing to forceNew
+        // Auto-login failed — direct to a plain teams_login, which can open a visible sign-in
         log.error('auto-login', 'Automatic re-authentication failed.');
         return this.formatError(createError(
           ErrorCode.AUTH_REQUIRED,
-          'ACTION REQUIRED: Teams session has expired and automatic re-authentication failed. You MUST call teams_login with forceNew: true to clear stale state and re-authenticate. Do NOT call teams_login without forceNew — it will return early without fixing the problem.',
+          'ACTION REQUIRED: Teams session has expired and automatic re-authentication (silent token refresh and headless SSO) failed. Call teams_login without forceNew: unlike automatic re-authentication it can open a browser window for the user to sign in.',
           { suggestions: [
-            'IMMEDIATELY call teams_login with { "forceNew": true }',
+            'Call teams_login (without forceNew) and tell the user a Teams sign-in window may open',
             'After login succeeds, retry the original request',
             'Do NOT skip this step or tell the user Teams is unavailable — authentication just needs refreshing',
+            'Only if that teams_login fails or signs in the wrong account, ask the user to approve teams_login with { "forceNew": true }: it deletes all local login data (browser profile, cookies, every signed-in account) and forces an interactive sign-in',
           ] }
         ));
       }
