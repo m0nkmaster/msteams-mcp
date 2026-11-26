@@ -132,9 +132,30 @@ describe('teams_login fast path requires usable messaging', () => {
     const result = await loginTool.handler({ forceNew: false });
 
     expect(result.success).toBe(true);
+    // Exactly one HTTP exchange before any browser launches (the post-headless
+    // top-up may legitimately refresh again after SSO).
+    const refreshOrder = vi.mocked(refreshTokensViaHttp).mock.invocationCallOrder;
+    const browserOrder = vi.mocked(createBrowserContext).mock.invocationCallOrder[0];
+    expect(refreshOrder.filter(order => order < browserOrder)).toHaveLength(1);
     expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
     if (result.success) {
       expect(String(result.data.message)).not.toContain('Already authenticated');
+    }
+  });
+
+  it('refreshes an expired messaging cookie over HTTP without a browser', async () => {
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus)
+      .mockReturnValueOnce({ hasToken: false, expiresAt: '2026-01-01T00:00:00.000Z', minutesRemaining: 0 })
+      .mockReturnValue({ hasToken: true, expiresAt: '2026-11-26T00:00:00.000Z', minutesRemaining: 600 });
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(true);
+    expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
+    expect(createBrowserContext).not.toHaveBeenCalled();
+    if (result.success) {
+      expect(String(result.data.message)).toContain('Already authenticated');
     }
   });
 
@@ -144,10 +165,15 @@ describe('teams_login fast path requires usable messaging', () => {
   ])('falls through to headless SSO when the messaging cookie %s', async (_label, status) => {
     vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
     vi.mocked(getMessageAuthStatus).mockReturnValue(status);
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: { code: 'NETWORK_ERROR', message: 'offline' },
+    } as never);
 
     const result = await loginTool.handler({ forceNew: false });
 
     expect(result.success).toBe(true);
+    expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
     expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
     if (result.success) {
       expect(String(result.data.message)).not.toContain('Already authenticated');

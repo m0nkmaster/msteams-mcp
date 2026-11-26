@@ -16,6 +16,8 @@ stale_after: 2027-05-25
 1. `npm run cli -- login` (or `teams_login` without `forceNew`). It tried headless SSO and printed "Login completed silently via SSO" in about 17 s, no window.
 2. Retry the call.
 
+Plain `teams_login` only reaches headless SSO (which re-mints the Graph token) when the Substrate token has under 10 minutes left or messaging auth is unusable; otherwise it returns "Already authenticated" without refreshing Graph (tracked in BACKLOG.md).
+
 ## Do not
 
 - Do not use `forceNew: true`: it deletes the whole config directory and forces an interactive sign-in. Only with George's approval.

@@ -93,6 +93,22 @@ describe('recommendsForceNewWithoutApproval', () => {
   it('accepts forceNew advice that requires approval', () => {
     expect(recommendsForceNewWithoutApproval('Only with the user\'s approval, call teams_login with { "forceNew": true }')).toBe(false);
   });
+
+  it('flags a negated "without forceNew" warning', () => {
+    expect(recommendsForceNewWithoutApproval('Do NOT call teams_login without forceNew — it will return early')).toBe(true);
+  });
+
+  it('requires a whole approval phrase, not just the word approval', () => {
+    expect(recommendsForceNewWithoutApproval('No approval needed: call teams_login with forceNew: true')).toBe(true);
+  });
+
+  it('flags the CLI --force flag', () => {
+    expect(recommendsForceNewWithoutApproval('run npm run cli -- login --force true')).toBe(true);
+  });
+
+  it('flags the force_new spelling', () => {
+    expect(recommendsForceNewWithoutApproval('set force_new: true')).toBe(true);
+  });
 });
 
 describe('default suggestions', () => {

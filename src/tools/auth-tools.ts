@@ -20,7 +20,8 @@ import {
   extractMessageAuth,
   extractCsaToken,
 } from '../auth/token-extractor.js';
-import { fillCoreCredentialGaps } from '../auth/core-credentials.js';
+import { fillCoreCredentialGaps, coreCredentialsComplete } from '../auth/core-credentials.js';
+import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import * as log from '../utils/logger.js';
 import { resetAssignmentsAvailability, clearRegionCache } from '../utils/auth-guards.js';
@@ -69,9 +70,9 @@ const statusToolDefinition: Tool = {
 const TOKEN_VALID_THRESHOLD_MINUTES = 10;
 
 /**
- * Whether messaging auth (skypetoken_asm/authtoken cookies) is present and
- * not near expiry. extractMessageAuth only checks presence, so the JWT expiry
- * is checked separately via getMessageAuthStatus.
+ * Whether messaging auth is usable: the messaging cookies are present
+ * (extractMessageAuth checks skypetoken_asm and authtoken) and the
+ * skypetoken_asm JWT is not expired or near expiry (getMessageAuthStatus).
  */
 function messagingUsable(): boolean {
   if (extractMessageAuth() === null) return false;
@@ -95,10 +96,16 @@ async function handleLogin(
   }
 
   // Fast path: if tokens are still valid, skip browser entirely — but only
-  // when messaging auth is usable too, otherwise a browser login is needed.
+  // when messaging auth is usable too. One HTTP refresh runs first: it can
+  // re-mint an expired skypetoken_asm without opening a browser.
   const tokenStatus = getSubstrateTokenStatus();
   if (tokenStatus.hasToken && tokenStatus.minutesRemaining! >= TOKEN_VALID_THRESHOLD_MINUTES) {
-    await fillCoreCredentialGaps();
+    if (!coreCredentialsComplete() || !messagingUsable()) {
+      const refresh = await refreshTokensViaHttp();
+      if (!refresh.ok) {
+        log.warn('login', `Could not refresh credentials over HTTP: ${refresh.error.message}`);
+      }
+    }
     if (messagingUsable()) {
       return {
         success: true,

@@ -65,7 +65,6 @@ describe('TeamsServer auto-login failure', () => {
     for (const suggestion of body.suggestions) {
       expect(recommendsForceNewWithoutApproval(suggestion)).toBe(false);
     }
-    expect(body.error).not.toContain('Do NOT call teams_login without forceNew');
     expect(body.suggestions).toContain(
       'Call teams_login (without forceNew) and tell the user a Teams sign-in window may open'
     );
