@@ -14,10 +14,11 @@ vi.mock('./session-store.js', () => ({
   writeSessionState: vi.fn(),
   clearTokenCache: vi.fn(),
   getTeamsOrigin: vi.fn(),
+  getSessionEpoch: vi.fn(),
 }));
 
 import { refreshTokensViaHttp } from './token-refresh-http.js';
-import { readSessionState, writeSessionState, clearTokenCache, getTeamsOrigin } from './session-store.js';
+import { readSessionState, writeSessionState, clearTokenCache, getTeamsOrigin, getSessionEpoch } from './session-store.js';
 import type { SessionState } from './session-store.js';
 
 // ============================================================================
@@ -762,6 +763,35 @@ describe('refreshTokensViaHttp', () => {
       expect(result.error.message).toContain('No MSAL refresh token');
     }
     expect(fetch).not.toHaveBeenCalled();
+    expect(writeSessionState).not.toHaveBeenCalled();
+  });
+
+  it('skips the session-state write when local data is wiped mid-refresh', async () => {
+    const state = makeMockSessionState();
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+
+    // A forceNew wipe (clearAllLocalData) bumps the session epoch; the
+    // epoch captured with the read no longer matches at write time, so the
+    // stale state must not be written back over the wiped directory.
+    vi.mocked(getSessionEpoch).mockReturnValueOnce(1).mockReturnValueOnce(2);
+
+    vi.mocked(fetch).mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).includes('login.microsoftonline.com')) {
+        const scope = new URLSearchParams(String(init?.body)).get('scope')!;
+        return new Response(JSON.stringify(makeTokenResponse(scope)), { status: 200 });
+      }
+      if (String(url).includes('authsvc.teams.microsoft.com')) {
+        return new Response(JSON.stringify({
+          tokens: { skypeToken: 'new-skype-token', expiresIn: 86400 },
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected URL: ${String(url)}`);
+    });
+
+    const result = await refreshTokensViaHttp();
+
+    expect(result.ok).toBe(true);
     expect(writeSessionState).not.toHaveBeenCalled();
   });
 

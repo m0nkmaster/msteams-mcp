@@ -77,15 +77,17 @@ function getDefaultSuggestions(code: ErrorCode): string[] {
   switch (code) {
     case ErrorCode.AUTH_REQUIRED:
       return [
-        'IMMEDIATELY call teams_login with { "forceNew": true } to authenticate',
+        'Call teams_login (without forceNew) to authenticate: it tries silent SSO first and opens a browser window for sign-in only if needed',
         'Do NOT skip this step or tell the user Teams is unavailable',
         'After login succeeds, retry the original request',
+        'Only if that teams_login fails or signs in the wrong account, ask the user to approve teams_login with { "forceNew": true }: it deletes all local login data (browser profile, cookies, every signed-in account) and forces an interactive sign-in',
       ];
     case ErrorCode.AUTH_EXPIRED:
       return [
-        'IMMEDIATELY call teams_login with { "forceNew": true } to refresh authentication',
+        'Call teams_login (without forceNew) to refresh authentication: it tries silent SSO first and opens a browser window for sign-in only if needed',
         'Do NOT skip this step or tell the user Teams is unavailable',
         'After login succeeds, retry the original request',
+        'Only if that teams_login fails or signs in the wrong account, ask the user to approve teams_login with { "forceNew": true }: it deletes all local login data (browser profile, cookies, every signed-in account) and forces an interactive sign-in',
       ];
     case ErrorCode.RATE_LIMITED:
       return ['Wait before retrying', 'Reduce request frequency'];

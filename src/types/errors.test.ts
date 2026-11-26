@@ -9,6 +9,7 @@ import {
   classifyHttpError,
   extractRetryAfter,
 } from './errors.js';
+import { recommendsForceNewWithoutApproval } from '../__fixtures__/force-new-guard.js';
 
 describe('createError', () => {
   it('creates error with defaults for AUTH_REQUIRED', () => {
@@ -16,7 +17,23 @@ describe('createError', () => {
     expect(error.code).toBe(ErrorCode.AUTH_REQUIRED);
     expect(error.message).toBe('Not authenticated');
     expect(error.retryable).toBe(false);
-    expect(error.suggestions).toContain('IMMEDIATELY call teams_login with { "forceNew": true } to authenticate');
+    expect(error.suggestions).toEqual([
+      'Call teams_login (without forceNew) to authenticate: it tries silent SSO first and opens a browser window for sign-in only if needed',
+      'Do NOT skip this step or tell the user Teams is unavailable',
+      'After login succeeds, retry the original request',
+      'Only if that teams_login fails or signs in the wrong account, ask the user to approve teams_login with { "forceNew": true }: it deletes all local login data (browser profile, cookies, every signed-in account) and forces an interactive sign-in',
+    ]);
+  });
+
+  it('creates error with defaults for AUTH_EXPIRED', () => {
+    const error = createError(ErrorCode.AUTH_EXPIRED, 'Token expired');
+    expect(error.code).toBe(ErrorCode.AUTH_EXPIRED);
+    expect(error.suggestions).toEqual([
+      'Call teams_login (without forceNew) to refresh authentication: it tries silent SSO first and opens a browser window for sign-in only if needed',
+      'Do NOT skip this step or tell the user Teams is unavailable',
+      'After login succeeds, retry the original request',
+      'Only if that teams_login fails or signs in the wrong account, ask the user to approve teams_login with { "forceNew": true }: it deletes all local login data (browser profile, cookies, every signed-in account) and forces an interactive sign-in',
+    ]);
   });
 
   it('creates retryable error for RATE_LIMITED by default', () => {
@@ -61,6 +78,51 @@ describe('createError', () => {
       retryAfterMs: 5000,
     });
     expect(error.retryAfterMs).toBe(5000);
+  });
+});
+
+describe('recommendsForceNewWithoutApproval', () => {
+  it('ignores "without forceNew" phrasing', () => {
+    expect(recommendsForceNewWithoutApproval('Call teams_login (without forceNew) to authenticate')).toBe(false);
+  });
+
+  it('flags a bare forceNew recommendation', () => {
+    expect(recommendsForceNewWithoutApproval('IMMEDIATELY call teams_login with { "forceNew": true }')).toBe(true);
+  });
+
+  it('accepts forceNew advice that requires approval', () => {
+    expect(recommendsForceNewWithoutApproval('Only with the user\'s approval, call teams_login with { "forceNew": true }')).toBe(false);
+  });
+
+  it('flags a negated "without forceNew" warning', () => {
+    expect(recommendsForceNewWithoutApproval('Do NOT call teams_login without forceNew — it will return early')).toBe(true);
+  });
+
+  it('requires a whole approval phrase, not just the word approval', () => {
+    expect(recommendsForceNewWithoutApproval('No approval needed: call teams_login with forceNew: true')).toBe(true);
+  });
+
+  it('flags the CLI --force flag', () => {
+    expect(recommendsForceNewWithoutApproval('run npm run cli -- login --force true')).toBe(true);
+  });
+
+  it('flags the force_new spelling', () => {
+    expect(recommendsForceNewWithoutApproval('set force_new: true')).toBe(true);
+  });
+
+  it('flags approval in a different sentence than the mention', () => {
+    expect(recommendsForceNewWithoutApproval('Ask the user to approve the upload. Then call teams_login with forceNew: true')).toBe(true);
+  });
+
+  it('flags a distant negation before "without forceNew"', () => {
+    expect(recommendsForceNewWithoutApproval('Do not, under any circumstances, call teams_login without forceNew')).toBe(true);
+  });
+});
+
+describe('default suggestions', () => {
+  it.each(Object.values(ErrorCode))('%s never recommends forceNew without approval', (code) => {
+    const error = createError(code, 'x');
+    expect(error.suggestions.filter(recommendsForceNewWithoutApproval)).toEqual([]);
   });
 });
 

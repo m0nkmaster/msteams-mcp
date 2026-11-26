@@ -3,8 +3,15 @@
  * SubstrateSearch token selection when multiple origins are present.
  */
 
-import { describe, it, expect } from 'vitest';
-import { getTeamsOrigin, type SessionState } from './session-store.js';
+import { describe, it, expect, vi } from 'vitest';
+import { getTeamsOrigin, getSessionEpoch, clearAllLocalData, clearSessionState, type SessionState } from './session-store.js';
+
+// clearAllLocalData/clearSessionState delete under the real CONFIG_DIR;
+// stub the destructive fs calls so the epoch tests never touch it.
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return { ...actual, rmSync: vi.fn(), existsSync: vi.fn(() => false), unlinkSync: vi.fn() };
+});
 
 function makeOrigin(
   origin: string,
@@ -128,5 +135,15 @@ describe('getTeamsOrigin', () => {
     };
 
     expect(getTeamsOrigin(state)).toBeNull();
+  });
+});
+
+describe('session epoch', () => {
+  it('bumps when local data is deleted so an in-flight refresh can detect the wipe', () => {
+    const before = getSessionEpoch();
+    clearAllLocalData();
+    expect(getSessionEpoch()).toBe(before + 1);
+    clearSessionState();
+    expect(getSessionEpoch()).toBe(before + 2);
   });
 });

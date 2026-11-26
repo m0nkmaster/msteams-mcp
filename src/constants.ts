@@ -163,6 +163,9 @@ export const UPLOAD_TIMEOUT_MS = 120_000;
 /** Threshold for proactive token refresh (10 minutes before expiry). */
 export const TOKEN_REFRESH_THRESHOLD_MS = 10 * 60 * 1000;
 
+/** Minimum minutes of remaining validity for a token or cookie to count as usable. */
+export const TOKEN_VALID_THRESHOLD_MINUTES = 10;
+
 /**
  * How long to remember that an account can't get an optional token (EDU
  * Assignments, Microsoft Graph) before trying to mint one again.

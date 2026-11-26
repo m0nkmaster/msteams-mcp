@@ -57,6 +57,38 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 
 **Done when:** a test pins the new suggestions for `AUTH_REQUIRED` and `AUTH_EXPIRED` (written first, seen failing); no default suggestion recommends `forceNew` without user approval; README/docs wording matches AGENTS.md.
 
+**Status (2026-11-26):** done on branch `fix/no-forcenew-default-advice`, PR: [george-cm/msteams-mcp#3](https://github.com/george-cm/msteams-mcp/pull/3). Default suggestions, the auto-login-failed error and the `teams_login` description point to a plain `teams_login` first; `forceNew` only after that fails or signs in the wrong account, with the user's approval. Tests: pinned suggestion lists, a sweep over every `ErrorCode`, a source scan of every string literal in `src/` (TypeScript AST), and a server test for the auto-login-failed branch.
+
+**Finding (2026-11-26):** the old server error claimed a plain `teams_login` "will return early without fixing the problem". False with dead tokens: auto-login is HTTP refresh plus headless SSO only, while plain login falls back to a visible sign-in (`src/tools/auth-tools.ts`, `src/auth/token-refresh.ts`). True in one case: Substrate token still valid but messaging cookies missing or expired, where the fast path returned "Already authenticated". Fixed: the fast path runs one serialized HTTP refresh and returns early only if messaging is usable afterwards; otherwise it continues to headless SSO and then a visible browser.
+
+**Decisions (second-order review, 2026-11-26), what an AI client does with the new wording when plain login keeps failing:**
+
+- Login times out or cannot open a window (user away, no display, profile locked): `teams_login` returns an error, so the escalation clause fires and the AI asks the user to approve `forceNew`. The user may approve a wipe they did not need; the suggestion names what gets deleted, so the choice is informed. Decision: accepted.
+- Login reports success but the request still fails (for example an optional Graph token refused while the Substrate token has 10+ minutes left): login says "Already authenticated", the escalation clause ("if that teams_login fails") never fires, and the AI can loop login, retry, login. Before this change the same case wiped the profile on every pass. Decision: not fixed here; see "Plain `teams_login` does not refresh optional tokens on the fast path" below, which also proposes a loop-breaking suggestion.
+- Several tool calls fail at once and the AI calls `teams_login` in parallel: two browsers on one profile hit the Chromium lock, one login fails, and the AI asks to approve `forceNew`. `handleLogin` is not serialized (pre-existing). Decision: accepted for now; follow-up below.
+- "IMMEDIATELY" was dropped, so the AI could be less eager to re-login. "Do NOT skip this step or tell the user Teams is unavailable" is kept in every list. Decision: accepted.
+- A plain login can now open a visible window without asking first (as `forceNew` always did). The auto-login-failed suggestion tells the AI to warn the user that a sign-in window may open. Decision: accepted.
+
+**Decisions (second-order review of the post-sign-in `API_ERROR` and the sign-in guards, 2026-11-26):**
+
+- The `API_ERROR` after sign-in says "do not call teams_login again in a loop", but an AI client can ignore suggestions and retry anyway. Each retry costs one headless SSO (~8s, invisible) plus one serialized HTTP refresh, then fails again — a bounded, invisible loop, far cheaper than the old login->auth-fail->auto-login cycle. Decision: accepted; the wording is the mitigation.
+- While any sign-in is in progress, `refreshTokensViaBrowser` and the on-demand token refreshes fail fast at entry — including their HTTP leg, which writes session state. Consequence: every Teams tool call whose token needs refreshing fails auth for the whole sign-in window (up to ~5 min for a visible login); calls with still-valid tokens keep working. Trade-off accepted: a session-state write landing mid-`forceNew` wipe can resurrect the wiped account, which is worse than a temporary outage with a clear "wait" error.
+- A second `teams_login` is refused (`API_ERROR`, "already in progress") rather than joined. Joining would return the first call's result — wrong for `forceNew`, which must wipe — and refusal gives the client an actionable signal. Consequence: the user must wait for the open window or close it; the visible login's own timeout bounds the wait. Decision: accepted.
+- `forceNew` is refused while any sign-in is in progress: wiping the profile under an open sign-in is the exact leak `forceNew` exists to prevent. Decision: accepted.
+- The "forceNew may help" hint is only offered after headless SSO. After any interactive (visible) sign-in — including `forceNew` itself — the wording is always "will not fix", because the fresh sign-in already rebuilt the auth state a wipe would recreate. Decision: accepted.
+- `teams_login` can block ~105s behind a wedged refresh (90s deadline + wedged-browser cleanup) before headless SSO starts, then up to 5 min in the visible browser. An MCP client may time out the call while the server keeps running; a retry then gets "already in progress" until the first attempt's `finally` clears the guard — self-correcting. Decision: accepted.
+- Residual, not fixed: the browser's own session save (`browser/context.ts` `writeSessionState`) has no session-epoch check. A wedged browser whose save lands just after `cleanupWedgedBrowser` kills it, but after a `forceNew` wipe, could write the wiped account's session back. The window is narrow, and the HTTP refresh path (the traced case) is guarded. Fix later: capture `getSessionEpoch()` when the browser refresh starts and skip the save if it changed. Decision: deferred, logged at merge of PR #3.
+
+## Plain `teams_login` does not refresh optional tokens on the fast path
+
+**Added:** 2026-11-26 (George Murga), from the `forceNew` advice review.
+
+**Problem:** when the Substrate token has 10+ minutes left and messaging is usable, `teams_login` returns "Already authenticated" without touching the optional Graph or Assignments tokens. An expired SPA refresh token for Graph (AADSTS700084) therefore survives a plain login until the Substrate token is nearly expired, and file tools tell the AI to call `teams_login` and retry: a loop. `teams_login` calls are also not serialized, so parallel calls can collide on the browser profile lock.
+
+**Proposal:** let the fast path continue to headless SSO when an optional-resource refusal is remembered (`token-refresh-http.ts`, 30-minute refusal memory); serialize `handleLogin`; add an `AUTH_*` suggestion "If teams_login reports success but the same request fails again, stop and tell the user instead of retrying".
+
+**Done when:** a test shows a remembered Graph refusal sends plain login to headless SSO; concurrent `teams_login` calls share one attempt; the loop-breaking suggestion is pinned by a test.
+
 ## CLI drops everything after the first newline under `npm run` on Windows
 
 **Added:** 2026-11-26 (George Murga).

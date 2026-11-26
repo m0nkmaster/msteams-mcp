@@ -22,7 +22,7 @@
  * the queue still advances, and the next call starts a fresh attempt.
  */
 
-import { ErrorCode, createError } from '../types/errors.js';
+import { ErrorCode, createError, type McpError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import {
   extractSubstrateToken,
@@ -34,7 +34,7 @@ import { clearTokenCache } from './session-store.js';
 import { refreshTokensViaHttp, type OnDemandResource } from './token-refresh-http.js';
 import { createBrowserContext, closeBrowser, type BrowserManager } from '../browser/context.js';
 import { ensureAuthenticated } from '../browser/auth.js';
-import { coreCredentialsComplete, fillCoreCredentialGaps } from './core-credentials.js';
+import { coreCredentialsComplete, coreSessionReady, fillCoreCredentialGaps } from './core-credentials.js';
 import { withTimeout, TimeoutError } from '../utils/timeout.js';
 import { CORE_REFRESH_TIMEOUT_MS, BROWSER_REFRESH_LAUNCH_TIMEOUT_MS } from '../constants.js';
 import * as log from '../utils/logger.js';
@@ -49,6 +49,35 @@ let coreRefresh: Promise<Result<void>> | undefined;
  */
 let activeBrowser: BrowserManager | null = null;
 
+/**
+ * Number of teams_login browser sign-ins currently open on the persistent
+ * profile. A second Chromium instance on the same profile fails on the
+ * profile lock anyway, and a visible sign-in can run for minutes — so the
+ * browser fallback stands down for the whole window instead of colliding.
+ * Counted, not boolean: handleLogin is not serialized, so overlapping
+ * logins must not clear the guard while another browser is still open.
+ */
+let browserLoginCount = 0;
+
+/** Marks a teams_login browser session so refreshViaHeadlessBrowser does not collide on the profile. */
+export function setBrowserLoginInProgress(active: boolean): void {
+  browserLoginCount = Math.max(0, browserLoginCount + (active ? 1 : -1));
+}
+
+/** True while at least one teams_login browser sign-in is in progress. */
+export function isBrowserLoginInProgress(): boolean {
+  return browserLoginCount > 0;
+}
+
+/** Shared error for refreshes that stand down while a sign-in owns the profile. */
+function loginInProgressError(): McpError {
+  return createError(
+    ErrorCode.AUTH_REQUIRED,
+    'Teams sign-in is already in progress in another window; wait for it to finish, then retry.',
+    { retryable: false, suggestions: ['Wait for the in-progress teams_login sign-in to complete, then retry the tool call'] },
+  );
+}
+
 function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
   const run = () => withTimeout(refresh(), CORE_REFRESH_TIMEOUT_MS, 'token refresh');
   const pending = refreshQueue.then(run, run);
@@ -56,8 +85,33 @@ function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
   return pending;
 }
 
+/**
+ * Resolves once the current refresh queue has settled AND any in-flight
+ * core refresh has finished its catch-path cleanup. teams_login awaits
+ * this before opening a browser so it cannot collide with the Chromium
+ * profile lock held by an in-flight refresh — or with the wedged-browser
+ * kill that runs after the refresh deadline fires. Never rejects.
+ */
+export async function awaitRefreshQueue(): Promise<void> {
+  // Loop until the queue is stable: a refresh enqueued while we waited
+  // chains on the same tail and would otherwise slip past a one-shot
+  // snapshot — its session-state write could land after a forceNew wipe.
+  for (;;) {
+    const tail = refreshQueue;
+    const core = coreRefresh;
+    await Promise.all([tail, core ?? Promise.resolve()]);
+    if (refreshQueue === tail && coreRefresh === undefined) return;
+  }
+}
+
 /** Refresh core Teams credentials, with browser fallback. */
 export function refreshTokensViaBrowser(): Promise<Result<void>> {
+  // Entry gate, not just the browser fallback: the HTTP leg writes session
+  // state, and a write landing mid-sign-in (or mid-forceNew wipe) can
+  // resurrect the old account's session.
+  if (isBrowserLoginInProgress()) {
+    return Promise.resolve(err(loginInProgressError()));
+  }
   if (!coreRefresh) {
     coreRefresh = serializeRefresh(refreshCoreTokens)
       .catch(async (error): Promise<Result<void>> => {
@@ -95,11 +149,42 @@ async function cleanupWedgedBrowser(): Promise<void> {
 }
 
 /**
+ * Core-credential HTTP refresh serialized with every other refresh. Callers
+ * outside the refresh queue (e.g. the teams_login fast path) must not race
+ * session-state writes against an in-flight refreshTokensViaBrowser.
+ */
+export function refreshCoreTokensViaHttp(): Promise<Result<void>> {
+  // Re-check inside the serialized job: a refresh queued behind an in-flight
+  // one may already have left the session ready, making a second OAuth
+  // exchange redundant. Extractor caches are invalidated by the refresh's
+  // own writeSessionState + clearTokenCache, so this sees fresh state.
+  return serializeRefresh(() => coreSessionReady()
+    ? Promise.resolve(ok(undefined))
+    : refreshTokensViaHttp()).catch((error): Result<void> => {
+    if (error instanceof TimeoutError) {
+      return err(createError(ErrorCode.TIMEOUT,
+        `Core credential refresh timed out after ${CORE_REFRESH_TIMEOUT_MS / 1000}s.`));
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return err(createError(ErrorCode.UNKNOWN,
+      `Core credential refresh failed: ${message}`));
+  });
+}
+
+/**
  * Acquire an optional resource's token on demand with a single HTTP exchange.
  * Optional features never launch a browser, refresh core credentials, or return
  * an error that would trigger the server's auto-login.
  */
 function refreshOnDemandToken(resource: OnDemandResource, label: string, getValid: () => string | null): Promise<Result<string>> {
+  // Same entry gate as the core refresh: the exchange writes session state.
+  // Optional resources never return AUTH_REQUIRED/AUTH_EXPIRED (that would
+  // trigger the server's auto-login), so this maps to AUTH_INTERACTION_REQUIRED.
+  if (isBrowserLoginInProgress()) {
+    return Promise.resolve(err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
+      `Teams sign-in is already in progress in another window; the ${label} token is unavailable until it finishes.`,
+      { retryable: false })));
+  }
   return serializeRefresh(async () => {
     const result = await refreshTokensViaHttp(resource);
     if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
@@ -138,7 +223,7 @@ export function refreshGraphToken(): Promise<Result<string>> {
  * a live Substrate token and the messaging cookies. Stricter gaps (e.g. a
  * missing CSA token) are repaired by the top-up but do not fail the refresh.
  */
-function coreSessionUsable(): boolean {
+export function coreSessionUsable(): boolean {
   return extractSubstrateToken() !== null && extractMessageAuth() !== null;
 }
 
@@ -170,6 +255,12 @@ async function refreshCoreTokens(): Promise<Result<void>> {
  * silently refresh tokens using its session cookies.
  */
 async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
+  // teams_login owns the profile for the whole sign-in window: a second
+  // browser on it fails on the Chromium lock, so fail fast instead.
+  if (isBrowserLoginInProgress()) {
+    return err(loginInProgressError());
+  }
+
   let manager: BrowserManager | null = null;
 
   try {

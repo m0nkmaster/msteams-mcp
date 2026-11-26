@@ -427,8 +427,12 @@ npm run cli -- dump-config
 # Output as JSON for analysis
 npm run cli -- dump-config --json
 
-# Force re-login
-npm run cli -- login --force
+# Re-login (tries silent SSO first; opens a browser only if needed)
+npm run cli -- login
+
+# DESTRUCTIVE: wipes all local login data and forces an interactive sign-in.
+# Only with the user's approval, after plain login fails or signs in the wrong account.
+npm run cli -- login --force true
 ```
 
 ### Common Issues

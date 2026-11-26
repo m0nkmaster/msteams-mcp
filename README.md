@@ -286,9 +286,9 @@ msteams search --help
 # Check authentication status
 msteams status
 
-# Log in (opens a browser; tries silent SSO first)
+# Log in or re-login (opens a browser; tries silent SSO first)
 msteams login
-msteams login --force        # clear session and re-login
+msteams login --force true   # DESTRUCTIVE: wipes all local login data; only with the user's approval
 
 # Search messages
 msteams search "meeting notes"
