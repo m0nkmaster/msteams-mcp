@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserContext, Page } from 'playwright';
-import { ensureAuthenticated, isTeamsUrl, StaleTeamsSession } from './auth.js';
+import { ensureAuthenticated, isTeamsUrl, pickSoleAccount, StaleTeamsSession } from './auth.js';
 import { saveAuthenticatedSession } from './context.js';
 
 vi.mock('./context.js', () => ({ saveAuthenticatedSession: vi.fn() }));
@@ -61,5 +61,47 @@ describe('ensureAuthenticated', () => {
     const { page, login } = setup('https://login.microsoftonline.com/common');
     await expect(login(false, Date.now() - 1)).rejects.toThrow('before Teams provided usable credentials');
     expect(page.evaluate).not.toHaveBeenCalled();
+  });
+});
+
+describe('pickSoleAccount', () => {
+  const PICKER = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
+  function page(url: string, tiles: number) {
+    const click = vi.fn();
+    const locator = vi.fn(() => ({ count: vi.fn().mockResolvedValue(tiles), first: () => ({ click }) }));
+    return { page: { url: () => url, locator } as unknown as Page, click, locator };
+  }
+
+  it('clicks the only signed-in account on the Microsoft account picker', async () => {
+    const { page: p, click } = page(PICKER, 1);
+    await expect(pickSoleAccount(p)).resolves.toBe('clicked');
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  it('reports several accounts without choosing one', async () => {
+    const { page: p, click } = page(PICKER, 2);
+    await expect(pickSoleAccount(p)).resolves.toBe('several');
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when no account tile is shown', async () => {
+    const { page: p, click } = page(PICKER, 0);
+    await expect(pickSoleAccount(p)).resolves.toBe('none');
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('ignores pages outside Microsoft sign-in, such as a federated IdP', async () => {
+    const { page: p, locator } = page('https://idp.example.com/sso/saml', 1);
+    await expect(pickSoleAccount(p)).resolves.toBe('none');
+    expect(locator).not.toHaveBeenCalled();
+  });
+
+  it('stops headless sign-in at once when several accounts are offered', async () => {
+    const { page: p } = page(PICKER, 2);
+    const stub = Object.assign(p, { goto: vi.fn(), waitForTimeout: vi.fn(), evaluate: vi.fn() });
+    const started = Date.now();
+    await expect(ensureAuthenticated(stub, {} as BrowserContext, vi.fn(), false, true))
+      .rejects.toThrow('several accounts');
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });

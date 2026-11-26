@@ -189,6 +189,31 @@ export function isTeamsUrl(url: string): boolean {
   }
 }
 
+/** Account tiles on Microsoft's "Pick an account" page, excluding "Use another account" and the tile menus. */
+const ACCOUNT_TILE_SELECTOR = '#tilesHolder [role="button"][data-test-id]:not([data-test-id$="-menu-dots"])';
+
+/**
+ * Silent SSO can stop on Microsoft's account picker even when the profile's
+ * session cookies are valid. When exactly one signed-in account is offered,
+ * clicking it continues SSO with no credential entry. With several accounts
+ * the choice belongs to the user, so nothing is clicked.
+ */
+export type AccountPick = 'none' | 'clicked' | 'several';
+
+export async function pickSoleAccount(page: Page): Promise<AccountPick> {
+  try {
+    if (!new URL(page.url()).host.startsWith('login.microsoftonline.')) return 'none';
+    const tiles = page.locator(ACCOUNT_TILE_SELECTOR);
+    const count = await tiles.count();
+    if (count > 1) return 'several';
+    if (count !== 1) return 'none';
+    await tiles.first().click({ timeout: 3000 });
+    return 'clicked';
+  } catch {
+    return 'none';
+  }
+}
+
 /** The profile reached Teams, but silent SSO did not produce usable credentials. */
 export class StaleTeamsSession extends Error {}
 export class TeamsLoginTimeout extends Error {}
@@ -203,13 +228,25 @@ export async function ensureAuthenticated(
 ): Promise<void> {
   const log = onProgress ?? ((message: string) => logger.info('auth', message));
   log('Navigating to Teams...');
-  const stopAt = headless ? Math.min(deadline, Date.now() + 20_000) : deadline;
+  // Federated SSO (account picker → IdP → Teams) takes ~15 s headless, so allow margin.
+  const stopAt = headless ? Math.min(deadline, Date.now() + 45_000) : deadline;
   const remaining = stopAt - Date.now();
   if (remaining > 0) {
     await page.goto(TEAMS_URL, { waitUntil: 'commit', timeout: Math.min(30_000, remaining) });
   }
   log(headless ? 'Waiting for Teams credentials...' : 'Complete sign-in in the browser if prompted.');
+  let accountPicked = false;
   while (Date.now() < stopAt) {
+    if (headless && !accountPicked) {
+      const pick = await pickSoleAccount(page);
+      if (pick === 'several') {
+        throw new Error('Silent SSO reached an account picker with several accounts. Interactive sign-in is required.');
+      }
+      if (pick === 'clicked') {
+        accountPicked = true;
+        log('Selected the signed-in account on the account picker.');
+      }
+    }
     if (isTeamsUrl(page.url())) {
       if (showOverlay) await showLoginProgress(page, 'waiting');
       if (await saveAuthenticatedSession(context, !headless)) {
