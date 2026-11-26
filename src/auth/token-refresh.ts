@@ -49,6 +49,19 @@ let coreRefresh: Promise<Result<void>> | undefined;
  */
 let activeBrowser: BrowserManager | null = null;
 
+/**
+ * True while teams_login has a browser sign-in open on the persistent
+ * profile. A second Chromium instance on the same profile fails on the
+ * profile lock anyway, and a visible sign-in can run for minutes — so the
+ * browser fallback stands down for the whole window instead of colliding.
+ */
+let browserLoginInProgress = false;
+
+/** Marks a teams_login browser session so refreshViaHeadlessBrowser does not collide on the profile. */
+export function setBrowserLoginInProgress(active: boolean): void {
+  browserLoginInProgress = active;
+}
+
 function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
   const run = () => withTimeout(refresh(), CORE_REFRESH_TIMEOUT_MS, 'token refresh');
   const pending = refreshQueue.then(run, run);
@@ -57,12 +70,14 @@ function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Resolves once the current refresh queue has settled. teams_login awaits
+ * Resolves once the current refresh queue has settled AND any in-flight
+ * core refresh has finished its catch-path cleanup. teams_login awaits
  * this before opening a browser so it cannot collide with the Chromium
- * profile lock held by an in-flight refresh. Never rejects.
+ * profile lock held by an in-flight refresh — or with the wedged-browser
+ * kill that runs after the refresh deadline fires. Never rejects.
  */
 export function awaitRefreshQueue(): Promise<void> {
-  return refreshQueue.then(() => undefined);
+  return Promise.all([refreshQueue, coreRefresh ?? Promise.resolve()]).then(() => undefined);
 }
 
 /** Refresh core Teams credentials, with browser fallback. */
@@ -170,7 +185,7 @@ export function refreshGraphToken(): Promise<Result<string>> {
  * a live Substrate token and the messaging cookies. Stricter gaps (e.g. a
  * missing CSA token) are repaired by the top-up but do not fail the refresh.
  */
-function coreSessionUsable(): boolean {
+export function coreSessionUsable(): boolean {
   return extractSubstrateToken() !== null && extractMessageAuth() !== null;
 }
 
@@ -202,6 +217,16 @@ async function refreshCoreTokens(): Promise<Result<void>> {
  * silently refresh tokens using its session cookies.
  */
 async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
+  // teams_login owns the profile for the whole sign-in window: a second
+  // browser on it fails on the Chromium lock, so fail fast instead.
+  if (browserLoginInProgress) {
+    return err(createError(
+      ErrorCode.AUTH_REQUIRED,
+      'Teams sign-in is already in progress in another window; wait for it to finish, then retry.',
+      { retryable: false, suggestions: ['Wait for the in-progress teams_login sign-in to complete, then retry the tool call'] },
+    ));
+  }
+
   let manager: BrowserManager | null = null;
 
   try {

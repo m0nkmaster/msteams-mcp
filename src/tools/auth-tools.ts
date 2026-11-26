@@ -21,9 +21,9 @@ import {
   extractCsaToken,
 } from '../auth/token-extractor.js';
 import { coreSessionReady, messagingUsable } from '../auth/core-credentials.js';
-import { awaitRefreshQueue, refreshCoreTokensViaHttp } from '../auth/token-refresh.js';
+import { awaitRefreshQueue, refreshCoreTokensViaHttp, coreSessionUsable, setBrowserLoginInProgress } from '../auth/token-refresh.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
-import { ErrorCode, createError } from '../types/errors.js';
+import { ErrorCode, createError, type McpError } from '../types/errors.js';
 import { TOKEN_VALID_THRESHOLD_MINUTES } from '../constants.js';
 import * as log from '../utils/logger.js';
 import { resetAssignmentsAvailability, clearRegionCache } from '../utils/auth-guards.js';
@@ -68,36 +68,83 @@ const statusToolDefinition: Tool = {
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Refresh failures that mean the saved sign-in state itself is broken. */
+const AUTH_STATE_CODES: ReadonlySet<ErrorCode> = new Set([
+  ErrorCode.AUTH_REQUIRED,
+  ErrorCode.AUTH_EXPIRED,
+  ErrorCode.AUTH_INTERACTION_REQUIRED,
+]);
+
 /**
- * Verifies messaging auth actually works after a sign-in before success is
+ * Verifies the session is actually usable after a sign-in before success is
  * reported. Sign-in alone does not mint skypetoken_asm — that cookie comes
- * from the HTTP Skype-token exchange — so when the session is not ready this
- * runs the same serialized refresh teams_login's fast path uses, then
- * requires messagingUsable(). Returns a failure ToolResult when messaging
- * stays unusable: reporting success here would loop login -> retry forever.
+ * from the HTTP Skype-token exchange — and refreshTokensViaHttp tolerates a
+ * failed scope, so messaging can work while Substrate is missing. When the
+ * session is not ready this runs the same serialized refresh teams_login's
+ * fast path uses, then requires coreSessionUsable() AND messagingUsable().
+ * Returns a failure ToolResult otherwise: reporting success here would loop
+ * login -> retry forever.
  */
 async function messagingAuthFailure(): Promise<ToolResult | null> {
-  let refreshError: string | undefined;
+  let refreshError: McpError | undefined;
   if (!coreSessionReady()) {
     const refresh = await refreshCoreTokensViaHttp();
     if (!refresh.ok) {
-      refreshError = refresh.error.message;
-      log.warn('login', `Could not refresh credentials over HTTP: ${refreshError}`);
+      refreshError = refresh.error;
+      log.warn('login', `Could not refresh credentials over HTTP: ${refreshError.message}`);
     }
   }
-  if (messagingUsable()) return null;
+  if (coreSessionUsable() && messagingUsable()) return null;
 
-  const detail = refreshError ? ` Refresh error: ${refreshError}` : '';
+  const detail = refreshError
+    ? ` Refresh error: ${refreshError.message}`
+    : ' The Skype token exchange failed or returned no cookie; see the server log for details.';
+
+  if (!messagingUsable()) {
+    // AUTH_* refresh failures mean the local auth state itself is broken —
+    // the one case where forceNew (a fresh sign-in) can actually help.
+    if (refreshError !== undefined && AUTH_STATE_CODES.has(refreshError.code)) {
+      return {
+        success: false,
+        error: createError(ErrorCode.API_ERROR,
+          `Teams sign-in succeeded, but messaging credentials (skypetoken_asm) could not be minted.${detail} Do not call teams_login again in a loop; only with the user's approval, teams_login with { "forceNew": true } may help: it deletes all local login data and starts a fresh sign-in.`,
+          {
+            retryable: false,
+            suggestions: [
+              'Tell the user Teams sign-in succeeded but messaging authorization failed, and show them this error',
+              'Only with the user\'s approval, call teams_login with { "forceNew": true } to clear the saved sign-in state and retry',
+              'Retry later after checking the network connection and Conditional Access policies; teams_login does not retry on its own',
+            ],
+          }),
+      };
+    }
+    return {
+      success: false,
+      error: createError(ErrorCode.API_ERROR,
+        `Teams sign-in succeeded, but messaging credentials (skypetoken_asm) could not be minted.${detail} Do not call teams_login again in a loop; even with the user's approval, forceNew will not fix this: it only deletes local login data, and a fresh sign-in hits the same failure.`,
+        {
+          retryable: false,
+          suggestions: [
+            'Tell the user Teams sign-in succeeded but messaging authorization failed, and show them this error',
+            'Do not call teams_login again in a loop; even with the user\'s approval, forceNew will not fix this failure',
+            'Retry later after checking the network connection and Conditional Access policies; teams_login does not retry on its own',
+          ],
+        }),
+    };
+  }
+
+  // Messaging works but Substrate is missing: the next tool call would fail
+  // auth and bounce straight back to login, so report the gap instead.
   return {
     success: false,
     error: createError(ErrorCode.API_ERROR,
-      `Teams sign-in succeeded, but messaging credentials (skypetoken_asm) could not be minted.${detail} Do not call teams_login again in a loop; even with the user's approval, forceNew will not fix this: it only deletes local login data, and a fresh sign-in hits the same failure.`,
+      `Teams sign-in succeeded, but the Substrate session token is missing.${detail} Do not call teams_login again in a loop; a later refresh may mint it.`,
       {
         retryable: false,
         suggestions: [
-          'Tell the user Teams sign-in succeeded but messaging authorization failed, and show them this error',
-          'Do not call teams_login again in a loop; even with the user\'s approval, forceNew will not fix this failure',
-          'Retry later, or check the network connection and Conditional Access policies',
+          'Tell the user Teams sign-in succeeded but the session is incomplete, and show them this error',
+          'Do not call teams_login again in a loop; retry the failed tool call later instead',
+          'If it keeps failing, check the network connection and Conditional Access policies',
         ],
       }),
   };
@@ -117,7 +164,12 @@ async function handleLogin(
     // earlier account can survive to be mixed into the new login.
     clearAllLocalData();
     clearRegionCache();
-    return loginInVisibleBrowser();
+    setBrowserLoginInProgress(true);
+    try {
+      return await loginInVisibleBrowser();
+    } finally {
+      setBrowserLoginInProgress(false);
+    }
   }
 
   // Fast path: if tokens are still valid, skip browser entirely — but only
@@ -151,37 +203,44 @@ async function handleLogin(
   // The persistent browser profile retains Microsoft's long-lived session cookies,
   // so headless SSO can succeed even without a session-state file.
   // Wait out any in-flight refresh first: it holds the Chromium profile lock,
-  // and launching a second browser against it fails outright.
+  // and launching a second browser against it fails outright. The flag stays
+  // up for the whole sign-in (headless, fallback gap, visible browser) so an
+  // auto-refresh cannot slip a browser onto the profile mid-login.
   await awaitRefreshQueue();
-  const headless = await createBrowserContext({ headless: true });
+  setBrowserLoginInProgress(true);
   try {
-    await ensureAuthenticated(
-      headless.page,
-      headless.context,
-      (msg) => log.info('login:headless', msg),
-      false, // No overlay in headless
-      true   // Headless mode - throw immediately if user interaction required
-    );
-    await closeBrowser(headless, true);
+    const headless = await createBrowserContext({ headless: true });
+    try {
+      await ensureAuthenticated(
+        headless.page,
+        headless.context,
+        (msg) => log.info('login:headless', msg),
+        false, // No overlay in headless
+        true   // Headless mode - throw immediately if user interaction required
+      );
+      await closeBrowser(headless, true);
 
-    // Sign-in succeeded but that does not prove messaging auth works: a
-    // visible browser cannot mint skypetoken_asm either, so do NOT fall
-    // through — report the failure instead of a false success.
-    const failure = await messagingAuthFailure();
-    if (failure) return failure;
+      // Sign-in succeeded but that does not prove the session is usable: a
+      // visible browser cannot mint skypetoken_asm either, so do NOT fall
+      // through — report the failure instead of a false success.
+      const failure = await messagingAuthFailure();
+      if (failure) return failure;
 
-    return {
-      success: true,
-      data: {
-        message: 'Login completed silently via SSO. Session has been saved.',
-      },
-    };
-  } catch (error) {
-    log.warn('login:headless', `Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
-    await closeBrowser(headless, false).catch(() => {});
+      return {
+        success: true,
+        data: {
+          message: 'Login completed silently via SSO. Session has been saved.',
+        },
+      };
+    } catch (error) {
+      log.warn('login:headless', `Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
+      await closeBrowser(headless, false).catch(() => {});
+    }
+
+    return await loginInVisibleBrowser();
+  } finally {
+    setBrowserLoginInProgress(false);
   }
-
-  return loginInVisibleBrowser();
 }
 
 /** Opens a visible browser for the user to sign in, then saves the session. */

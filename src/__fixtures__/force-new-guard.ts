@@ -16,7 +16,7 @@ import ts from 'typescript';
 
 const MENTION = /force[_\s-]?new|--force\b|force\s*[:=]\s*true/gi;
 const EXEMPT = /without forceNew/gi;
-const NEGATION = /\b(?:not|never|don't|do not)\b/i;
+const NEGATION = /\b(?:not|never|don['’]t|do not)\b/i;
 const APPROVAL = /ask the user to approve|with the user'?s approval|user approval only|only with the user'?s approval/gi;
 const SENTENCE_END = /[.!?;:]\s|\n/g;
 const APPROVAL_WINDOW = 100;

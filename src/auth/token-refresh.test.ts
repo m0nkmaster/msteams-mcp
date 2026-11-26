@@ -22,7 +22,7 @@ vi.mock('./token-refresh-http.js', () => ({
   refreshTokensViaHttp: vi.fn(),
 }));
 
-import { refreshTokensViaBrowser, refreshAssignmentsToken, refreshCoreTokensViaHttp } from './token-refresh.js';
+import { awaitRefreshQueue, refreshTokensViaBrowser, refreshAssignmentsToken, refreshCoreTokensViaHttp, setBrowserLoginInProgress } from './token-refresh.js';
 import {
   extractSubstrateToken,
   extractMessageAuth,
@@ -110,21 +110,34 @@ describe('refreshTokensViaBrowser', () => {
   });
 
   it('skips the HTTP exchange when an in-flight refresh already left the session ready', async () => {
-    completeSession();
+    // Session starts incomplete and only becomes ready when the first
+    // refresh resolves — an early coreSessionReady() check outside the
+    // serialized job would fire a second exchange and fail this test.
+    vi.mocked(extractMessageAuth).mockReturnValue(null);
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });
     let resolveFirst!: (value: Result<void>) => void;
     const firstCall = new Promise<Result<void>>(resolve => { resolveFirst = resolve; });
     vi.mocked(refreshTokensViaHttp)
-      .mockImplementationOnce(() => firstCall)
+      .mockImplementationOnce(async () => {
+        const result = await firstCall;
+        completeSession();
+        return result;
+      })
       .mockResolvedValue({ ok: true, value: undefined });
 
     const browserRefresh = refreshTokensViaBrowser();
     let httpRefresh: Promise<Result<void>> | undefined;
+    let httpSettled = false;
     try {
-      httpRefresh = refreshCoreTokensViaHttp();
+      httpRefresh = refreshCoreTokensViaHttp().then(result => {
+        httpSettled = true;
+        return result;
+      });
 
       // The queued HTTP refresh must not reach refreshTokensViaHttp while the
-      // first attempt is still in flight.
+      // first attempt is still in flight, and it must still be pending then.
       await new Promise(resolve => setTimeout(resolve, 10));
+      expect(httpSettled).toBe(false);
       expect(vi.mocked(refreshTokensViaHttp)).toHaveBeenCalledTimes(1);
 
       resolveFirst({ ok: true, value: undefined });
@@ -138,6 +151,64 @@ describe('refreshTokensViaBrowser', () => {
       // Never leave the shared refresh queue wedged on the deferred call.
       resolveFirst({ ok: true, value: undefined });
       await Promise.allSettled([browserRefresh, httpRefresh]);
+    }
+  });
+
+  it('awaitRefreshQueue waits for wedged-browser cleanup after a refresh timeout', async () => {
+    vi.useFakeTimers();
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_REQUIRED, 'no refresh token'),
+    });
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+    // The browser fallback hangs, so the deadline abandons it and the
+    // catch-path cleanup (closeBrowser -> profile kill) is still running
+    // when the queue tail settles. awaitRefreshQueue must wait for THAT.
+    vi.mocked(ensureAuthenticated).mockImplementationOnce(() => new Promise(() => {}));
+    let resolveClose!: () => void;
+    const closeGate = new Promise<void>(resolve => { resolveClose = resolve; });
+    vi.mocked(closeBrowser).mockImplementation(() => closeGate as never);
+
+    const browserRefresh = refreshTokensViaBrowser();
+    let queueSettled = false;
+    const queueWait = awaitRefreshQueue().then(() => { queueSettled = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(CORE_REFRESH_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Queue tail settled at the deadline, but cleanup still holds the
+      // profile — the barrier must not have resolved yet.
+      expect(queueSettled).toBe(false);
+
+      resolveClose();
+      await Promise.allSettled([browserRefresh, queueWait]);
+      expect(queueSettled).toBe(true);
+    } finally {
+      resolveClose();
+      await Promise.allSettled([browserRefresh, queueWait]);
+      vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips the browser fallback while a teams_login browser session is in progress', async () => {
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_REQUIRED, 'no refresh token'),
+    });
+    setBrowserLoginInProgress(true);
+    try {
+      const result = await refreshTokensViaBrowser();
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.AUTH_REQUIRED);
+      }
+      // A login browser already owns the profile: launching a second one
+      // would fail on the Chromium lock anyway — fail fast instead.
+      expect(createBrowserContext).not.toHaveBeenCalled();
+    } finally {
+      setBrowserLoginInProgress(false);
     }
   });
 
