@@ -776,8 +776,30 @@ describe('markdownToTeamsHtml', () => {
     expect(markdownToTeamsHtml('Line 1\nLine 2')).toBe('<p>Line 1<br>Line 2</p>');
   });
 
-  it('converts double newlines to separate paragraphs', () => {
-    expect(markdownToTeamsHtml('Para 1\n\nPara 2')).toBe('<p>Para 1</p><p>Para 2</p>');
+  it('keeps a blank line between paragraphs as an empty paragraph (Teams client shape)', () => {
+    expect(markdownToTeamsHtml('Para 1\n\nPara 2')).toBe('<p>Para 1</p><p>&nbsp;</p><p>Para 2</p>');
+  });
+
+  it('keeps one empty paragraph per blank line', () => {
+    expect(markdownToTeamsHtml('Para 1\n\n\nPara 2')).toBe(
+      '<p>Para 1</p><p>&nbsp;</p><p>&nbsp;</p><p>Para 2</p>'
+    );
+  });
+
+  it('adds no empty paragraph next to blocks Teams already spaces', () => {
+    expect(markdownToTeamsHtml('Intro\n\n- a\n- b\n\nOutro')).toBe(
+      '<p>Intro</p><ul><li>a</li><li>b</li></ul><p>Outro</p>'
+    );
+  });
+
+  it('adds no empty paragraph at the start or end', () => {
+    expect(markdownToTeamsHtml('\n\nOnly\n\n')).toBe('<p>Only</p>');
+  });
+
+  it('renders blockquotes as <blockquote>', () => {
+    expect(markdownToTeamsHtml('Before\n\n> quoted\n\nAfter')).toBe(
+      '<p>Before</p><blockquote><p>quoted</p></blockquote><p>After</p>'
+    );
   });
 
   it('converts unordered lists', () => {
@@ -812,7 +834,7 @@ describe('markdownToTeamsHtml', () => {
   it('handles complex multi-paragraph message', () => {
     const input = 'Hello **team**!\n\nHere are the updates:\n\n- Item 1\n- Item 2\n\nThanks!';
     expect(markdownToTeamsHtml(input)).toBe(
-      '<p>Hello <b>team</b>!</p><p>Here are the updates:</p><ul><li>Item 1</li><li>Item 2</li></ul><p>Thanks!</p>'
+      '<p>Hello <b>team</b>!</p><p>&nbsp;</p><p>Here are the updates:</p><ul><li>Item 1</li><li>Item 2</li></ul><p>Thanks!</p>'
     );
   });
 
