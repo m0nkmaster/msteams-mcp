@@ -230,7 +230,8 @@ npm run cli                                     # Command index
 npm run cli -- help send_message                # One command in detail
 npm run cli -- find_channel --query "support"   # Full tool name
 npm run cli -- search "your query"              # Bare value -> --query
-npm run cli -- login --force true               # Clear session and re-login
+npm run cli -- login                            # Log in / re-login (tries silent SSO first)
+npm run cli -- login --force true               # DESTRUCTIVE: wipes all local login data; user approval only
 npm run cli -- search "your query" --json       # Tool payload as JSON
 npm run cli -- search "your query" --from 25 --size 25  # Pagination
 ```

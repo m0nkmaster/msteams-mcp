@@ -18,4 +18,4 @@ stale_after: 2027-05-25
 
 ## Do not
 
-- Do not use `forceNew: true`: it deletes the whole config directory and forces an interactive sign-in. Only with George's approval. (Default error suggestions still say otherwise; BACKLOG.md task "Stop default auth-error advice from recommending `forceNew`".)
+- Do not use `forceNew: true`: it deletes the whole config directory and forces an interactive sign-in. Only with George's approval.
