@@ -371,3 +371,54 @@ export const favoritesFolderResponse = {
     },
   ],
 };
+
+/**
+ * One entry of a real chatsvc message's `properties.files` (JSON-encoded array
+ * on the wire), captured read-only from a file the Teams web client attached
+ * in a meeting chat on 2026-11-24. Structure and key order are verbatim; every
+ * value (names, ids, URLs) is fake. The Teams client shared it with a `view`
+ * link of scope `users` granted to the chat's other members:
+ * `fileInfo.shareId` is that permission's id and `fileInfo.shareUrl` its
+ * `link.webUrl`; `permissionScope` is `SpecificPeople`.
+ */
+export const chatsvcFilesPropertyEntry = {
+  itemid: '11111111-2222-4333-8444-555555555555',
+  fileName: 'design-notes.md',
+  fileType: 'md',
+  fileInfo: {
+    itemId: '01FAKEDRIVEITEMID0000000000000000AB',
+    fileUrl: 'https://contoso-my.sharepoint.com/personal/jane_doe_contoso_com/Documents/Microsoft%20Teams%20Chat%20Files/design-notes.md',
+    siteUrl: 'https://contoso-my.sharepoint.com/personal/jane_doe_contoso_com/',
+    serverRelativeUrl: '',
+    shareUrl: 'https://contoso-my.sharepoint.com/:t:/g/personal/jane_doe_contoso_com/FAKESHARETOKEN0000000000000000000000000000000',
+    shareId: '66666666-7777-4888-9999-aaaaaaaaaaaa',
+  },
+  fileChicletState: { serviceName: 'p2p', state: 'active' },
+  '@type': 'http://schema.skype.com/File',
+  version: 2,
+  id: '11111111-2222-4333-8444-555555555555',
+  baseUrl: 'https://contoso-my.sharepoint.com/personal/jane_doe_contoso_com/',
+  objectUrl: 'https://contoso-my.sharepoint.com/personal/jane_doe_contoso_com/Documents/Microsoft%20Teams%20Chat%20Files/design-notes.md',
+  openUrl: null,
+  type: 'md',
+  title: 'design-notes.md',
+  state: 'active',
+  altText: null,
+  chicletBreadcrumbs: null,
+  providerData: '',
+  botFileProperties: {},
+  isUploadError: null,
+  progressComplete: null,
+  permissionScope: 'SpecificPeople',
+  filePreview: { previewUrl: '', previewHeight: 0, previewWidth: 0 },
+  sharepointIds: {
+    driveId: 'b!FAKEDRIVEID000000000000000000000000000000000000000000000000000',
+    listId: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff',
+    listItemUniqueId: '11111111-2222-4333-8444-555555555555',
+    siteId: '12121212-3434-4565-8787-909090909090',
+    siteUrl: 'https://contoso-my.sharepoint.com/personal/jane_doe_contoso_com',
+    webId: '13131313-2424-4535-8646-757575757575',
+  },
+  publication: null,
+  site: null,
+};

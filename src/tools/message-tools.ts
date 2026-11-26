@@ -26,9 +26,10 @@ import {
   waitForReply,
 } from '../api/chatsvc-api.js';
 import { getFavorites, addFavorite, removeFavorite, getCustomEmojis } from '../api/csa-api.js';
+import { prepareChatAttachments, clearPreparedAttachments, type ChatsvcFileEntry } from '../api/chat-attachments-api.js';
 import { parseTeamsMessageUrl } from '../utils/parsers.js';
-import { ErrorCode, createError } from '../types/errors.js';
-import { SELF_CHAT_ID, MAX_THREAD_LIMIT, DEFAULT_THREAD_LIMIT, MAX_WAIT_SECONDS, STANDARD_EMOJIS } from '../constants.js';
+import { ErrorCode, createError, type McpError } from '../types/errors.js';
+import { SELF_CHAT_ID, MAX_THREAD_LIMIT, DEFAULT_THREAD_LIMIT, MAX_WAIT_SECONDS, STANDARD_EMOJIS, ATTACHMENT_REUSE_TTL_MS } from '../constants.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -41,6 +42,7 @@ export const SendMessageInputSchema = z.object({
   contentType: z.enum(['auto', 'text', 'html', 'markdown']).optional(),
   subject: z.string().optional(),
   scheduleAt: z.string().optional(),
+  files: z.array(z.string().min(1)).min(1).max(10).optional(),
 });
 
 export const FavoriteInputSchema = z.object({
@@ -138,7 +140,7 @@ export const WaitForReplyInputSchema = z.object({
 
 const sendMessageToolDefinition: Tool = {
   name: 'teams_send_message',
-  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, newlines, and tables. Tables use standard markdown table syntax:\n| Item | Price |\n|------|-------|\n| Apple | $1.00 |\n(with a header row, a |---|---| separator row, then data rows — they render as a real table in Teams). Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation.',
+  description: 'Send a message to a Teams conversation. Use markdown for formatting (not HTML): **bold**, *italic*, ~~strikethrough~~, `code`, ```code blocks```, lists, newlines, and tables. Tables use standard markdown table syntax:\n| Item | Price |\n|------|-------|\n| Apple | $1.00 |\n(with a header row, a |---|---| separator row, then data rows — they render as a real table in Teams). Supports @mentions: people with @[Name](mri) (MRI from teams_search_people) and channel tags with @[TagName](tag:tagId) (IDs from teams_get_tags). Markdown links [text](url) support http(s) and mailto. Defaults to self-notes (48:notes). For channel thread replies, provide replyToMessageId. For a new channel thread with a title, provide subject. To schedule for later, provide scheduleAt (ISO 8601). Set contentType to "text" to send content verbatim without markdown interpretation. To attach files, provide files (absolute local paths, up to 10).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -165,7 +167,12 @@ const sendMessageToolDefinition: Tool = {
       },
       scheduleAt: {
         type: 'string',
-        description: 'Schedule the message for future delivery. ISO 8601 (e.g. "2026-04-11T09:00:00Z"); a timezone-less value is treated as UTC. Cannot be combined with @mentions or replyToMessageId.',
+        description: 'Schedule the message for future delivery. ISO 8601 (e.g. "2026-04-11T09:00:00Z"); a timezone-less value is treated as UTC. Cannot be combined with @mentions, replyToMessageId or files.',
+      },
+      files: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Absolute local file paths to attach (max 10, each at most 4 MB). Each file must be inside the upload root (TEAMS_MCP_UPLOAD_DIR if set, otherwise your home directory); dotfiles/dot-folders and app-data folders are refused. Files upload to your OneDrive "Microsoft Teams Chat Files" folder and are shared read-only with the chat\'s members. Works in 1:1, group and meeting chats and self-notes; not in channels, and not with scheduleAt. Uses Microsoft Graph via the existing session; if Graph is unavailable the call fails before anything is sent.',
       },
     },
     required: ['content'],
@@ -551,18 +558,74 @@ const waitForReplyToolDefinition: Tool = {
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * True when a send failure leaves delivery ambiguous: the request may have
+ * reached Teams before the failure surfaced. httpRequest formats HTTP errors
+ * as "HTTP <status>: ...", so a 5xx API_ERROR counts; definite rejections
+ * (4xx, INVALID_INPUT, AUTH_*, NOT_FOUND, RATE_LIMITED) do not.
+ */
+function isAmbiguousSendFailure(error: McpError): boolean {
+  if (error.code === ErrorCode.TIMEOUT || error.code === ErrorCode.NETWORK_ERROR) {
+    return true;
+  }
+  return error.code === ErrorCode.API_ERROR && /^HTTP 5\d\d\b/.test(error.message);
+}
+
 async function handleSendMessage(
   input: z.infer<typeof SendMessageInputSchema>
 ): Promise<ToolResult> {
+  let files: ChatsvcFileEntry[] | undefined;
+  let attachmentPaths: string[] | undefined;
+  if (input.files && input.files.length > 0) {
+    if (input.scheduleAt) {
+      return {
+        success: false,
+        error: createError(ErrorCode.INVALID_INPUT,
+          'Attachments cannot be combined with scheduleAt. Remove scheduleAt or files.'),
+      };
+    }
+    const prepared = await prepareChatAttachments(input.conversationId, input.files);
+    if (!prepared.ok) {
+      return { success: false, error: prepared.error };
+    }
+    files = prepared.value;
+    attachmentPaths = input.files;
+  }
+
   const result = await sendMessage(input.conversationId, input.content, {
     replyToMessageId: input.replyToMessageId,
     contentType: input.contentType,
     subject: input.subject,
     scheduleAt: input.scheduleAt,
+    files,
   });
 
   if (!result.ok) {
+    if (files && files.length > 0) {
+      // The uploads already happened and stay cached for the retry window;
+      // say so, or the caller will assume nothing was sent at all. When the
+      // send itself failed ambiguously (timeout, network, 5xx) the message
+      // may still have been delivered — do not claim it was not.
+      const minutes = Math.round(ATTACHMENT_REUSE_TTL_MS / 60000);
+      const delivery = isAmbiguousSendFailure(result.error)
+        ? 'the message may or may not have been delivered - check the chat with teams_get_thread before retrying'
+        : 'the message was not sent';
+      return {
+        success: false,
+        error: createError(result.error.code,
+          `${result.error.message} ${files.length} file(s) were uploaded to your OneDrive "Microsoft Teams Chat Files" folder and shared, but ${delivery}; retrying within ${minutes} minutes reuses them.`,
+          {
+            retryable: result.error.retryable,
+            retryAfterMs: result.error.retryAfterMs,
+            suggestions: result.error.suggestions,
+          }),
+      };
+    }
     return { success: false, error: result.error };
+  }
+
+  if (files && files.length > 0 && attachmentPaths) {
+    clearPreparedAttachments(input.conversationId, attachmentPaths);
   }
 
   // Scheduled messages return a draft confirmation, not a sent message.

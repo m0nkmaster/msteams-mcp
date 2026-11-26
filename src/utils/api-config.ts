@@ -122,6 +122,10 @@ export const CHATSVC_API = {
   singleMessage: (region: string, conversationId: string, messageId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}`,
 
+  /** Get thread details, including its members list. */
+  thread: (region: string, threadId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/api/chatsvc/${region}/v1/threads/${encodeURIComponent(threadId)}`,
+
   /** List all recent conversations with inline properties. */
   conversations: (region: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=200`,
@@ -252,6 +256,39 @@ export const ASSIGNMENTS_API = {
   /** Undo turn-in (unsubmit) a submission (POST). */
   submissionUnsubmit: (classId: string, assignmentId: string, submissionId: string, baseUrl = DEFAULT_ASSIGNMENTS_BASE_URL) =>
     `${baseUrl}/api/v1.0/edu/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/unsubmit`,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Microsoft Graph API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Microsoft Graph v1.0 endpoints for OneDrive file operations (downloads and
+ * chat-message attachments). Graph is a single worldwide endpoint — there are
+ * no regional variants like chatsvc.
+ */
+export const GRAPH_API = {
+  base: 'https://graph.microsoft.com/v1.0',
+
+  /**
+   * Simple-upload content endpoint for a file inside the sender's OneDrive
+   * "Microsoft Teams Chat Files" folder. `conflictBehavior=rename` keeps a
+   * same-name upload safe.
+   */
+  uploadChatFileContent: (name: string) =>
+    `${GRAPH_API.base}/me/drive/root:/Microsoft%20Teams%20Chat%20Files/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=rename`,
+
+  /** Drive item read-back (sharepointIds requires $select at the call site). */
+  driveItem: (itemId: string) =>
+    `${GRAPH_API.base}/me/drive/items/${itemId}`,
+
+  /** Creates a sharing link on a drive item. */
+  createLink: (itemId: string) =>
+    `${GRAPH_API.base}/me/drive/items/${itemId}/createLink`,
+
+  /** Grants permission on a share id (`u!<base64url(webUrl)>`). */
+  grantPermission: (shareId: string) =>
+    `${GRAPH_API.base}/shares/${shareId}/permission/grant`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

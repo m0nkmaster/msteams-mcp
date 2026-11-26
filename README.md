@@ -130,7 +130,7 @@ See [CLI Usage](#cli-usage) for commands, or run `msteams` for the command list.
 
 | Tool                   | Description                                                                                                                                                                                                           |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `teams_send_message`   | Send a message (default: self-chat/notes). `replyToMessageId` for thread replies, `subject` for a new channel thread, `scheduleAt` to schedule, `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting |
+| `teams_send_message`   | Send a message (default: self-chat/notes). `replyToMessageId` for thread replies, `subject` for a new channel thread, `scheduleAt` to schedule, `contentType` (`auto`/`text`/`html`/`markdown`) to control formatting, `files` to attach up to 10 local files (each up to 4 MB) |
 | `teams_wait_for_reply` | Block until a new message arrives (server-side poll, capped ~110s); idempotent `after`/`nextAfter` cursor - pair with `teams_send_message`                                                                            |
 | `teams_edit_message`   | Edit one of your own messages (`contentType` supported)                                                                                                                                                               |
 | `teams_delete_message` | Delete one of your own messages (soft delete)                                                                                                                                                                         |
@@ -206,6 +206,8 @@ See [CLI Usage](#cli-usage) for commands, or run `msteams` for the command list.
 `teams_get_shared_files` returns both files (name, extension, URL, size) and links (URL, title), along with who shared each item. Works for channels, group chats, 1:1 chats, and meeting chats.
 
 `teams_download_file` takes a file's `webUrl` from `teams_get_shared_files`, or an attachment's `fileUrl` from `teams_get_assignment`. It downloads through Microsoft Graph using the Teams client's own access, so no extra sign-in is needed. Files stream straight to disk, never overwrite an existing file, and are removed if the download fails part-way. Links and Microsoft Forms aren't files and can't be downloaded.
+
+**Attachments.** `teams_send_message` with `files` uploads each file to your OneDrive "Microsoft Teams Chat Files" folder (the folder Teams itself uses), shares it read-only with the chat's other members, and posts it as an attachment. It works in 1:1, group and meeting chats and self-notes, not in channels or with `scheduleAt`. Paths must be absolute and inside the upload root: `TEAMS_MCP_UPLOAD_DIR` when set (absolute path), otherwise your home directory. Dotfiles, dot-folders, credential files, the server's config folder and app-data folders (`AppData` on Windows, `Library` on macOS) are refused. If any file fails, nothing is sent. Like downloads, it uses the Teams client's Microsoft Graph access, so no extra sign-in is needed; if Graph cannot be authorized, run `teams_login` and retry.
 
 ### Assignments (education tenants only)
 
