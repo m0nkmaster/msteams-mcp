@@ -3,13 +3,13 @@ type: Decision
 title: Chat attachments share like the Teams client
 description: Upload to OneDrive "Microsoft Teams Chat Files", createLink view/users, grant read to the chat's other members
 tags: [attachments, graph, sharing, chatsvc]
-status: draft
+status: stable
 stale_after: 2027-05-25
 ---
 
 # Chat attachments share like the Teams client
 
-**Decided 2026-11-25** (branch `feat/send-message-attachments`). Status `draft` until the manual recipient test passes.
+**Decided 2026-11-25** (branch `feat/send-message-attachments`). Verified in 1:1 chats on 2026-11-26.
 
 ## Decision
 
@@ -29,5 +29,6 @@ Members: 1:1 chats derive both ids from `19:<a>_<b>@unq.gbl.spaces` (the caller 
 
 ## Open
 
-- UNCONFIRMED: `grant` accepts `objectId` recipients (needs a second person). Fallback: grant by email via `profile-api`.
-- Guests and very large meeting chats untested. See BACKLOG.md pre-mortem.
+- CONFIRMED 2026-11-26: `grant` accepts `objectId` recipients. Verified live 2026-11-26 in two real 1:1 chats (server messages `1795690515745`, `1795691066392`): Graph shows each file's `view`/`users` link with role `read` granted to exactly the other member's object ID, and a colleague opened both attachments in Teams.
+- Untested live: group chats, meeting chats, guests, very large meeting chats. Fallback if a grant is refused: grant by email via `profile-api`.
+- Windows CLI trap: multi-line content via `npm run cli` loses everything after the first newline (BACKLOG.md). See BACKLOG.md pre-mortem.
