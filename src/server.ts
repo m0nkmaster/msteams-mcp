@@ -27,7 +27,7 @@ import {
   extractCsaToken,
   getUserProfile,
 } from './auth/token-extractor.js';
-import { refreshTokensViaBrowser } from './auth/token-refresh.js';
+import { refreshTokensViaBrowser, isBrowserLoginInProgress } from './auth/token-refresh.js';
 
 // API modules
 import { getFavorites } from './api/csa-api.js';
@@ -286,6 +286,18 @@ export class TeamsServer {
 
         // Auto-login failed — direct to a plain teams_login, which can open a visible sign-in
         log.error('auto-login', 'Automatic re-authentication failed.');
+        // A refresh that stood down because a sign-in is already open must
+        // not be told to start another one — surface the real cause instead.
+        if (isBrowserLoginInProgress()) {
+          return this.formatError(createError(
+            ErrorCode.AUTH_REQUIRED,
+            'ACTION REQUIRED: A Teams sign-in is already in progress in another window. Wait for it to finish, then retry the request.',
+            { retryable: false, suggestions: [
+              'Wait for the in-progress teams_login sign-in window to complete, then retry the original request',
+              'If no sign-in window is visible, the earlier attempt may have stalled; call teams_login again once it clears',
+            ] }
+          ));
+        }
         return this.formatError(createError(
           ErrorCode.AUTH_REQUIRED,
           'ACTION REQUIRED: Teams session has expired and automatic re-authentication (silent token refresh and headless SSO) failed. Call teams_login without forceNew: unlike automatic re-authentication it can open a browser window for the user to sign in.',

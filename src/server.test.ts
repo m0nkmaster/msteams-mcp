@@ -14,6 +14,7 @@ vi.mock('./tools/registry.js', () => ({
 
 vi.mock('./auth/token-refresh.js', () => ({
   refreshTokensViaBrowser: vi.fn(),
+  isBrowserLoginInProgress: vi.fn(() => false),
 }));
 
 vi.mock('./api/csa-api.js', () => ({
@@ -22,7 +23,7 @@ vi.mock('./api/csa-api.js', () => ({
 
 import { TeamsServer } from './server.js';
 import { invokeTool } from './tools/registry.js';
-import { refreshTokensViaBrowser } from './auth/token-refresh.js';
+import { refreshTokensViaBrowser, isBrowserLoginInProgress } from './auth/token-refresh.js';
 
 type ToolCallResponse = {
   content: Array<{ type: string; text: string }>;
@@ -68,6 +69,32 @@ describe('TeamsServer auto-login failure', () => {
     expect(body.suggestions).toContain(
       'Call teams_login (without forceNew) and tell the user a Teams sign-in window may open'
     );
+  });
+
+  it('tells the caller to wait when re-authentication fails because a sign-in is already in progress', async () => {
+    vi.mocked(invokeTool).mockResolvedValue({
+      success: false,
+      error: createError(ErrorCode.AUTH_EXPIRED, 'expired'),
+    });
+    vi.mocked(refreshTokensViaBrowser).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_REQUIRED, 'Teams sign-in is already in progress in another window; wait for it to finish, then retry.'),
+    });
+    vi.mocked(isBrowserLoginInProgress).mockReturnValue(true);
+
+    const response = await callTool('teams_search');
+    const body = JSON.parse(response.content[0].text) as {
+      success: boolean;
+      error: string;
+      errorCode: string;
+    };
+
+    expect(response.isError).toBe(true);
+    expect(body.errorCode).toBe('AUTH_REQUIRED');
+    // The generic "call teams_login" advice would start a second sign-in
+    // that collides with the open one — the in-progress cause must surface.
+    expect(body.error).toContain('already in progress');
+    expect(body.error).not.toContain('Call teams_login without forceNew');
   });
 
   it('returns success when re-authentication and the retry both succeed', async () => {

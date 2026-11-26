@@ -16,7 +16,7 @@ vi.mock('../auth/token-extractor.js', () => ({
 }));
 
 vi.mock('../auth/token-refresh-http.js', () => ({ refreshTokensViaHttp: vi.fn() }));
-vi.mock('../auth/token-refresh.js', () => ({ refreshCoreTokensViaHttp: vi.fn(), awaitRefreshQueue: vi.fn(), setBrowserLoginInProgress: vi.fn(), coreSessionUsable: vi.fn() }));
+vi.mock('../auth/token-refresh.js', () => ({ refreshCoreTokensViaHttp: vi.fn(), awaitRefreshQueue: vi.fn(), setBrowserLoginInProgress: vi.fn(), isBrowserLoginInProgress: vi.fn(), coreSessionUsable: vi.fn() }));
 vi.mock('../browser/context.js', () => ({ createBrowserContext: vi.fn(), closeBrowser: vi.fn() }));
 vi.mock('../browser/auth.js', () => ({ ensureAuthenticated: vi.fn() }));
 vi.mock('../utils/auth-guards.js', () => ({ resetAssignmentsAvailability: vi.fn(), clearRegionCache: vi.fn() }));
@@ -32,7 +32,7 @@ import {
   extractSkypeSpacesToken,
 } from '../auth/token-extractor.js';
 import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
-import { awaitRefreshQueue, refreshCoreTokensViaHttp, setBrowserLoginInProgress, coreSessionUsable } from '../auth/token-refresh.js';
+import { awaitRefreshQueue, refreshCoreTokensViaHttp, setBrowserLoginInProgress, isBrowserLoginInProgress, coreSessionUsable } from '../auth/token-refresh.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import { ensureAuthenticated } from '../browser/auth.js';
 import { ErrorCode } from '../types/errors.js';
@@ -54,6 +54,7 @@ describe('teams_login core credential top-up', () => {
     vi.mocked(refreshCoreTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
     vi.mocked(awaitRefreshQueue).mockResolvedValue(undefined);
     vi.mocked(setBrowserLoginInProgress).mockReturnValue(undefined);
+    vi.mocked(isBrowserLoginInProgress).mockReturnValue(false);
     // Mirror the real predicate over the mocked extractors.
     vi.mocked(coreSessionUsable).mockImplementation(
       () => extractSubstrateToken() !== null && extractMessageAuth() !== null,
@@ -154,6 +155,7 @@ describe('teams_login fast path requires usable messaging', () => {
     vi.mocked(refreshCoreTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
     vi.mocked(awaitRefreshQueue).mockResolvedValue(undefined);
     vi.mocked(setBrowserLoginInProgress).mockReturnValue(undefined);
+    vi.mocked(isBrowserLoginInProgress).mockReturnValue(false);
     vi.mocked(coreSessionUsable).mockImplementation(
       () => extractSubstrateToken() !== null && extractMessageAuth() !== null,
     );
@@ -293,6 +295,7 @@ describe('teams_login fast path requires usable messaging', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.code).toBe(ErrorCode.API_ERROR);
+      expect(result.error.message).toContain('Substrate');
     }
     expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
   });
@@ -328,6 +331,63 @@ describe('teams_login fast path requires usable messaging', () => {
       .toBeLessThan(vi.mocked(createBrowserContext).mock.invocationCallOrder[0]);
     expect(vi.mocked(setBrowserLoginInProgress).mock.invocationCallOrder.at(-1))
       .toBeGreaterThan(vi.mocked(closeBrowser).mock.invocationCallOrder.at(-1)!);
+  });
+
+  it('refuses to start a second sign-in while one is in progress', async () => {
+    // A parallel teams_login would hit the Chromium profile lock and its
+    // finally-block could drop the guard under the first login's browser.
+    vi.mocked(isBrowserLoginInProgress).mockReturnValue(true);
+    vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: false });
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe(ErrorCode.API_ERROR);
+      expect(result.error.message).toContain('already in progress');
+    }
+    expect(createBrowserContext).not.toHaveBeenCalled();
+    expect(setBrowserLoginInProgress).not.toHaveBeenCalled();
+  });
+
+  it('refuses forceNew while a sign-in is in progress', async () => {
+    vi.mocked(isBrowserLoginInProgress).mockReturnValue(true);
+
+    const result = await loginTool.handler({ forceNew: true });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe(ErrorCode.API_ERROR);
+      expect(result.error.message).toContain('already in progress');
+    }
+    // The wipe must not run: the in-flight sign-in owns the profile.
+    expect(clearAllLocalData).not.toHaveBeenCalled();
+    expect(createBrowserContext).not.toHaveBeenCalled();
+  });
+
+  it('keeps the will-not-fix wording after a visible sign-in even for auth-state refresh errors', async () => {
+    // A visible sign-in just produced a fresh refresh token: forceNew would
+    // repeat the same wipe + sign-in and cannot fix an AUTH_* refresh failure.
+    vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(ensureAuthenticated)
+      .mockRejectedValueOnce(new Error('headless SSO needs interaction'))
+      .mockResolvedValue(undefined as never);
+    vi.mocked(extractMessageAuth).mockReturnValue(null);
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(refreshCoreTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: { code: 'AUTH_REQUIRED', message: 'no refresh token' },
+    } as never);
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe(ErrorCode.API_ERROR);
+      expect(result.error.message).toContain('will not fix this');
+      expect(result.error.message).not.toContain('may help');
+    }
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: false });
   });
 
   it('does not open the headless browser until an in-flight refresh settles', async () => {

@@ -21,7 +21,7 @@ import {
   extractCsaToken,
 } from '../auth/token-extractor.js';
 import { coreSessionReady, messagingUsable } from '../auth/core-credentials.js';
-import { awaitRefreshQueue, refreshCoreTokensViaHttp, coreSessionUsable, setBrowserLoginInProgress } from '../auth/token-refresh.js';
+import { awaitRefreshQueue, refreshCoreTokensViaHttp, coreSessionUsable, setBrowserLoginInProgress, isBrowserLoginInProgress } from '../auth/token-refresh.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import { ErrorCode, createError, type McpError } from '../types/errors.js';
 import { TOKEN_VALID_THRESHOLD_MINUTES } from '../constants.js';
@@ -85,7 +85,7 @@ const AUTH_STATE_CODES: ReadonlySet<ErrorCode> = new Set([
  * Returns a failure ToolResult otherwise: reporting success here would loop
  * login -> retry forever.
  */
-async function messagingAuthFailure(): Promise<ToolResult | null> {
+async function messagingAuthFailure(forceNewMayHelp: boolean): Promise<ToolResult | null> {
   let refreshError: McpError | undefined;
   if (!coreSessionReady()) {
     const refresh = await refreshCoreTokensViaHttp();
@@ -101,9 +101,11 @@ async function messagingAuthFailure(): Promise<ToolResult | null> {
     : ' The Skype token exchange failed or returned no cookie; see the server log for details.';
 
   if (!messagingUsable()) {
-    // AUTH_* refresh failures mean the local auth state itself is broken —
-    // the one case where forceNew (a fresh sign-in) can actually help.
-    if (refreshError !== undefined && AUTH_STATE_CODES.has(refreshError.code)) {
+    // AUTH_* refresh failures mean the local auth state itself is broken.
+    // forceNew (a fresh sign-in) can only help when the sign-in that just
+    // ran was headless SSO reusing old state — after an interactive
+    // sign-in it would repeat the same wipe and cannot fix anything.
+    if (forceNewMayHelp && refreshError !== undefined && AUTH_STATE_CODES.has(refreshError.code)) {
       return {
         success: false,
         error: createError(ErrorCode.API_ERROR,
@@ -134,17 +136,37 @@ async function messagingAuthFailure(): Promise<ToolResult | null> {
   }
 
   // Messaging works but Substrate is missing: the next tool call would fail
-  // auth and bounce straight back to login, so report the gap instead.
+  // auth and bounce straight back to login, so report the gap instead. The
+  // detail names the actual gap — the Skype exchange is not the cause here.
+  const substrateDetail = refreshError
+    ? ` Refresh error: ${refreshError.message}`
+    : ' The Substrate token exchange failed or returned no token; see the server log for details.';
   return {
     success: false,
     error: createError(ErrorCode.API_ERROR,
-      `Teams sign-in succeeded, but the Substrate session token is missing.${detail} Do not call teams_login again in a loop; a later refresh may mint it.`,
+      `Teams sign-in succeeded, but the Substrate session token is missing.${substrateDetail} Do not call teams_login again in a loop; a later refresh may mint it.`,
       {
         retryable: false,
         suggestions: [
           'Tell the user Teams sign-in succeeded but the session is incomplete, and show them this error',
           'Do not call teams_login again in a loop; retry the failed tool call later instead',
           'If it keeps failing, check the network connection and Conditional Access policies',
+        ],
+      }),
+  };
+}
+
+/** Failure returned when a teams_login browser sign-in is already running. */
+function loginInProgressFailure(): ToolResult {
+  return {
+    success: false,
+    error: createError(ErrorCode.API_ERROR,
+      'A Teams sign-in is already in progress in another window. Wait for it to finish, then retry teams_login.',
+      {
+        retryable: false,
+        suggestions: [
+          'Wait for the in-progress teams_login sign-in window to complete, then retry',
+          'If no sign-in window is visible, the earlier attempt may have stalled; call teams_login again once it clears',
         ],
       }),
   };
@@ -157,6 +179,9 @@ async function handleLogin(
   resetAssignmentsAvailability();
 
   if (input.forceNew) {
+    // A second sign-in would collide with the open one on the profile lock,
+    // and its cleanup could drop the guard under the first browser.
+    if (isBrowserLoginInProgress()) return loginInProgressFailure();
     // The guard rises before anything touches the profile: an auto-refresh
     // starting while the queue drains or the directory is deleted must not
     // launch a browser onto it.
@@ -208,7 +233,9 @@ async function handleLogin(
   // Wait out any in-flight refresh first: it holds the Chromium profile lock,
   // and launching a second browser against it fails outright. The flag stays
   // up for the whole sign-in (headless, fallback gap, visible browser) so an
-  // auto-refresh cannot slip a browser onto the profile mid-login.
+  // auto-refresh cannot slip a browser onto the profile mid-login. A second
+  // login call stands down instead of colliding on the profile lock.
+  if (isBrowserLoginInProgress()) return loginInProgressFailure();
   setBrowserLoginInProgress(true);
   try {
     await awaitRefreshQueue();
@@ -225,8 +252,11 @@ async function handleLogin(
 
       // Sign-in succeeded but that does not prove the session is usable: a
       // visible browser cannot mint skypetoken_asm either, so do NOT fall
-      // through — report the failure instead of a false success.
-      const failure = await messagingAuthFailure();
+      // through — report the failure instead of a false success. Headless
+      // SSO reused the old profile state, so an auth-state refresh failure
+      // here can still be fixed by forceNew; after the visible sign-in below
+      // it cannot (messagingAuthFailure(false)).
+      const failure = await messagingAuthFailure(true);
       if (failure) return failure;
 
       return {
@@ -256,7 +286,7 @@ async function loginInVisibleBrowser(): Promise<ToolResult> {
     await closeBrowser(visible, true);
   }
 
-  const failure = await messagingAuthFailure();
+  const failure = await messagingAuthFailure(false);
   if (failure) return failure;
 
   return {

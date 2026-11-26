@@ -107,6 +107,22 @@ describe('recommendsForceNewWithoutApproval', () => {
     expect(recommendsForceNewWithoutApproval(
       'Don’t ask the user to approve teams_login with forceNew: true',
     )).toBe(true);
+    // Other negation shapes: 'no need', n't-forms, 'cannot'.
+    expect(recommendsForceNewWithoutApproval(
+      'No need to ask the user to approve, call teams_login with forceNew: true',
+    )).toBe(true);
+    expect(recommendsForceNewWithoutApproval(
+      'You shouldn’t ask the user to approve, call teams_login with forceNew: true',
+    )).toBe(true);
+    expect(recommendsForceNewWithoutApproval(
+      'You cannot ask the user to approve, call teams_login with forceNew: true',
+    )).toBe(true);
+  });
+
+  it('accepts approval phrased with a curly apostrophe', () => {
+    expect(recommendsForceNewWithoutApproval(
+      'Only with the user’s approval, call teams_login with forceNew: true',
+    )).toBe(false);
   });
 
   it('still passes real approval advice that mentions failing first', () => {

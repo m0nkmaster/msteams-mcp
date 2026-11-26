@@ -22,7 +22,7 @@
  * the queue still advances, and the next call starts a fresh attempt.
  */
 
-import { ErrorCode, createError } from '../types/errors.js';
+import { ErrorCode, createError, type McpError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import {
   extractSubstrateToken,
@@ -64,8 +64,18 @@ export function setBrowserLoginInProgress(active: boolean): void {
   browserLoginCount = Math.max(0, browserLoginCount + (active ? 1 : -1));
 }
 
-function browserLoginInProgress(): boolean {
+/** True while at least one teams_login browser sign-in is in progress. */
+export function isBrowserLoginInProgress(): boolean {
   return browserLoginCount > 0;
+}
+
+/** Shared error for refreshes that stand down while a sign-in owns the profile. */
+function loginInProgressError(): McpError {
+  return createError(
+    ErrorCode.AUTH_REQUIRED,
+    'Teams sign-in is already in progress in another window; wait for it to finish, then retry.',
+    { retryable: false, suggestions: ['Wait for the in-progress teams_login sign-in to complete, then retry the tool call'] },
+  );
 }
 
 function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
@@ -82,12 +92,26 @@ function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
  * profile lock held by an in-flight refresh — or with the wedged-browser
  * kill that runs after the refresh deadline fires. Never rejects.
  */
-export function awaitRefreshQueue(): Promise<void> {
-  return Promise.all([refreshQueue, coreRefresh ?? Promise.resolve()]).then(() => undefined);
+export async function awaitRefreshQueue(): Promise<void> {
+  // Loop until the queue is stable: a refresh enqueued while we waited
+  // chains on the same tail and would otherwise slip past a one-shot
+  // snapshot — its session-state write could land after a forceNew wipe.
+  for (;;) {
+    const tail = refreshQueue;
+    const core = coreRefresh;
+    await Promise.all([tail, core ?? Promise.resolve()]);
+    if (refreshQueue === tail && coreRefresh === undefined) return;
+  }
 }
 
 /** Refresh core Teams credentials, with browser fallback. */
 export function refreshTokensViaBrowser(): Promise<Result<void>> {
+  // Entry gate, not just the browser fallback: the HTTP leg writes session
+  // state, and a write landing mid-sign-in (or mid-forceNew wipe) can
+  // resurrect the old account's session.
+  if (isBrowserLoginInProgress()) {
+    return Promise.resolve(err(loginInProgressError()));
+  }
   if (!coreRefresh) {
     coreRefresh = serializeRefresh(refreshCoreTokens)
       .catch(async (error): Promise<Result<void>> => {
@@ -153,6 +177,14 @@ export function refreshCoreTokensViaHttp(): Promise<Result<void>> {
  * an error that would trigger the server's auto-login.
  */
 function refreshOnDemandToken(resource: OnDemandResource, label: string, getValid: () => string | null): Promise<Result<string>> {
+  // Same entry gate as the core refresh: the exchange writes session state.
+  // Optional resources never return AUTH_REQUIRED/AUTH_EXPIRED (that would
+  // trigger the server's auto-login), so this maps to AUTH_INTERACTION_REQUIRED.
+  if (isBrowserLoginInProgress()) {
+    return Promise.resolve(err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
+      `Teams sign-in is already in progress in another window; the ${label} token is unavailable until it finishes.`,
+      { retryable: false })));
+  }
   return serializeRefresh(async () => {
     const result = await refreshTokensViaHttp(resource);
     if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
@@ -225,12 +257,8 @@ async function refreshCoreTokens(): Promise<Result<void>> {
 async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
   // teams_login owns the profile for the whole sign-in window: a second
   // browser on it fails on the Chromium lock, so fail fast instead.
-  if (browserLoginInProgress()) {
-    return err(createError(
-      ErrorCode.AUTH_REQUIRED,
-      'Teams sign-in is already in progress in another window; wait for it to finish, then retry.',
-      { retryable: false, suggestions: ['Wait for the in-progress teams_login sign-in to complete, then retry the tool call'] },
-    ));
+  if (isBrowserLoginInProgress()) {
+    return err(loginInProgressError());
   }
 
   let manager: BrowserManager | null = null;

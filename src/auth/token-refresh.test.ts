@@ -22,7 +22,7 @@ vi.mock('./token-refresh-http.js', () => ({
   refreshTokensViaHttp: vi.fn(),
 }));
 
-import { awaitRefreshQueue, refreshTokensViaBrowser, refreshAssignmentsToken, refreshCoreTokensViaHttp, setBrowserLoginInProgress } from './token-refresh.js';
+import { awaitRefreshQueue, refreshTokensViaBrowser, refreshAssignmentsToken, refreshCoreTokensViaHttp, refreshGraphToken, setBrowserLoginInProgress } from './token-refresh.js';
 import {
   extractSubstrateToken,
   extractMessageAuth,
@@ -209,6 +209,79 @@ describe('refreshTokensViaBrowser', () => {
       expect(createBrowserContext).not.toHaveBeenCalled();
     } finally {
       setBrowserLoginInProgress(false);
+    }
+  });
+
+  it('fails fast at entry while a teams_login browser session is in progress', async () => {
+    setBrowserLoginInProgress(true);
+    try {
+      const result = await refreshTokensViaBrowser();
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.AUTH_REQUIRED);
+      }
+      // The gate is at entry, not just the browser fallback: the HTTP leg
+      // writes session state and must not run while a sign-in owns the profile.
+      expect(refreshTokensViaHttp).not.toHaveBeenCalled();
+      expect(createBrowserContext).not.toHaveBeenCalled();
+    } finally {
+      setBrowserLoginInProgress(false);
+    }
+  });
+
+  it('fails fast optional-token refreshes while a login is in progress', async () => {
+    setBrowserLoginInProgress(true);
+    try {
+      const result = await refreshGraphToken();
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        // Optional resources never return AUTH_REQUIRED/AUTH_EXPIRED.
+        expect(result.error.code).toBe(ErrorCode.AUTH_INTERACTION_REQUIRED);
+      }
+      expect(refreshTokensViaHttp).not.toHaveBeenCalled();
+    } finally {
+      setBrowserLoginInProgress(false);
+    }
+  });
+
+  it('awaitRefreshQueue also waits for refreshes enqueued while it waits', async () => {
+    // Session stays unready so each serialized job reaches the HTTP exchange.
+    vi.mocked(extractMessageAuth).mockReturnValue(null);
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });
+    let resolveFirst!: (value: Result<void>) => void;
+    let resolveSecond!: (value: Result<void>) => void;
+    const firstCall = new Promise<Result<void>>(resolve => { resolveFirst = resolve; });
+    const secondCall = new Promise<Result<void>>(resolve => { resolveSecond = resolve; });
+    vi.mocked(refreshTokensViaHttp)
+      .mockImplementationOnce(() => firstCall)
+      .mockImplementationOnce(() => secondCall)
+      .mockResolvedValue({ ok: true, value: undefined });
+
+    const first = refreshCoreTokensViaHttp();
+    let queueSettled = false;
+    const queueWait = awaitRefreshQueue().then(() => { queueSettled = true; });
+    // Enqueued while the barrier waits: it chains on the same queue tail, so
+    // a one-shot snapshot would resolve before this job even starts.
+    const second = refreshCoreTokensViaHttp();
+    try {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(queueSettled).toBe(false);
+
+      resolveFirst({ ok: true, value: undefined });
+      await new Promise(resolve => setTimeout(resolve, 10));
+      // First job settled but the second is still in flight — the barrier
+      // must not have resolved yet.
+      expect(queueSettled).toBe(false);
+
+      resolveSecond({ ok: true, value: undefined });
+      await Promise.allSettled([first, second, queueWait]);
+      expect(queueSettled).toBe(true);
+    } finally {
+      resolveFirst({ ok: true, value: undefined });
+      resolveSecond({ ok: true, value: undefined });
+      await Promise.allSettled([first, second, queueWait]);
     }
   });
 
