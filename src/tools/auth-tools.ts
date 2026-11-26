@@ -21,7 +21,7 @@ import {
   extractCsaToken,
 } from '../auth/token-extractor.js';
 import { fillCoreCredentialGaps, coreCredentialsComplete } from '../auth/core-credentials.js';
-import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
+import { refreshCoreTokensViaHttp } from '../auth/token-refresh.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import * as log from '../utils/logger.js';
 import { resetAssignmentsAvailability, clearRegionCache } from '../utils/auth-guards.js';
@@ -101,19 +101,20 @@ async function handleLogin(
   const tokenStatus = getSubstrateTokenStatus();
   if (tokenStatus.hasToken && tokenStatus.minutesRemaining! >= TOKEN_VALID_THRESHOLD_MINUTES) {
     if (!coreCredentialsComplete() || !messagingUsable()) {
-      const refresh = await refreshTokensViaHttp();
+      const refresh = await refreshCoreTokensViaHttp();
       if (!refresh.ok) {
         log.warn('login', `Could not refresh credentials over HTTP: ${refresh.error.message}`);
       }
     }
     if (messagingUsable()) {
+      const refreshedStatus = getSubstrateTokenStatus();
       return {
         success: true,
         data: {
-          message: `Already authenticated. Token valid for ${tokenStatus.minutesRemaining} more minutes.`,
+          message: `Already authenticated. Token valid for ${refreshedStatus.minutesRemaining} more minutes.`,
           tokenStatus: {
-            expiresAt: tokenStatus.expiresAt,
-            minutesRemaining: tokenStatus.minutesRemaining,
+            expiresAt: refreshedStatus.expiresAt,
+            minutesRemaining: refreshedStatus.minutesRemaining,
           },
         },
       };

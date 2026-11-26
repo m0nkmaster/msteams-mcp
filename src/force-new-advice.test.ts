@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { recommendsForceNewWithoutApproval } from './__fixtures__/force-new-guard.js';
+import { recommendsForceNewWithoutApproval, stringLiteralValues } from './__fixtures__/force-new-guard.js';
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url));
 
@@ -24,19 +24,35 @@ function* sourceFiles(dir: string): Generator<string> {
   }
 }
 
-const STRING_LITERAL = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
-const BARE_IDENTIFIER = /^['"`]\w+['"`]$/;
+describe('stringLiteralValues', () => {
+  it('ignores regex literals and extracts real string values', () => {
+    const text = [
+      'const re = /`[^`]+`/;',
+      "const s = 'call teams_login with forceNew: true';",
+      'const t = "double quoted";',
+      "const f = 'forceNew';",
+    ].join('\n');
+    expect(stringLiteralValues('x.ts', text)).toEqual([
+      'call teams_login with forceNew: true',
+      'double quoted',
+    ]);
+  });
+
+  it('returns unescaped values', () => {
+    const text = "const s = 'Only with the user\\'s approval, call teams_login';";
+    expect(stringLiteralValues('x.ts', text)).toEqual([
+      "Only with the user's approval, call teams_login",
+    ]);
+  });
+});
 
 describe('forceNew advice source scan', () => {
   it('no string literal in src recommends forceNew without approval', () => {
     const offenders: string[] = [];
     for (const file of sourceFiles(SRC_DIR)) {
-      const text = readFileSync(file, 'utf8');
-      for (const match of text.matchAll(STRING_LITERAL)) {
-        const literal = match[0];
-        if (BARE_IDENTIFIER.test(literal)) continue;
-        if (recommendsForceNewWithoutApproval(literal.slice(1, -1))) {
-          offenders.push(`${relative(SRC_DIR, file)}: ${literal}`);
+      for (const value of stringLiteralValues(file, readFileSync(file, 'utf8'))) {
+        if (recommendsForceNewWithoutApproval(value)) {
+          offenders.push(`${relative(SRC_DIR, file)}: '${value}'`);
         }
       }
     }

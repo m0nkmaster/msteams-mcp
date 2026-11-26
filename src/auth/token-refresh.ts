@@ -95,6 +95,23 @@ async function cleanupWedgedBrowser(): Promise<void> {
 }
 
 /**
+ * Core-credential HTTP refresh serialized with every other refresh. Callers
+ * outside the refresh queue (e.g. the teams_login fast path) must not race
+ * session-state writes against an in-flight refreshTokensViaBrowser.
+ */
+export function refreshCoreTokensViaHttp(): Promise<Result<void>> {
+  return serializeRefresh(() => refreshTokensViaHttp()).catch((error): Result<void> => {
+    if (error instanceof TimeoutError) {
+      return err(createError(ErrorCode.TIMEOUT,
+        `Core credential refresh timed out after ${CORE_REFRESH_TIMEOUT_MS / 1000}s.`));
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return err(createError(ErrorCode.UNKNOWN,
+      `Core credential refresh failed: ${message}`));
+  });
+}
+
+/**
  * Acquire an optional resource's token on demand with a single HTTP exchange.
  * Optional features never launch a browser, refresh core credentials, or return
  * an error that would trigger the server's auto-login.

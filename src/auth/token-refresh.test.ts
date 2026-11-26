@@ -21,7 +21,7 @@ vi.mock('./token-refresh-http.js', () => ({
   refreshTokensViaHttp: vi.fn(),
 }));
 
-import { refreshTokensViaBrowser, refreshAssignmentsToken } from './token-refresh.js';
+import { refreshTokensViaBrowser, refreshAssignmentsToken, refreshCoreTokensViaHttp } from './token-refresh.js';
 import {
   extractSubstrateToken,
   extractMessageAuth,
@@ -29,6 +29,7 @@ import {
   extractCsaToken,
 } from './token-extractor.js';
 import { refreshTokensViaHttp } from './token-refresh-http.js';
+import type { Result } from '../types/result.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import { ensureAuthenticated } from '../browser/auth.js';
 import { CORE_REFRESH_TIMEOUT_MS } from '../constants.js';
@@ -103,6 +104,36 @@ describe('refreshTokensViaBrowser', () => {
     const retry = await refreshTokensViaBrowser();
     expect(retry.ok).toBe(true);
     expect(vi.mocked(refreshTokensViaHttp)).toHaveBeenCalledTimes(2);
+  });
+
+  it('queues refreshCoreTokensViaHttp behind an in-flight core refresh', async () => {
+    completeSession();
+    let resolveFirst!: (value: Result<void>) => void;
+    const firstCall = new Promise<Result<void>>(resolve => { resolveFirst = resolve; });
+    vi.mocked(refreshTokensViaHttp)
+      .mockImplementationOnce(() => firstCall)
+      .mockResolvedValue({ ok: true, value: undefined });
+
+    const browserRefresh = refreshTokensViaBrowser();
+    let httpRefresh: Promise<Result<void>> | undefined;
+    try {
+      httpRefresh = refreshCoreTokensViaHttp();
+
+      // The queued HTTP refresh must not reach refreshTokensViaHttp while the
+      // first attempt is still in flight.
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(vi.mocked(refreshTokensViaHttp)).toHaveBeenCalledTimes(1);
+
+      resolveFirst({ ok: true, value: undefined });
+      const [browserResult, httpResult] = await Promise.all([browserRefresh, httpRefresh]);
+      expect(browserResult.ok).toBe(true);
+      expect(httpResult.ok).toBe(true);
+      expect(vi.mocked(refreshTokensViaHttp)).toHaveBeenCalledTimes(2);
+    } finally {
+      // Never leave the shared refresh queue wedged on the deferred call.
+      resolveFirst({ ok: true, value: undefined });
+      await Promise.allSettled([browserRefresh, httpRefresh]);
+    }
   });
 
   it('gives on-demand refreshes the same deadline', async () => {

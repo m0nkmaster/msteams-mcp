@@ -16,6 +16,7 @@ vi.mock('../auth/token-extractor.js', () => ({
 }));
 
 vi.mock('../auth/token-refresh-http.js', () => ({ refreshTokensViaHttp: vi.fn() }));
+vi.mock('../auth/token-refresh.js', () => ({ refreshCoreTokensViaHttp: vi.fn() }));
 vi.mock('../browser/context.js', () => ({ createBrowserContext: vi.fn(), closeBrowser: vi.fn() }));
 vi.mock('../browser/auth.js', () => ({ ensureAuthenticated: vi.fn() }));
 vi.mock('../utils/auth-guards.js', () => ({ resetAssignmentsAvailability: vi.fn(), clearRegionCache: vi.fn() }));
@@ -31,6 +32,7 @@ import {
   extractSkypeSpacesToken,
 } from '../auth/token-extractor.js';
 import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
+import { refreshCoreTokensViaHttp } from '../auth/token-refresh.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 
 /** A session holding every core credential except the CSA (favourites) token. */
@@ -47,6 +49,7 @@ describe('teams_login core credential top-up', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    vi.mocked(refreshCoreTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
   });
 
   it('mints the missing CSA token when the session is otherwise valid', async () => {
@@ -55,7 +58,7 @@ describe('teams_login core credential top-up', () => {
     const result = await loginTool.handler({ forceNew: false });
 
     expect(result.success).toBe(true);
-    expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
+    expect(refreshCoreTokensViaHttp).toHaveBeenCalledOnce();
     expect(createBrowserContext).not.toHaveBeenCalled();
   });
 
@@ -65,7 +68,7 @@ describe('teams_login core credential top-up', () => {
 
     await loginTool.handler({ forceNew: false });
 
-    expect(refreshTokensViaHttp).not.toHaveBeenCalled();
+    expect(refreshCoreTokensViaHttp).not.toHaveBeenCalled();
   });
 
   it('tops up after a forced browser login leaves the CSA token behind', async () => {
@@ -98,7 +101,7 @@ describe('teams_login core credential top-up', () => {
 
   it('still reports success when the top-up fails', async () => {
     sessionMissingCsaToken();
-    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+    vi.mocked(refreshCoreTokensViaHttp).mockResolvedValue({
       ok: false,
       error: { code: 'NETWORK_ERROR', message: 'offline' },
     } as never);
@@ -113,6 +116,7 @@ describe('teams_login fast path requires usable messaging', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    vi.mocked(refreshCoreTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
     vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
     vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
     vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: true, minutesRemaining: 60 });
@@ -124,6 +128,10 @@ describe('teams_login fast path requires usable messaging', () => {
   it('falls through to headless SSO when messaging cookies are missing and the top-up fails', async () => {
     vi.mocked(extractMessageAuth).mockReturnValue(null);
     vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(refreshCoreTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: { code: 'NETWORK_ERROR', message: 'offline' },
+    } as never);
     vi.mocked(refreshTokensViaHttp).mockResolvedValue({
       ok: false,
       error: { code: 'NETWORK_ERROR', message: 'offline' },
@@ -132,9 +140,9 @@ describe('teams_login fast path requires usable messaging', () => {
     const result = await loginTool.handler({ forceNew: false });
 
     expect(result.success).toBe(true);
-    // Exactly one HTTP exchange before any browser launches (the post-headless
-    // top-up may legitimately refresh again after SSO).
-    const refreshOrder = vi.mocked(refreshTokensViaHttp).mock.invocationCallOrder;
+    // Exactly one serialized HTTP refresh before any browser launches (the
+    // post-headless top-up may legitimately refresh again after SSO).
+    const refreshOrder = vi.mocked(refreshCoreTokensViaHttp).mock.invocationCallOrder;
     const browserOrder = vi.mocked(createBrowserContext).mock.invocationCallOrder[0];
     expect(refreshOrder.filter(order => order < browserOrder)).toHaveLength(1);
     expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
@@ -152,10 +160,43 @@ describe('teams_login fast path requires usable messaging', () => {
     const result = await loginTool.handler({ forceNew: false });
 
     expect(result.success).toBe(true);
-    expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
+    expect(refreshCoreTokensViaHttp).toHaveBeenCalledOnce();
     expect(createBrowserContext).not.toHaveBeenCalled();
     if (result.success) {
       expect(String(result.data.message)).toContain('Already authenticated');
+    }
+  });
+
+  it('reports the refreshed token lifetime after the HTTP refresh', async () => {
+    vi.mocked(getSubstrateTokenStatus)
+      .mockReturnValueOnce({ hasToken: true, expiresAt: '2026-11-26T00:00:00.000Z', minutesRemaining: 15 })
+      .mockReturnValue({ hasToken: true, expiresAt: '2026-11-26T01:00:00.000Z', minutesRemaining: 70 });
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus)
+      .mockReturnValueOnce({ hasToken: false, expiresAt: '2026-01-01T00:00:00.000Z', minutesRemaining: 0 })
+      .mockReturnValue({ hasToken: true, expiresAt: '2026-11-26T00:00:00.000Z', minutesRemaining: 600 });
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(String(result.data.message)).toContain('70');
+    }
+  });
+
+  it('falls through when the HTTP refresh succeeds but messaging is still unusable', async () => {
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false, expiresAt: '2026-01-01T00:00:00.000Z', minutesRemaining: 0 });
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(true);
+    const refreshOrder = vi.mocked(refreshCoreTokensViaHttp).mock.invocationCallOrder;
+    const browserOrder = vi.mocked(createBrowserContext).mock.invocationCallOrder[0];
+    expect(refreshOrder.filter(order => order < browserOrder)).toHaveLength(1);
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
+    if (result.success) {
+      expect(String(result.data.message)).not.toContain('Already authenticated');
     }
   });
 
@@ -165,7 +206,7 @@ describe('teams_login fast path requires usable messaging', () => {
   ])('falls through to headless SSO when the messaging cookie %s', async (_label, status) => {
     vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
     vi.mocked(getMessageAuthStatus).mockReturnValue(status);
-    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+    vi.mocked(refreshCoreTokensViaHttp).mockResolvedValue({
       ok: false,
       error: { code: 'NETWORK_ERROR', message: 'offline' },
     } as never);
@@ -173,7 +214,7 @@ describe('teams_login fast path requires usable messaging', () => {
     const result = await loginTool.handler({ forceNew: false });
 
     expect(result.success).toBe(true);
-    expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
+    expect(refreshCoreTokensViaHttp).toHaveBeenCalledOnce();
     expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
     if (result.success) {
       expect(String(result.data.message)).not.toContain('Already authenticated');

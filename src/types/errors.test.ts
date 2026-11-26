@@ -109,6 +109,14 @@ describe('recommendsForceNewWithoutApproval', () => {
   it('flags the force_new spelling', () => {
     expect(recommendsForceNewWithoutApproval('set force_new: true')).toBe(true);
   });
+
+  it('flags approval in a different sentence than the mention', () => {
+    expect(recommendsForceNewWithoutApproval('Ask the user to approve the upload. Then call teams_login with forceNew: true')).toBe(true);
+  });
+
+  it('flags a distant negation before "without forceNew"', () => {
+    expect(recommendsForceNewWithoutApproval('Do not, under any circumstances, call teams_login without forceNew')).toBe(true);
+  });
 });
 
 describe('default suggestions', () => {
