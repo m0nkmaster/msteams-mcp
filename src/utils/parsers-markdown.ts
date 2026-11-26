@@ -61,10 +61,25 @@ function renderInline(tokens: Tokens.Generic[] | undefined): string {
   return out;
 }
 
+/**
+ * Renders the blank lines between two blocks the way the Teams client does:
+ * one empty paragraph (<p>&nbsp;</p>) per blank line. Teams shows consecutive
+ * <p> elements with no gap, so without this a blank line in the source is lost.
+ * Only between text blocks (paragraphs, headings): Teams already puts a margin
+ * around lists, tables, code blocks and quotes. Nothing at the start or end.
+ */
+const TEXT_BLOCKS = new Set(['paragraph', 'heading']);
+function renderBlankLines(raw: string, prev?: Tokens.Generic, next?: Tokens.Generic): string {
+  if (!prev || !next || !TEXT_BLOCKS.has(prev.type) || !TEXT_BLOCKS.has(next.type)) return '';
+  const blankLines = raw.split('\n').length - 2;
+  return blankLines > 0 ? '<p>&nbsp;</p>'.repeat(blankLines) : '';
+}
+
 /** Renders block tokens (paragraphs, lists, tables, code, quotes, headings). */
 function renderBlocks(tokens: Tokens.Generic[]): string {
   let out = '';
-  for (const tok of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
     switch (tok.type) {
       case 'paragraph':
         out += `<p>${renderInline(tok.tokens)}</p>`;
@@ -76,12 +91,13 @@ function renderBlocks(tokens: Tokens.Generic[]): string {
         out += `<pre><code>${escapeHtmlChars(tok.text.replace(/\n$/, ''))}</code></pre>`;
         break;
       case 'blockquote':
-        out += renderBlocks(tok.tokens ?? []);
+        out += `<blockquote>${renderBlocks(tok.tokens ?? [])}</blockquote>`;
         break;
       case 'hr':
         out += '<hr>';
         break;
       case 'space':
+        out += renderBlankLines(tok.raw ?? '', tokens[i - 1], tokens[i + 1]);
         break;
       case 'list':
         out += renderList(tok as Tokens.List);
