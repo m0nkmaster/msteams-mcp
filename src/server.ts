@@ -30,8 +30,11 @@ import { getFavorites } from './api/csa-api.js';
 
 // Tool registry
 import { getToolDefinitions, invokeTool } from './tools/registry.js';
+import { resolveEventsConfig } from './events/config.js';
+import { registerEventHandlers, EVENTS_CAPABILITY, EVENTS_EXTENSION_ID } from './events/register.js';
 
 // Types
+import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import { ErrorCode, createError, type McpError } from './types/errors.js';
 import * as log from './utils/logger.js';
 
@@ -98,6 +101,8 @@ export class TeamsServer {
    * Creates and configures the MCP server.
    */
   async createServer(): Promise<Server> {
+    const eventsConfig = resolveEventsConfig();
+
     const server = new Server(
       {
         name: 'teams-mcp',
@@ -107,9 +112,21 @@ export class TeamsServer {
         capabilities: {
           tools: {},
           resources: {},
-        },
+          // SEP-3415 advertises support through `capabilities.extensions`.
+          ...(eventsConfig.enabled
+            ? { extensions: { [EVENTS_EXTENSION_ID]: EVENTS_CAPABILITY } }
+            : {}),
+        } as ServerCapabilities,
       }
     );
+
+    if (eventsConfig.enabled) {
+      registerEventHandlers(server, eventsConfig);
+      log.info(
+        'events',
+        `MCP Events enabled (polling Teams every ${eventsConfig.intervalMs}ms; set TEAMS_EVENTS_INTERVAL_MS to change)`
+      );
+    }
 
     // Handle resource listing
     server.setRequestHandler(ListResourcesRequestSchema, async () => {

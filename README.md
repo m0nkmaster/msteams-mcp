@@ -290,6 +290,49 @@ The server also exposes passive resources for context discovery:
 
 
 
+## MCP Events
+
+With events enabled, the server advertises the draft `io.modelcontextprotocol/events` extension ([SEP-3415](https://modelcontextprotocol.io/seps/3415-events-extension)) and wakes a supporting client when something happens, instead of the model polling.
+
+Events are **off by default**, because they make this server poll Teams from your machine on a timer. Enable them in the MCP client's environment:
+
+```json
+{
+  "mcpServers": {
+    "teams": {
+      "command": "npx",
+      "args": ["-y", "msteams-mcp@latest"],
+      "env": {
+        "TEAMS_EVENTS": "1",
+        "TEAMS_EVENTS_INTERVAL_MS": "60000"
+      }
+    }
+  }
+}
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TEAMS_EVENTS` | unset | Set to `1`, `true`, `yes` or `on` to enable events. |
+| `TEAMS_EVENTS_INTERVAL_MS` | `60000` | Upstream poll interval. Clamped to 15s–15min so a bad value cannot flood Teams. |
+
+| Event | Arguments | Payload |
+|-------|-----------|---------|
+| `teams.message.new` | `conversationIds?`, `includeOwn` (default `false`) | `conversationId`, `messageId`, `senderName`, `sentAt`, `snippet` (≤200 chars) |
+| `teams.mention` | none | same |
+| `teams.reply` | none | same |
+
+Delivery is available as `events/poll` and `events/stream` (push). Webhook is not offered, since the server is local and stdio-based.
+
+`teams.message.new` builds on the same scan as `teams_get_new_messages`. Mentions and replies come from the Teams activity feed, the only source that sees replies inside channel threads. Each cursor is opaque: the scan cursor for new messages, a wrapped activity `syncState` for mentions and replies.
+
+`events/poll` returns `nextPollMs`; the server backs off exponentially on errors and throttling (honouring `retryAfterMs`). `truncated: true` means events were skipped: a cursor older than the request's `maxAgeMs`, a conversation that could not be scanned, or a full activity page. A full message batch instead sets `hasMore: true` so the client can immediately drain it. Push streams poll Teams at the same configured interval and report upstream or scan failures with `notifications/events/error` rather than dropping them silently.
+
+**Protocol note:** SEP-3415 is specified for protocol revision `2026-07-28`, which the bundled MCP SDK does not negotiate yet. The server handles `events/list`, `events/poll` and `events/stream` at the wire level and advertises `capabilities.extensions["io.modelcontextprotocol/events"]`, so a client that implements the extension can use it. SDK-based clients that strip unknown initialize-result fields will not see the advertisement until the SDK catches up.
+
+
+
+
 ## CLI Usage
 
 `msteams` exposes every tool the MCP server does - full parity, same authentication, same session files. Commands, flags and help are generated from the tool definitions, so the CLI never lags behind the server.

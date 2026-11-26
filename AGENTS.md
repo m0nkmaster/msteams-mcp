@@ -60,6 +60,12 @@ src/
 │   ├── graph-files-api.ts # File downloads via Microsoft Graph (shared files and assignment attachments)
 │   ├── graph-mail-api.ts  # Single-email reads via Microsoft Graph /me/messages
 │   └── profile-api.ts    # Resolve MRIs to profiles (middleTier fetchShortProfile)
+├── events/               # MCP Events extension (SEP-3415), opt-in
+│   ├── config.ts         # TEAMS_EVENTS opt-in and interval clamping
+│   ├── cursor.ts         # Activity cursor wrapper + scan-cursor helpers
+│   ├── event-types.ts    # Event descriptors, subscription arguments, payload mapping
+│   ├── service.ts        # Poll/stream delivery, filters, backoff, heartbeats
+│   └── register.ts       # Wire-level events/list, events/poll, events/stream handlers
 ├── browser/              # Playwright browser automation (login only)
 │   ├── context.ts        # Persistent browser profile management
 │   └── auth.ts           # Authentication detection and manual login handling
@@ -172,6 +178,17 @@ Tool definitions in `src/tools/*.ts` are the source of truth. Their `description
 
 For manual testing of all tools, see `docs/MANUAL-TEST-SCRIPT.md`.
 
+## MCP Events (opt-in)
+
+`TEAMS_EVENTS=1` advertises `capabilities.extensions["io.modelcontextprotocol/events"]` and registers `events/list`, `events/poll` and `events/stream` (SEP-3415). Off by default because it polls Teams from the user's machine on a timer. `TEAMS_EVENTS_INTERVAL_MS` (default 60s) is clamped to 15s–15min.
+
+- **Two sources, three event types.** `teams.message.new` calls `getNewMessages()` from `api/chatsvc-new-messages.ts` (#61), reusing its cursor and respecting its `includeOwn` option. `teams.mention` and `teams.reply` call `getActivityFeed()`: the channel message feed omits thread replies, so the activity feed is the only source for replies and for mentions inside threads. `events/cursor.ts` wraps the activity `syncState` with its issue time for `maxAgeMs`; scan cursors stay in #61's format.
+- **Wire-level, not SDK-level.** The bundled `@modelcontextprotocol/sdk` negotiates protocol `2025-11-25`, which predates the extension (`2026-07-28`). `register.ts` defines the three request schemas itself and advertises the capability in the initialize result. The SDK's Zod 4 bundles alongside this project's Zod 3, so `setExtensionHandler()` casts only the types; runtime parsing works through the SDK's Zod compat layer. SDK-based clients strip `extensions` from the initialize result, so wire-level raw JSON-RPC is the only faithful test (see `register.test.ts`).
+- **Cursor semantics differ per delivery mode.** `cursor: null` means "start from now": `events/poll` returns no events and a fresh cursor. A scan cursor older than `maxAgeMs` (judged from the newest per-chat watermark, not the poll floor) restarts from now with `truncated: true`; so does a stale activity cursor. A full message page is not a gap: poll returns `hasMore: true` with the resumable cursor. A full activity page is a gap (the `syncState` is a watermark, not a page cursor), so it returns `truncated: true`.
+- **`maxEvents` cuts a batch safely.** A poll that hits `maxEvents` advances only the returned conversations' watermarks (`truncateScanBatch`), leaving the rest for the next poll instead of skipping them.
+- **Push streams own their polling.** Each stream confirms with `notifications/events/active`, then polls at the configured interval and emits `notifications/events/event`. Scan event cursors advance only that event's chat watermark, so a reconnect may replay but never skips; activity events carry the batch-start cursor so the whole batch can replay. Heartbeats (granted 5–60s) carry the latest cursor. Cancellation arrives as `extra.signal` (the SDK aborts on `notifications/cancelled`).
+- **Backoff is shared across subscriptions** per server process: `EventsService` doubles the interval on failures and honours a throttling `retryAfterMs`, capped at 15 minutes. Auth failures and scan failures are surfaced (JSON-RPC error on poll, `notifications/events/error` on a stream) rather than silently dropped.
+
 ## Development
 
 ```bash
@@ -231,7 +248,7 @@ npm run cli -- search "your query" --from 25 --size 25  # Pagination
 
 ### Unit tests
 
-Vitest, focused on pure functions and outcomes over implementation. Tests are colocated with source as `src/**/*.test.ts` and span `api/`, `auth/`, `cli/`, `tools/`, `types/` and `utils/`; `parsers.test.ts` is the largest, covering HTML stripping/entity decoding, deep-link generation, timestamp extraction, search/people/email result parsing, JWT profile extraction, token-status calculation, base64 GUID decoding, and user-ID extraction. Fixtures (`src/__fixtures__/api-responses.ts`) mirror real API shapes.
+Vitest, focused on pure functions and outcomes over implementation. Tests are colocated with source as `src/**/*.test.ts` and span `api/`, `auth/`, `cli/`, `events/`, `tools/`, `types/` and `utils/`; `parsers.test.ts` is the largest, covering HTML stripping/entity decoding, deep-link generation, timestamp extraction, search/people/email result parsing, JWT profile extraction, token-status calculation, base64 GUID decoding, and user-ID extraction. Fixtures (`src/__fixtures__/api-responses.ts`) mirror real API shapes.
 
 Run a subset with `npx vitest run src/utils/parsers.test.ts` (one file), `npx vitest run src/auth` (a directory), or `npx vitest run -t "extractObjectId"` (by test name).
 
