@@ -175,13 +175,15 @@ function loginInProgressFailure(): ToolResult {
 async function handleLogin(
   input: z.infer<typeof LoginInputSchema>,
 ): Promise<ToolResult> {
+  // A sign-in in progress owns the profile: refuse before anything else,
+  // including the token fast path — its HTTP refresh reads and writes
+  // session state that the open sign-in may be replacing.
+  if (isBrowserLoginInProgress()) return loginInProgressFailure();
+
   // A fresh login may have changed what the account can access (e.g. new consent)
   resetAssignmentsAvailability();
 
   if (input.forceNew) {
-    // A second sign-in would collide with the open one on the profile lock,
-    // and its cleanup could drop the guard under the first browser.
-    if (isBrowserLoginInProgress()) return loginInProgressFailure();
     // The guard rises before anything touches the profile: an auto-refresh
     // starting while the queue drains or the directory is deleted must not
     // launch a browser onto it.

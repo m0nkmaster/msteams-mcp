@@ -365,6 +365,27 @@ describe('teams_login fast path requires usable messaging', () => {
     expect(createBrowserContext).not.toHaveBeenCalled();
   });
 
+  it('refuses a second sign-in even when the token fast path could succeed', async () => {
+    // The fast path runs an HTTP refresh that reads and writes session
+    // state; a sign-in in progress may be replacing that state, so every
+    // entry point must stand down before any credential check.
+    vi.mocked(isBrowserLoginInProgress).mockReturnValue(true);
+    vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: true, minutesRemaining: 60 });
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: true, minutesRemaining: 600 });
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe(ErrorCode.API_ERROR);
+      expect(result.error.message).toContain('already in progress');
+    }
+    expect(getSubstrateTokenStatus).not.toHaveBeenCalled();
+    expect(refreshCoreTokensViaHttp).not.toHaveBeenCalled();
+    expect(createBrowserContext).not.toHaveBeenCalled();
+  });
+
   it('keeps the will-not-fix wording after a visible sign-in even for auth-state refresh errors', async () => {
     // A visible sign-in just produced a fresh refresh token: forceNew would
     // repeat the same wipe + sign-in and cannot fix an AUTH_* refresh failure.

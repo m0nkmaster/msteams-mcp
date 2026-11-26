@@ -27,6 +27,7 @@ import {
   writeSessionState,
   clearTokenCache,
   getTeamsOrigin,
+  getSessionEpoch,
   type SessionState,
 } from './session-store.js';
 import { decodeJwtPayload } from './token-extractor.js';
@@ -599,6 +600,11 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
     ));
   }
 
+  // The OAuth exchanges below take seconds; a forceNew wipe can land while
+  // they run. The epoch captured with this read lets the write below detect
+  // that the state it holds is stale and skip resurrecting the old account.
+  const sessionEpoch = getSessionEpoch();
+
   const extracted = extractMsalCacheInfo(state);
   if ('missing' in extracted) {
     log.warn('token-refresh-http', `MSAL cache extraction failed: ${extracted.missing}`);
@@ -672,6 +678,11 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
     } else {
       log.warn('token-refresh-http', `Skype token exchange failed: ${skypeResult.error.message}`);
     }
+  }
+
+  if (getSessionEpoch() !== sessionEpoch) {
+    log.warn('token-refresh-http', 'Session data was wiped while the refresh was in flight; skipping the stale session-state write');
+    return ok(undefined);
   }
 
   writeSessionState(state);

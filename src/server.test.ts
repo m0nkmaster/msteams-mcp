@@ -40,6 +40,8 @@ function callTool(name: string, args: unknown = {}): Promise<ToolCallResponse> {
 describe('TeamsServer auto-login failure', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // mockReturnValue survives clearAllMocks in Vitest 4 — reset the flag.
+    vi.mocked(isBrowserLoginInProgress).mockReturnValue(false);
   });
 
   it('directs to a plain teams_login when automatic re-authentication fails', async () => {

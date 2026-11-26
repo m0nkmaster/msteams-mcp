@@ -230,6 +230,31 @@ describe('refreshTokensViaBrowser', () => {
     }
   });
 
+  it('skips the browser fallback when a sign-in starts while the HTTP leg is in flight', async () => {
+    let resolveHttp!: (value: Result<void>) => void;
+    vi.mocked(refreshTokensViaHttp).mockImplementation(
+      () => new Promise<Result<void>>(resolve => { resolveHttp = resolve; })
+    );
+    const pending = refreshTokensViaBrowser();
+    await vi.waitFor(() => expect(refreshTokensViaHttp).toHaveBeenCalledTimes(1));
+
+    // The refresh passed its entry gate before the sign-in raised the flag;
+    // the fallback must re-check before touching the browser profile.
+    setBrowserLoginInProgress(true);
+    try {
+      resolveHttp({ ok: false, error: createError(ErrorCode.AUTH_REQUIRED, 'refresh token rejected') });
+      const result = await pending;
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.AUTH_REQUIRED);
+      }
+      expect(createBrowserContext).not.toHaveBeenCalled();
+    } finally {
+      setBrowserLoginInProgress(false);
+    }
+  });
+
   it('fails fast optional-token refreshes while a login is in progress', async () => {
     setBrowserLoginInProgress(true);
     try {

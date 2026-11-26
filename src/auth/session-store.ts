@@ -32,6 +32,19 @@ export const TOKEN_CACHE_PATH = path.join(CONFIG_DIR, 'token-cache.json');
 const SECURE_FILE_MODE = 0o600;
 
 /**
+ * Monotonic counter bumped whenever local session data is deleted. An
+ * in-flight refresh that read the old state compares the epoch across its
+ * async work and skips the write when it changed — otherwise a refresh
+ * abandoned at its deadline could write the wiped account's session back.
+ */
+let sessionEpoch = 0;
+
+/** Current session epoch; capture before an async read-modify-write. */
+export function getSessionEpoch(): number {
+  return sessionEpoch;
+}
+
+/**
  * Ensures the config directory exists with secure permissions.
  */
 export function ensureConfigDir(): void {
@@ -116,6 +129,7 @@ export function writeSessionState(state: SessionState): void {
  * Deletes the session state file.
  */
 export function clearSessionState(): void {
+  sessionEpoch += 1;
   if (fs.existsSync(SESSION_STATE_PATH)) {
     fs.unlinkSync(SESSION_STATE_PATH);
   }
@@ -126,6 +140,7 @@ export function clearSessionState(): void {
  * every account ever signed in), session state and token cache.
  */
 export function clearAllLocalData(): void {
+  sessionEpoch += 1;
   fs.rmSync(CONFIG_DIR, { recursive: true, force: true });
 }
 
