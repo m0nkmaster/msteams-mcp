@@ -17,7 +17,7 @@ import ts from 'typescript';
 const MENTION = /force[_\s-]?new|--force\b|force\s*[:=]\s*true/gi;
 const EXEMPT = /without forceNew/gi;
 const NEGATION = /\b(?:not|never|don't|do not)\b/i;
-const APPROVAL = /ask the user to approve|with the user'?s approval|user approval only|only with the user'?s approval/i;
+const APPROVAL = /ask the user to approve|with the user'?s approval|user approval only|only with the user'?s approval/gi;
 const SENTENCE_END = /[.!?;:]\s|\n/g;
 const APPROVAL_WINDOW = 100;
 
@@ -46,8 +46,16 @@ export function recommendsForceNewWithoutApproval(text: string): boolean {
 
   for (const match of stripped.matchAll(MENTION)) {
     const index = match.index ?? 0;
-    const window = stripped.slice(Math.max(sentenceStart(stripped, index), index - APPROVAL_WINDOW), index);
-    if (!APPROVAL.test(window)) return true;
+    const windowStart = Math.max(sentenceStart(stripped, index), index - APPROVAL_WINDOW);
+    const window = stripped.slice(windowStart, index);
+    // An approval phrase counts only when it is not itself negated: no
+    // not/never/don't/do not between the start of its own clause and it.
+    const approved = [...window.matchAll(APPROVAL)].some(approval => {
+      const approvalIndex = windowStart + (approval.index ?? 0);
+      const before = stripped.slice(sentenceStart(stripped, approvalIndex), approvalIndex);
+      return !NEGATION.test(before);
+    });
+    if (!approved) return true;
   }
   return false;
 }
@@ -67,10 +75,12 @@ function plusOperands(node: ts.Expression): ts.Expression[] {
  * spans inline (even \w+ ones), everything else becomes '…' — so advice
  * split across an interpolation or concatenation is still scanned as the
  * single string the runtime produces. Standalone \w+ literals ('forceNew'
- * as a property name) stay skipped. node.text is already unescaped.
+ * as a property name) stay skipped. Same-file `const` strings are inlined
+ * by name; a name declared with conflicting values resolves to '…'.
+ * node.text is already unescaped.
  *
- * Accepted gap: same-file const identifiers are not inlined, so
- * `const FLAG = 'forceNew'; 'call teams_login with ' + FLAG` is not caught.
+ * Accepted gaps: constants imported from other files and property access
+ * (OBJ.KEY) are not resolved — they inline as '…'.
  */
 export function stringLiteralValues(fileName: string, text: string): string[] {
   const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
@@ -80,11 +90,41 @@ export function stringLiteralValues(fileName: string, text: string): string[] {
   const isPlusChain = (node: ts.Node): boolean =>
     ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
 
+  // File-wide `const` strings, any scope: name -> value, or null when the
+  // name is declared with conflicting values.
+  const consts = new Map<string, string | null>();
+  const collectConsts = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.initializer !== undefined
+      && (ts.isStringLiteral(node.initializer) || ts.isNoSubstitutionTemplateLiteral(node.initializer))
+      && (ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const) !== 0)
+    ) {
+      const name = node.name.text;
+      const value = node.initializer.text;
+      const prev = consts.get(name);
+      if (prev === undefined) consts.set(name, value);
+      else if (prev !== value) consts.set(name, null);
+    }
+    ts.forEachChild(node, collectConsts);
+  };
+  collectConsts(source);
+
+  const inline = (node: ts.Node): string => {
+    if (isStringPart(node)) return node.text;
+    if (ts.isIdentifier(node)) {
+      const value = consts.get(node.text);
+      if (typeof value === 'string') return value;
+    }
+    return '…';
+  };
+
   const visit = (node: ts.Node): void => {
     if (ts.isTemplateExpression(node)) {
       let joined = node.head.text;
       for (const span of node.templateSpans) {
-        joined += isStringPart(span.expression) ? span.expression.text : '…';
+        joined += inline(span.expression);
         joined += span.literal.text;
       }
       if (!/^\w+$/.test(joined)) values.push(joined);
@@ -95,9 +135,7 @@ export function stringLiteralValues(fileName: string, text: string): string[] {
     if (isPlusChain(node)) {
       const operands = plusOperands(node as ts.BinaryExpression);
       if (operands.some(isStringPart)) {
-        const joined = operands
-          .map(operand => (isStringPart(operand) ? operand.text : '…'))
-          .join('');
+        const joined = operands.map(inline).join('');
         if (!/^\w+$/.test(joined)) values.push(joined);
         // Literal operands are inlined above; still scan non-literal
         // operands for literals nested inside calls/conditionals.

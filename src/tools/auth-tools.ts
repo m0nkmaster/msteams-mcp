@@ -96,7 +96,7 @@ async function messagingAuthFailure(): Promise<ToolResult | null> {
         retryable: false,
         suggestions: [
           'Tell the user Teams sign-in succeeded but messaging authorization failed, and show them this error',
-          'Do not call teams_login again in a loop — even with the user\'s approval, forceNew will not fix this failure',
+          'Do not call teams_login again in a loop; even with the user\'s approval, forceNew will not fix this failure',
           'Retry later, or check the network connection and Conditional Access policies',
         ],
       }),
@@ -110,6 +110,9 @@ async function handleLogin(
   resetAssignmentsAvailability();
 
   if (input.forceNew) {
+    // Wait out any in-flight refresh first: it may be holding the browser
+    // profile that clearAllLocalData is about to delete.
+    await awaitRefreshQueue();
     // Start from nothing: no profile, cookies, MSAL cache or session from any
     // earlier account can survive to be mixed into the new login.
     clearAllLocalData();

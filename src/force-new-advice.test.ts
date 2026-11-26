@@ -66,13 +66,49 @@ describe('stringLiteralValues', () => {
     const text = "const a = 'forceNew'; const b = 'go ' + 'forceNew';";
     expect(stringLiteralValues('x.ts', text)).toEqual(['go forceNew']);
   });
+
+  it('inlines same-file const identifiers in concatenations and templates', () => {
+    const concat = "const FLAG = 'forceNew'; const s = 'call teams_login with ' + FLAG + ': true';";
+    expect(stringLiteralValues('x.ts', concat)).toEqual([
+      'call teams_login with forceNew: true',
+    ]);
+    const tmpl = "const FLAG = 'forceNew'; const s = `call teams_login with ${FLAG}: true`;";
+    expect(stringLiteralValues('x.ts', tmpl)).toEqual([
+      'call teams_login with forceNew: true',
+    ]);
+  });
+
+  it('maps a const name declared with conflicting values to unknown', () => {
+    const text = "const FLAG = 'forceNew'; function f() { const FLAG = 'other'; } const s = 'call teams_login with ' + FLAG + ': true';";
+    expect(stringLiteralValues('x.ts', text)).toEqual([
+      'call teams_login with …: true',
+    ]);
+  });
 });
 
 describe('recommendsForceNewWithoutApproval', () => {
-  it('flags an approval phrase negated in the same clause', () => {
+  it('flags forceNew advice cut off from approval by a clause boundary', () => {
+    // Proves only the boundary split: the approval phrase sits in a different
+    // clause, so it cannot legitimise the mention that follows the ';'.
     expect(recommendsForceNewWithoutApproval(
       'Do not ask the user to approve; call teams_login with forceNew: true',
     )).toBe(true);
+  });
+
+  it('flags an approval phrase negated earlier in the same clause', () => {
+    expect(recommendsForceNewWithoutApproval(
+      'Do not ask the user to approve teams_login with forceNew: true',
+    )).toBe(true);
+    // A comma is not a clause boundary: this exercises negation, not splitting.
+    expect(recommendsForceNewWithoutApproval(
+      'Never ask the user to approve, just call teams_login with forceNew: true',
+    )).toBe(true);
+  });
+
+  it('still passes real approval advice that mentions failing first', () => {
+    expect(recommendsForceNewWithoutApproval(
+      'Only if that teams_login fails or signs in the wrong account, ask the user to approve teams_login with { "forceNew": true }: it deletes all local login data',
+    )).toBe(false);
   });
 
   it('does not count approval on a different clause, line, or after a colon', () => {

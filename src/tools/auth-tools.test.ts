@@ -113,6 +113,28 @@ describe('teams_login core credential top-up', () => {
 
     expect(result.success).toBe(true);
   });
+
+  it('waits for an in-flight refresh before wiping data for forceNew', async () => {
+    // forceNew deletes the whole config directory including the browser
+    // profile an in-flight refresh may be using — it must queue behind it.
+    sessionMissingCsaToken();
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+    vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.mocked(awaitRefreshQueue).mockReturnValue(gate);
+
+    const pending = loginTool.handler({ forceNew: true });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(clearAllLocalData).not.toHaveBeenCalled();
+    expect(createBrowserContext).not.toHaveBeenCalled();
+
+    release();
+    const result = await pending;
+    expect(result.success).toBe(true);
+    expect(clearAllLocalData).toHaveBeenCalledOnce();
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: false });
+  });
 });
 
 describe('teams_login fast path requires usable messaging', () => {
