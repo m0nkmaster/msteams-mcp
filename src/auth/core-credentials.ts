@@ -11,8 +11,10 @@ import {
   extractSkypeSpacesToken,
   extractCsaToken,
   extractMessageAuth,
+  getMessageAuthStatus,
 } from './token-extractor.js';
 import { refreshTokensViaHttp } from './token-refresh-http.js';
+import { TOKEN_VALID_THRESHOLD_MINUTES } from '../constants.js';
 import * as log from '../utils/logger.js';
 
 /** Every core credential a session needs: search, calendar, favourites, messaging. */
@@ -21,6 +23,23 @@ export function coreCredentialsComplete(): boolean {
     && extractSkypeSpacesToken() !== null
     && extractCsaToken() !== null
     && extractMessageAuth() !== null;
+}
+
+/**
+ * Whether messaging auth is usable: the messaging cookies are present
+ * (extractMessageAuth checks skypetoken_asm and authtoken) and the
+ * skypetoken_asm JWT is not expired or near expiry (getMessageAuthStatus).
+ */
+export function messagingUsable(): boolean {
+  if (extractMessageAuth() === null) return false;
+  const status = getMessageAuthStatus();
+  return status.hasToken
+    && (status.minutesRemaining === undefined || status.minutesRemaining >= TOKEN_VALID_THRESHOLD_MINUTES);
+}
+
+/** True when every core credential is present AND messaging auth is usable. */
+export function coreSessionReady(): boolean {
+  return coreCredentialsComplete() && messagingUsable();
 }
 
 /**

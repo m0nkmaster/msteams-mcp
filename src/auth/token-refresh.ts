@@ -34,7 +34,7 @@ import { clearTokenCache } from './session-store.js';
 import { refreshTokensViaHttp, type OnDemandResource } from './token-refresh-http.js';
 import { createBrowserContext, closeBrowser, type BrowserManager } from '../browser/context.js';
 import { ensureAuthenticated } from '../browser/auth.js';
-import { coreCredentialsComplete, fillCoreCredentialGaps } from './core-credentials.js';
+import { coreCredentialsComplete, coreSessionReady, fillCoreCredentialGaps } from './core-credentials.js';
 import { withTimeout, TimeoutError } from '../utils/timeout.js';
 import { CORE_REFRESH_TIMEOUT_MS, BROWSER_REFRESH_LAUNCH_TIMEOUT_MS } from '../constants.js';
 import * as log from '../utils/logger.js';
@@ -54,6 +54,15 @@ function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
   const pending = refreshQueue.then(run, run);
   refreshQueue = pending.then(() => undefined, () => undefined);
   return pending;
+}
+
+/**
+ * Resolves once the current refresh queue has settled. teams_login awaits
+ * this before opening a browser so it cannot collide with the Chromium
+ * profile lock held by an in-flight refresh. Never rejects.
+ */
+export function awaitRefreshQueue(): Promise<void> {
+  return refreshQueue.then(() => undefined);
 }
 
 /** Refresh core Teams credentials, with browser fallback. */
@@ -100,7 +109,13 @@ async function cleanupWedgedBrowser(): Promise<void> {
  * session-state writes against an in-flight refreshTokensViaBrowser.
  */
 export function refreshCoreTokensViaHttp(): Promise<Result<void>> {
-  return serializeRefresh(() => refreshTokensViaHttp()).catch((error): Result<void> => {
+  // Re-check inside the serialized job: a refresh queued behind an in-flight
+  // one may already have left the session ready, making a second OAuth
+  // exchange redundant. Extractor caches are invalidated by the refresh's
+  // own writeSessionState + clearTokenCache, so this sees fresh state.
+  return serializeRefresh(() => coreSessionReady()
+    ? Promise.resolve(ok(undefined))
+    : refreshTokensViaHttp()).catch((error): Result<void> => {
     if (error instanceof TimeoutError) {
       return err(createError(ErrorCode.TIMEOUT,
         `Core credential refresh timed out after ${CORE_REFRESH_TIMEOUT_MS / 1000}s.`));

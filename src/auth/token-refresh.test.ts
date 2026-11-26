@@ -6,6 +6,7 @@ vi.mock('./token-extractor.js', () => ({
   extractMessageAuth: vi.fn(),
   extractSkypeSpacesToken: vi.fn(),
   extractCsaToken: vi.fn(),
+  getMessageAuthStatus: vi.fn(),
   getValidAssignmentsToken: vi.fn(),
   getValidGraphToken: vi.fn(),
 }));
@@ -27,6 +28,7 @@ import {
   extractMessageAuth,
   extractSkypeSpacesToken,
   extractCsaToken,
+  getMessageAuthStatus,
 } from './token-extractor.js';
 import { refreshTokensViaHttp } from './token-refresh-http.js';
 import type { Result } from '../types/result.js';
@@ -43,6 +45,7 @@ function completeSession(): void {
   vi.mocked(extractMessageAuth).mockReturnValue(VALID_MESSAGE_AUTH);
   vi.mocked(extractSkypeSpacesToken).mockReturnValue('spaces');
   vi.mocked(extractCsaToken).mockReturnValue('csa');
+  vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: true, minutesRemaining: 600 });
 }
 
 describe('refreshTokensViaBrowser', () => {
@@ -106,7 +109,7 @@ describe('refreshTokensViaBrowser', () => {
     expect(vi.mocked(refreshTokensViaHttp)).toHaveBeenCalledTimes(2);
   });
 
-  it('queues refreshCoreTokensViaHttp behind an in-flight core refresh', async () => {
+  it('skips the HTTP exchange when an in-flight refresh already left the session ready', async () => {
     completeSession();
     let resolveFirst!: (value: Result<void>) => void;
     const firstCall = new Promise<Result<void>>(resolve => { resolveFirst = resolve; });
@@ -128,11 +131,37 @@ describe('refreshTokensViaBrowser', () => {
       const [browserResult, httpResult] = await Promise.all([browserRefresh, httpRefresh]);
       expect(browserResult.ok).toBe(true);
       expect(httpResult.ok).toBe(true);
-      expect(vi.mocked(refreshTokensViaHttp)).toHaveBeenCalledTimes(2);
+      // The queued job re-checks the session first: the in-flight refresh
+      // already minted every credential, so no second OAuth exchange runs.
+      expect(vi.mocked(refreshTokensViaHttp)).toHaveBeenCalledTimes(1);
     } finally {
       // Never leave the shared refresh queue wedged on the deferred call.
       resolveFirst({ ok: true, value: undefined });
       await Promise.allSettled([browserRefresh, httpRefresh]);
+    }
+  });
+
+  it('maps a wedged core HTTP refresh to TIMEOUT at the shared deadline', async () => {
+    vi.useFakeTimers();
+    // Session is not ready, so the re-check cannot skip the exchange.
+    vi.mocked(extractSubstrateToken).mockReturnValue(null);
+    vi.mocked(extractMessageAuth).mockReturnValue(null);
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(refreshTokensViaHttp).mockImplementation(() => new Promise(() => {}));
+
+    const pending = refreshCoreTokensViaHttp();
+    try {
+      await vi.advanceTimersByTimeAsync(CORE_REFRESH_TIMEOUT_MS);
+
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.TIMEOUT);
+        expect(result.error.message).toContain('timed out after 90s');
+      }
+    } finally {
+      // The queue already advanced past the abandoned attempt; settle anyway.
+      await Promise.allSettled([pending]);
     }
   });
 

@@ -20,9 +20,11 @@ import {
   extractMessageAuth,
   extractCsaToken,
 } from '../auth/token-extractor.js';
-import { fillCoreCredentialGaps, coreCredentialsComplete } from '../auth/core-credentials.js';
-import { refreshCoreTokensViaHttp } from '../auth/token-refresh.js';
+import { coreSessionReady, messagingUsable } from '../auth/core-credentials.js';
+import { awaitRefreshQueue, refreshCoreTokensViaHttp } from '../auth/token-refresh.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
+import { ErrorCode, createError } from '../types/errors.js';
+import { TOKEN_VALID_THRESHOLD_MINUTES } from '../constants.js';
 import * as log from '../utils/logger.js';
 import { resetAssignmentsAvailability, clearRegionCache } from '../utils/auth-guards.js';
 import { ensureAuthenticated } from '../browser/auth.js';
@@ -66,19 +68,39 @@ const statusToolDefinition: Tool = {
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Minimum minutes remaining on token to consider it valid (skip browser). */
-const TOKEN_VALID_THRESHOLD_MINUTES = 10;
-
 /**
- * Whether messaging auth is usable: the messaging cookies are present
- * (extractMessageAuth checks skypetoken_asm and authtoken) and the
- * skypetoken_asm JWT is not expired or near expiry (getMessageAuthStatus).
+ * Verifies messaging auth actually works after a sign-in before success is
+ * reported. Sign-in alone does not mint skypetoken_asm — that cookie comes
+ * from the HTTP Skype-token exchange — so when the session is not ready this
+ * runs the same serialized refresh teams_login's fast path uses, then
+ * requires messagingUsable(). Returns a failure ToolResult when messaging
+ * stays unusable: reporting success here would loop login -> retry forever.
  */
-function messagingUsable(): boolean {
-  if (extractMessageAuth() === null) return false;
-  const status = getMessageAuthStatus();
-  return status.hasToken
-    && (status.minutesRemaining === undefined || status.minutesRemaining >= TOKEN_VALID_THRESHOLD_MINUTES);
+async function messagingAuthFailure(): Promise<ToolResult | null> {
+  let refreshError: string | undefined;
+  if (!coreSessionReady()) {
+    const refresh = await refreshCoreTokensViaHttp();
+    if (!refresh.ok) {
+      refreshError = refresh.error.message;
+      log.warn('login', `Could not refresh credentials over HTTP: ${refreshError}`);
+    }
+  }
+  if (messagingUsable()) return null;
+
+  const detail = refreshError ? ` Refresh error: ${refreshError}` : '';
+  return {
+    success: false,
+    error: createError(ErrorCode.API_ERROR,
+      `Teams sign-in succeeded, but messaging credentials (skypetoken_asm) could not be minted.${detail} Do not call teams_login again in a loop; even with the user's approval, forceNew will not fix this: it only deletes local login data, and a fresh sign-in hits the same failure.`,
+      {
+        retryable: false,
+        suggestions: [
+          'Tell the user Teams sign-in succeeded but messaging authorization failed, and show them this error',
+          'Do not call teams_login again in a loop — even with the user\'s approval, forceNew will not fix this failure',
+          'Retry later, or check the network connection and Conditional Access policies',
+        ],
+      }),
+  };
 }
 
 async function handleLogin(
@@ -100,7 +122,7 @@ async function handleLogin(
   // re-mint an expired skypetoken_asm without opening a browser.
   const tokenStatus = getSubstrateTokenStatus();
   if (tokenStatus.hasToken && tokenStatus.minutesRemaining! >= TOKEN_VALID_THRESHOLD_MINUTES) {
-    if (!coreCredentialsComplete() || !messagingUsable()) {
+    if (!coreSessionReady()) {
       const refresh = await refreshCoreTokensViaHttp();
       if (!refresh.ok) {
         log.warn('login', `Could not refresh credentials over HTTP: ${refresh.error.message}`);
@@ -125,6 +147,9 @@ async function handleLogin(
   // Headless-first strategy:
   // The persistent browser profile retains Microsoft's long-lived session cookies,
   // so headless SSO can succeed even without a session-state file.
+  // Wait out any in-flight refresh first: it holds the Chromium profile lock,
+  // and launching a second browser against it fails outright.
+  await awaitRefreshQueue();
   const headless = await createBrowserContext({ headless: true });
   try {
     await ensureAuthenticated(
@@ -135,7 +160,12 @@ async function handleLogin(
       true   // Headless mode - throw immediately if user interaction required
     );
     await closeBrowser(headless, true);
-    await fillCoreCredentialGaps();
+
+    // Sign-in succeeded but that does not prove messaging auth works: a
+    // visible browser cannot mint skypetoken_asm either, so do NOT fall
+    // through — report the failure instead of a false success.
+    const failure = await messagingAuthFailure();
+    if (failure) return failure;
 
     return {
       success: true,
@@ -161,7 +191,8 @@ async function loginInVisibleBrowser(): Promise<ToolResult> {
     await closeBrowser(visible, true);
   }
 
-  await fillCoreCredentialGaps();
+  const failure = await messagingAuthFailure();
+  if (failure) return failure;
 
   return {
     success: true,
