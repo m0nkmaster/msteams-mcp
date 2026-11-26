@@ -212,6 +212,32 @@ describe('refreshTokensViaBrowser', () => {
     }
   });
 
+  it('keeps the login guard until the last overlapping login ends', async () => {
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_REQUIRED, 'no refresh token'),
+    });
+    // Two teams_login calls can overlap (handleLogin is not serialized):
+    // the first finishing must not reopen the profile under the second.
+    setBrowserLoginInProgress(true);
+    setBrowserLoginInProgress(true);
+    try {
+      setBrowserLoginInProgress(false);
+      const stillGuarded = await refreshTokensViaBrowser();
+      expect(stillGuarded.ok).toBe(false);
+      expect(createBrowserContext).not.toHaveBeenCalled();
+    } finally {
+      setBrowserLoginInProgress(false);
+    }
+
+    // Balanced: the guard is released and the browser fallback runs again.
+    completeSession();
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+    const released = await refreshTokensViaBrowser();
+    expect(createBrowserContext).toHaveBeenCalled();
+    expect(released.ok).toBe(true);
+  });
+
   it('maps a wedged core HTTP refresh to TIMEOUT at the shared deadline', async () => {
     vi.useFakeTimers();
     // Session is not ready, so the re-check cannot skip the exchange.

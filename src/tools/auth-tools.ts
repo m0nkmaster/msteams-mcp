@@ -157,15 +157,18 @@ async function handleLogin(
   resetAssignmentsAvailability();
 
   if (input.forceNew) {
-    // Wait out any in-flight refresh first: it may be holding the browser
-    // profile that clearAllLocalData is about to delete.
-    await awaitRefreshQueue();
-    // Start from nothing: no profile, cookies, MSAL cache or session from any
-    // earlier account can survive to be mixed into the new login.
-    clearAllLocalData();
-    clearRegionCache();
+    // The guard rises before anything touches the profile: an auto-refresh
+    // starting while the queue drains or the directory is deleted must not
+    // launch a browser onto it.
     setBrowserLoginInProgress(true);
     try {
+      // Wait out any in-flight refresh first: it may be holding the browser
+      // profile that clearAllLocalData is about to delete.
+      await awaitRefreshQueue();
+      // Start from nothing: no profile, cookies, MSAL cache or session from any
+      // earlier account can survive to be mixed into the new login.
+      clearAllLocalData();
+      clearRegionCache();
       return await loginInVisibleBrowser();
     } finally {
       setBrowserLoginInProgress(false);
@@ -206,9 +209,9 @@ async function handleLogin(
   // and launching a second browser against it fails outright. The flag stays
   // up for the whole sign-in (headless, fallback gap, visible browser) so an
   // auto-refresh cannot slip a browser onto the profile mid-login.
-  await awaitRefreshQueue();
   setBrowserLoginInProgress(true);
   try {
+    await awaitRefreshQueue();
     const headless = await createBrowserContext({ headless: true });
     try {
       await ensureAuthenticated(

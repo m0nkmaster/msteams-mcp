@@ -50,16 +50,22 @@ let coreRefresh: Promise<Result<void>> | undefined;
 let activeBrowser: BrowserManager | null = null;
 
 /**
- * True while teams_login has a browser sign-in open on the persistent
+ * Number of teams_login browser sign-ins currently open on the persistent
  * profile. A second Chromium instance on the same profile fails on the
  * profile lock anyway, and a visible sign-in can run for minutes — so the
  * browser fallback stands down for the whole window instead of colliding.
+ * Counted, not boolean: handleLogin is not serialized, so overlapping
+ * logins must not clear the guard while another browser is still open.
  */
-let browserLoginInProgress = false;
+let browserLoginCount = 0;
 
 /** Marks a teams_login browser session so refreshViaHeadlessBrowser does not collide on the profile. */
 export function setBrowserLoginInProgress(active: boolean): void {
-  browserLoginInProgress = active;
+  browserLoginCount = Math.max(0, browserLoginCount + (active ? 1 : -1));
+}
+
+function browserLoginInProgress(): boolean {
+  return browserLoginCount > 0;
 }
 
 function serializeRefresh<T>(refresh: () => Promise<T>): Promise<T> {
@@ -219,7 +225,7 @@ async function refreshCoreTokens(): Promise<Result<void>> {
 async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
   // teams_login owns the profile for the whole sign-in window: a second
   // browser on it fails on the Chromium lock, so fail fast instead.
-  if (browserLoginInProgress) {
+  if (browserLoginInProgress()) {
     return err(createError(
       ErrorCode.AUTH_REQUIRED,
       'Teams sign-in is already in progress in another window; wait for it to finish, then retry.',

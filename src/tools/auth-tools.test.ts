@@ -139,6 +139,11 @@ describe('teams_login core credential top-up', () => {
     expect(result.success).toBe(true);
     expect(clearAllLocalData).toHaveBeenCalledOnce();
     expect(createBrowserContext).toHaveBeenCalledWith({ headless: false });
+    // The login guard rises before the wipe: a refresh starting while the
+    // profile is being deleted must not launch a browser onto it.
+    expect(vi.mocked(setBrowserLoginInProgress).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(clearAllLocalData).mock.invocationCallOrder[0]);
+    expect(vi.mocked(setBrowserLoginInProgress).mock.calls.at(-1)?.[0]).toBe(false);
   });
 });
 
