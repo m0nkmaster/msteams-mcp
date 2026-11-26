@@ -69,6 +69,15 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 - "IMMEDIATELY" was dropped, so the AI could be less eager to re-login. "Do NOT skip this step or tell the user Teams is unavailable" is kept in every list. Decision: accepted.
 - A plain login can now open a visible window without asking first (as `forceNew` always did). The auto-login-failed suggestion tells the AI to warn the user that a sign-in window may open. Decision: accepted.
 
+**Decisions (second-order review of the post-sign-in `API_ERROR` and the sign-in guards, 2026-11-26):**
+
+- The `API_ERROR` after sign-in says "do not call teams_login again in a loop", but an AI client can ignore suggestions and retry anyway. Each retry costs one headless SSO (~8s, invisible) plus one serialized HTTP refresh, then fails again — a bounded, invisible loop, far cheaper than the old login->auth-fail->auto-login cycle. Decision: accepted; the wording is the mitigation.
+- While any sign-in is in progress, `refreshTokensViaBrowser` and the on-demand token refreshes fail fast at entry — including their HTTP leg, which writes session state. Consequence: every Teams tool call fails auth for the whole sign-in window (up to ~5 min for a visible login). Trade-off accepted: a session-state write landing mid-`forceNew` wipe can resurrect the wiped account, which is worse than a temporary outage with a clear "wait" error.
+- A second `teams_login` is refused (`API_ERROR`, "already in progress") rather than joined. Joining would return the first call's result — wrong for `forceNew`, which must wipe — and refusal gives the client an actionable signal. Consequence: the user must wait for the open window or close it; the visible login's own timeout bounds the wait. Decision: accepted.
+- `forceNew` is refused while any sign-in is in progress: wiping the profile under an open sign-in is the exact leak `forceNew` exists to prevent. Decision: accepted.
+- The "forceNew may help" hint is only offered after headless SSO. After any interactive (visible) sign-in — including `forceNew` itself — the wording is always "will not fix", because the fresh sign-in already rebuilt the auth state a wipe would recreate. Decision: accepted.
+- `teams_login` can block ~105s behind a wedged refresh (90s deadline + wedged-browser cleanup) before headless SSO starts, then up to 5 min in the visible browser. An MCP client may time out the call while the server keeps running; a retry then gets "already in progress" until the first attempt's `finally` clears the guard — self-correcting. Decision: accepted.
+
 ## Plain `teams_login` does not refresh optional tokens on the fast path
 
 **Added:** 2026-11-26 (George Murga), from the `forceNew` advice review.
