@@ -9,7 +9,10 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { recommendsForceNewWithoutApproval, stringLiteralValues } from './__fixtures__/force-new-guard.js';
+import {
+  recommendsForceNewWithoutApproval,
+  stringLiteralValues,
+} from './__fixtures__/force-new-guard.js';
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url));
 
@@ -43,6 +46,51 @@ describe('stringLiteralValues', () => {
     expect(stringLiteralValues('x.ts', text)).toEqual([
       "Only with the user's approval, call teams_login",
     ]);
+  });
+
+  it('joins a template expression into one value', () => {
+    const text = "const s = `Call teams_login with ${'forceNew'}: true`;";
+    expect(stringLiteralValues('x.ts', text)).toEqual([
+      'Call teams_login with forceNew: true',
+    ]);
+  });
+
+  it('joins a +-concatenation containing a string literal', () => {
+    const text = "const s = 'call ' + name + ' teams_login with forceNew: true';";
+    expect(stringLiteralValues('x.ts', text)).toEqual([
+      'call … teams_login with forceNew: true',
+    ]);
+  });
+
+  it('inlines \\w+ literals inside concatenations but skips standalone ones', () => {
+    const text = "const a = 'forceNew'; const b = 'go ' + 'forceNew';";
+    expect(stringLiteralValues('x.ts', text)).toEqual(['go forceNew']);
+  });
+});
+
+describe('recommendsForceNewWithoutApproval', () => {
+  it('flags an approval phrase negated in the same clause', () => {
+    expect(recommendsForceNewWithoutApproval(
+      'Do not ask the user to approve; call teams_login with forceNew: true',
+    )).toBe(true);
+  });
+
+  it('does not count approval on a different clause, line, or after a colon', () => {
+    expect(recommendsForceNewWithoutApproval(
+      'Ask the user to approve\ncall teams_login with forceNew: true',
+    )).toBe(true);
+    expect(recommendsForceNewWithoutApproval(
+      'Ask the user to approve: call teams_login with forceNew: true',
+    )).toBe(true);
+  });
+
+  it('flags force = true and force: true mentions', () => {
+    expect(recommendsForceNewWithoutApproval('Call teams_login with force = true')).toBe(true);
+    expect(recommendsForceNewWithoutApproval('Call teams_login with force: true')).toBe(true);
+  });
+
+  it('does not flag MUST together with without forceNew', () => {
+    expect(recommendsForceNewWithoutApproval('You MUST call teams_login without forceNew')).toBe(false);
   });
 });
 
