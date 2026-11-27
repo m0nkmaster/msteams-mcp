@@ -226,11 +226,14 @@ exit codes 0 success / 1 tool failure / 2 malformed command. `--json` prints the
 tool's own payload, not the MCP envelope.
 
 On Windows, never pass a multi-line argument through `npm run cli`: npm launches
-the script via `cmd.exe`, which truncates the argument list at the first newline
-- the message goes out with only its first paragraph, later flags like `--files`
+the script via `cmd.exe`, which truncates the argument list at the first newline;
+the message goes out with only its first paragraph, later flags like `--files`
 are silently dropped, and the CLI still reports ok. For multi-line message text
 use `--content-file <path>` (`-` reads stdin) on `send_message`/`edit_message`, or
-bypass npm entirely: `node node_modules/tsx/dist/cli.mjs src/cli.ts ...`.
+bypass npm entirely: `node node_modules/tsx/dist/cli.mjs src/cli.ts ...`. Relative
+paths resolve against the directory you ran npm from (`INIT_CWD`), files are read
+as UTF-8 (a UTF-16 BOM is decoded, anything else non-UTF-8 is a usage error), and
+`-` on an interactive terminal is refused rather than blocking on stdin.
 
 ```bash
 npm run cli                                     # Command index

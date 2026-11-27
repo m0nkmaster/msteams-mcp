@@ -7,6 +7,8 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
+import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
@@ -141,9 +143,40 @@ function flagHint(props: Record<string, SchemaProp>, label: string): string {
   return `Flags for '${label}': ${flags}${contentFile}\nRun 'msteams help ${label}' for details.`;
 }
 
+/**
+ * Decodes --content-file bytes to text. UTF-16 files (what Windows
+ * PowerShell 5.1 writes by default) are decoded by their BOM; anything else
+ * must be valid UTF-8 - mojibake sent to Teams is worse than an error.
+ */
+function decodeContentFile(buf: Buffer): string {
+  if (buf.length >= 2) {
+    if (buf[0] === 0xFF && buf[1] === 0xFE) {
+      return new TextDecoder('utf-16le').decode(buf.subarray(2));
+    }
+    if (buf[0] === 0xFE && buf[1] === 0xFF) {
+      return new TextDecoder('utf-16be').decode(buf.subarray(2));
+    }
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    throw new Error('file is not valid UTF-8 - save it as UTF-8');
+  }
+}
+
 /** Reads the --content-file value: a path, or '-' for stdin (fd 0). */
-const defaultReadContentFile = (pathOrDash: string): string =>
-  readFileSync(pathOrDash === '-' ? 0 : pathOrDash, 'utf8');
+const defaultReadContentFile = (pathOrDash: string): string => {
+  if (pathOrDash === '-') {
+    if (isatty(0)) {
+      throw new UsageError('--content-file - reads stdin; pipe the message in or pass a file path');
+    }
+    return decodeContentFile(readFileSync(0));
+  }
+  // `npm run cli` runs the script with cwd = the package root while the
+  // caller's directory survives in INIT_CWD - relative paths resolve there.
+  const target = resolvePath(process.env.INIT_CWD ?? process.cwd(), pathOrDash);
+  return decodeContentFile(readFileSync(target));
+};
 
 /**
  * Normalises file text for a message: strip a leading UTF-8 BOM, convert
@@ -259,10 +292,14 @@ export function parseToolArgs(
     try {
       raw = readContent(String(contentFileArg));
     } catch (error) {
+      if (error instanceof UsageError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       throw new UsageError(`Cannot read --content-file '${contentFileArg}': ${reason}`);
     }
     const text = normalizeContentFileText(raw);
+    if (text.includes('\u0000')) {
+      throw new UsageError(`--content-file '${contentFileArg}' contains NUL bytes - it is probably UTF-16 without a BOM; save it as UTF-8.`);
+    }
     if (!text.trim()) {
       throw new UsageError(`--content-file '${contentFileArg}' is empty or only whitespace.`);
     }

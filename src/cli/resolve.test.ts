@@ -6,8 +6,10 @@
  * can be derived from the schemas.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+import { isatty } from 'node:tty';
 import { getToolDefinitions } from '../tools/registry.js';
 import {
   UsageError,
@@ -16,7 +18,9 @@ import {
   resolveToolName,
   shortName,
 } from './resolve.js';
-import { firstSentence } from './help.js';
+import { firstSentence, renderToolHelp } from './help.js';
+
+vi.mock('node:tty', () => ({ isatty: vi.fn(() => false) }));
 
 const tools = getToolDefinitions();
 const names = tools.map(tool => tool.name);
@@ -198,12 +202,19 @@ describe('parseToolArgs --content-file', () => {
   });
 
   it('turns a read failure into a UsageError naming the path', () => {
-    expect(() => parseToolArgs(
-      sendMessage,
-      ['--content-file', 'missing.md'],
-      'send_message',
-      () => { throw new Error("ENOENT: no such file or directory, open 'missing.md'"); }
-    )).toThrow(/missing\.md/);
+    let error: unknown;
+    try {
+      parseToolArgs(
+        sendMessage,
+        ['--content-file', 'missing.md'],
+        'send_message',
+        () => { throw new Error('boom'); }
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(UsageError);
+    expect((error as Error).message).toBe("Cannot read --content-file 'missing.md': boom");
   });
 
   it('rejects an empty or whitespace-only file', () => {
@@ -231,6 +242,97 @@ describe('parseToolArgs --content-file', () => {
     expect(args.content).toContain('diacritice românești');
     expect(args.content).toContain('**Acesta este bold.**');
     expect(args.content).toContain('  - element imbricat');
+  });
+
+  it('decodes a UTF-16LE file (Windows PowerShell output) instead of sending NUL garbage', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/utf16-message.md', import.meta.url));
+    const { args } = parseToolArgs(sendMessage, ['--content-file', fixture]);
+
+    expect(args.content).toContain('diacritice: ă â î ș ț');
+    expect(args.content).not.toContain('\u0000');
+  });
+
+  it('rejects a file that is not valid UTF-8', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/ansi-message.md', import.meta.url));
+    expect(() => parseToolArgs(sendMessage, ['--content-file', fixture]))
+      .toThrow(UsageError);
+    expect(() => parseToolArgs(sendMessage, ['--content-file', fixture]))
+      .toThrow(/UTF-8/);
+  });
+
+  it('rejects content containing NUL bytes (UTF-16 saved without a BOM)', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content-file', 'x.md'],
+      'send_message',
+      () => 'a\u0000b'
+    )).toThrow(UsageError);
+  });
+
+  it('resolves relative --content-file paths against INIT_CWD, not the package root', () => {
+    // `npm run cli` sets cwd to the package root but keeps the caller's
+    // directory in INIT_CWD - a relative path must resolve there.
+    const fixtureDir = dirname(fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url)));
+    vi.stubEnv('INIT_CWD', fixtureDir);
+    try {
+      const { args } = parseToolArgs(sendMessage, ['--content-file', 'multiline-message.md']);
+      expect(args.content).toContain('diacritice românești');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refuses "-" on a TTY instead of blocking on stdin', () => {
+    vi.mocked(isatty).mockReturnValueOnce(true);
+    expect(() => parseToolArgs(sendMessage, ['--content-file', '-']))
+      .toThrow(/reads stdin/);
+  });
+
+  it('does not read the file when --help is present', () => {
+    const result = parseToolArgs(
+      sendMessage,
+      ['--content-file', '-', '--help'],
+      'send_message',
+      () => { throw new Error('must not read'); }
+    );
+    expect(result.help).toBe(true);
+  });
+
+  it('rejects the conflict before reading the file', () => {
+    let calls = 0;
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content', 'hi', '--content-file', 'f.md'],
+      'send_message',
+      () => { calls++; return 'x'; }
+    )).toThrow(/not both/);
+    expect(calls).toBe(0);
+  });
+
+  it('rejects --content-file together with --content on edit_message too', () => {
+    expect(() => parseToolArgs(
+      editMessage,
+      ['--conversationId', '19:abc', '--messageId', 'msg-1', '--content', 'x', '--content-file', 'f.md'],
+      'edit_message',
+      () => 'y'
+    )).toThrow(/not both/);
+  });
+
+  it('mentions --content-file in usage errors for content tools only', () => {
+    expect(() => parseToolArgs(sendMessage, ['--nope'], 'send_message'))
+      .toThrow(/--content-file <path\|->/);
+    try {
+      parseToolArgs(tool('teams_search'), ['--nope']);
+      expect.unreachable('expected a UsageError');
+    } catch (e) {
+      expect((e as Error).message).not.toContain('content-file');
+    }
+  });
+
+  it('lists --content-file in per-command help for content tools only', () => {
+    expect(renderToolHelp(tools, sendMessage)).toContain('--content-file');
+    expect(renderToolHelp(tools, editMessage)).toContain('--content-file');
+    expect(renderToolHelp(tools, tool('teams_search'))).not.toContain('content-file');
   });
 });
 

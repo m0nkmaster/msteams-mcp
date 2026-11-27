@@ -99,4 +99,12 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 
 **Done when:** a test covers reading content from a file; AGENTS.md documents the trap; a multi-line message with flags after it sends intact on Windows.
 
-**Status:** Done 2026-11-27 — `--content-file <path|->` added for tools with a string `content` parameter (`teams_send_message`, `teams_edit_message`); BOM/CRLF/trailing-newline normalisation; conflicts with `--content`/positional and empty files are usage errors; AGENTS.md + README document the `npm run`/cmd.exe trap. PR: PR_LINK_PLACEHOLDER.
+**Status:** Implemented 2026-11-27, pending the live Windows send check — `--content-file <path|->` added for tools with a string `content` parameter (`teams_send_message`, `teams_edit_message`); UTF-8/UTF-16 decoding, INIT_CWD-relative paths, BOM/CRLF/trailing-newline normalisation; conflicts with `--content`/positional and empty files are usage errors; AGENTS.md + README document the `npm run`/cmd.exe trap. PR: PR_LINK_PLACEHOLDER.
+
+## CLI silently drops a bare value when its parameter was already given as a flag
+
+**Added:** 2026-11-27 (review of the `--content-file` change; pre-existing bug, not introduced there).
+
+**Problem:** in `src/cli/resolve.ts`, a positional value is only applied when `args[positional] === undefined`, so `msteams send_message "hello" --content "bye"` sends "bye" and discards "hello" with no error; same for `edit_message "text" --conversationId X --messageId M --content-file f`.
+
+**Proposal:** throw a UsageError when the positional's parameter is already set.
