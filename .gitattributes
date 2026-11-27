@@ -1,3 +1,4 @@
 # Byte-exact fixtures for the CLI encoding tests - never line-ending convert.
 src/__fixtures__/ansi-message.md binary
 src/__fixtures__/utf16-message.md binary
+src/__fixtures__/utf16-truncated.md binary

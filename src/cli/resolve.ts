@@ -6,11 +6,20 @@
  * without touching the CLI.
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve as resolvePath } from 'node:path';
+import { readFileSync, readSync, realpathSync, statSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { CONFIG_DIR } from '../auth/session-store.js';
+import {
+  CREDENTIAL_FILE_BASENAMES,
+  forbiddenRoots,
+  relativeInside,
+  windowsLexicalRefusal,
+} from '../api/chat-attachments-api.js';
+import { MAX_SIMPLE_UPLOAD_BYTES } from '../constants.js';
 
 /** Thrown for anything the user can fix by retyping the command (exit code 2). */
 export class UsageError extends Error {}
@@ -149,19 +158,108 @@ function flagHint(props: Record<string, SchemaProp>, label: string): string {
  * must be valid UTF-8 - mojibake sent to Teams is worse than an error.
  */
 function decodeContentFile(buf: Buffer): string {
-  if (buf.length >= 2) {
-    if (buf[0] === 0xFF && buf[1] === 0xFE) {
-      return new TextDecoder('utf-16le').decode(buf.subarray(2));
-    }
-    if (buf[0] === 0xFE && buf[1] === 0xFF) {
-      return new TextDecoder('utf-16be').decode(buf.subarray(2));
+  let encoding = 'utf-8';
+  let bytes = buf;
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+    encoding = 'utf-16le';
+    bytes = buf.subarray(2);
+  } else if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    encoding = 'utf-16be';
+    bytes = buf.subarray(2);
+  }
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(`file is not valid ${encoding === 'utf-8' ? 'UTF-8' : 'UTF-16'} - save it as UTF-8`);
+  }
+}
+
+/** Realpath when possible, plain resolve otherwise (protected dirs may not exist). */
+function resolveRealLocal(p: string): string {
+  try {
+    // .native resolves Windows 8.3 short names that plain realpathSync keeps.
+    return realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/**
+ * Path guard for --content-file, mirroring the --files upload guard minus the
+ * upload-root containment (message text may live anywhere the user points).
+ * Returns the refusal reason, or null when the path may be read. Checks run
+ * on the realpath so junctions and 8.3 aliases cannot slip past them.
+ */
+export function contentFilePathRefusal(
+  candidate: string,
+  forbiddenDirs: string[] = forbiddenRoots(process.platform, os.homedir(), process.env, CONFIG_DIR),
+  maxBytes: number = MAX_SIMPLE_UPLOAD_BYTES,
+  homeDir: string = os.homedir(),
+): string | null {
+  // Windows lexical traps before any fs call: UNC/device paths would open
+  // an SMB session on realpath/stat and leak NTLM.
+  if (process.platform === 'win32') {
+    const refusal = windowsLexicalRefusal(candidate, path.parse(candidate).root);
+    if (refusal) return `--content-file path ${refusal}: ${candidate}`;
+  }
+
+  let realPath: string;
+  try {
+    // .native resolves Windows 8.3 short names that plain realpathSync keeps.
+    realPath = realpathSync.native(candidate);
+  } catch {
+    return null; // unreadable - the reader reports "Cannot read ..."
+  }
+
+  // Dot-paths are where credentials live. Inside the home directory only
+  // direct children are refused (~/.ssh, ~/.aws, ~/.config, ~/.env) so
+  // project dot-dirs like .tmp or .worktrees stay usable; outside home
+  // every dot segment is refused. A dot-file basename (.env, .npmrc) is
+  // refused anywhere.
+  const relHome = relativeInside(realPath, resolveRealLocal(homeDir));
+  const dotSegments = relHome === null
+    ? realPath.split(/[\\/]/)
+    : relHome.split(/[\\/]/).slice(0, 1);
+  const basename = path.basename(realPath);
+  if (basename.startsWith('.') ||
+      dotSegments.some(s => s.startsWith('.') && s !== '.' && s !== '..')) {
+    return `--content-file path must not contain dotfiles or dot-directories: ${candidate}`;
+  }
+  if (CREDENTIAL_FILE_BASENAMES.test(path.basename(realPath))) {
+    return `--content-file is a credential file and cannot be sent as a message: ${candidate}`;
+  }
+  for (const forbidden of forbiddenDirs) {
+    if (relativeInside(realPath, resolveRealLocal(forbidden)) !== null) {
+      return `--content-file path is inside a protected directory: ${candidate}`;
     }
   }
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    const stat = statSync(realPath);
+    if (!stat.isFile()) return `--content-file is not a regular file: ${candidate}`;
+    if (stat.size > maxBytes) {
+      return `--content-file exceeds the ${maxBytes / (1024 * 1024)} MB limit: ${candidate}`;
+    }
   } catch {
-    throw new Error('file is not valid UTF-8 - save it as UTF-8');
+    return `--content-file could not be read: ${candidate}`;
   }
+  return null;
+}
+
+/** Reads stdin up to maxBytes; throws UsageError past the cap. */
+function readStdinCapped(maxBytes: number): Buffer {
+  const chunks: Buffer[] = [];
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  let total = 0;
+  for (;;) {
+    const n = readSync(0, chunk, 0, chunk.length, null);
+    if (n === 0) break;
+    total += n;
+    if (total > maxBytes) {
+      throw new UsageError(`--content-file - exceeds the ${maxBytes / (1024 * 1024)} MB limit.`);
+    }
+    chunks.push(Buffer.from(chunk.subarray(0, n)));
+  }
+  return Buffer.concat(chunks);
 }
 
 /** Reads the --content-file value: a path, or '-' for stdin (fd 0). */
@@ -170,11 +268,17 @@ const defaultReadContentFile = (pathOrDash: string): string => {
     if (isatty(0)) {
       throw new UsageError('--content-file - reads stdin; pipe the message in or pass a file path');
     }
-    return decodeContentFile(readFileSync(0));
+    return decodeContentFile(readStdinCapped(MAX_SIMPLE_UPLOAD_BYTES));
   }
   // `npm run cli` runs the script with cwd = the package root while the
-  // caller's directory survives in INIT_CWD - relative paths resolve there.
-  const target = resolvePath(process.env.INIT_CWD ?? process.cwd(), pathOrDash);
+  // caller's directory survives in INIT_CWD - but only trust INIT_CWD inside
+  // an npm run; a directly-invoked CLI (the documented bypass) uses cwd.
+  const base = process.env.npm_lifecycle_event
+    ? (process.env.INIT_CWD ?? process.cwd())
+    : process.cwd();
+  const target = path.resolve(base, pathOrDash);
+  const refusal = contentFilePathRefusal(target);
+  if (refusal) throw new UsageError(refusal);
   return decodeContentFile(readFileSync(target));
 };
 

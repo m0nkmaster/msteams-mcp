@@ -13,6 +13,7 @@ import { isatty } from 'node:tty';
 import { getToolDefinitions } from '../tools/registry.js';
 import {
   UsageError,
+  contentFilePathRefusal,
   parseToolArgs,
   positionalProp,
   resolveToolName,
@@ -274,6 +275,7 @@ describe('parseToolArgs --content-file', () => {
     // directory in INIT_CWD - a relative path must resolve there.
     const fixtureDir = dirname(fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url)));
     vi.stubEnv('INIT_CWD', fixtureDir);
+    vi.stubEnv('npm_lifecycle_event', 'cli');
     try {
       const { args } = parseToolArgs(sendMessage, ['--content-file', 'multiline-message.md']);
       expect(args.content).toContain('diacritice românești');
@@ -333,6 +335,65 @@ describe('parseToolArgs --content-file', () => {
     expect(renderToolHelp(tools, sendMessage)).toContain('--content-file');
     expect(renderToolHelp(tools, editMessage)).toContain('--content-file');
     expect(renderToolHelp(tools, tool('teams_search'))).not.toContain('content-file');
+  });
+
+  it('decodes UTF-16 only when it is well-formed', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/utf16-truncated.md', import.meta.url));
+    expect(() => parseToolArgs(sendMessage, ['--content-file', fixture]))
+      .toThrow(/UTF-16/);
+  });
+
+  it('resolves relative paths against INIT_CWD only inside an npm run', () => {
+    // INIT_CWD is inherited by every descendant of an npm process; the
+    // documented bypass (`node ... cli.ts`) must use the real cwd instead.
+    const fixtureDir = dirname(fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url)));
+    vi.stubEnv('INIT_CWD', fixtureDir);
+    vi.stubEnv('npm_lifecycle_event', '');
+    try {
+      expect(() => parseToolArgs(sendMessage, ['--content-file', 'multiline-message.md']))
+        .toThrow(UsageError);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refuses dot-directories that are direct children of the home directory', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/.hidden/secret.txt', import.meta.url));
+    // homeDir is injectable so the "direct child of home" rule is testable:
+    // treat src/__fixtures__ as home, making .hidden/ a top-level dot-dir.
+    const fixturesDir = dirname(dirname(fixture));
+    expect(contentFilePathRefusal(fixture, [], undefined, fixturesDir))
+      .toMatch(/dotfiles|dot-directories/);
+    expect(contentFilePathRefusal(fixture, [], undefined, dirname(fixturesDir))).toBeNull();
+  });
+
+  it('refuses well-known credential file names', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/_netrc', import.meta.url));
+    expect(() => parseToolArgs(sendMessage, ['--content-file', fixture]))
+      .toThrow(/credential file/);
+  });
+
+  it('refuses paths inside protected directories', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/protected/secret.txt', import.meta.url));
+    const protectedDir = dirname(fixture);
+    // contentFilePathRefusal takes the forbidden roots explicitly so the
+    // check is testable without touching the real config/app-data dirs.
+    expect(contentFilePathRefusal(fixture, [protectedDir])).toMatch(/protected directory/);
+    expect(contentFilePathRefusal(fixture)).toBeNull();
+  });
+
+  it('refuses non-regular files and oversized content', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url));
+    expect(contentFilePathRefusal(fixture, [], 10)).toMatch(/MB limit/);
+    expect(contentFilePathRefusal(fixture)).toBeNull();
+  });
+
+  it.runIf(process.platform === 'win32')('refuses UNC paths before touching the filesystem', () => {
+    expect(contentFilePathRefusal('\\\\attacker\\share\\x.txt')).toMatch(/UNC|device/);
+  });
+
+  it.runIf(process.platform !== 'win32')('refuses device files like /dev/zero', () => {
+    expect(contentFilePathRefusal('/dev/zero')).toMatch(/not a regular file/);
   });
 });
 

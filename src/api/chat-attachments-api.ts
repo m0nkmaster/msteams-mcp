@@ -143,8 +143,8 @@ export function relativeInside(
   return rel === '' || isRelativeInside(rel) ? rel : null;
 }
 
-/** Basenames that must never be uploaded: well-known credential file names. */
-const CREDENTIAL_FILE_BASENAMES = /^(_netrc|_git-credentials)$/i;
+/** Basenames that must never leave the machine: well-known credential file names. */
+export const CREDENTIAL_FILE_BASENAMES = /^(_netrc|_git-credentials)$/i;
 
 /**
  * True 8.3 short-name shape: a <=6-char base, '~', 1-6 digits, optional
