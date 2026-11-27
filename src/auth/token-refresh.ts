@@ -183,8 +183,26 @@ export function refreshCoreTokensViaHttp(): Promise<Result<void>> {
  */
 const optionalSignInNeeded = new Set<OnDemandResource>();
 
-/** Optional resources currently flagged as needing a sign-in. */
+function optionalResourceConfig(resource: OnDemandResource): { label: string; getValid: () => string | null } {
+  // Resolved at call time, not module scope: partial token-extractor mocks in
+  // unrelated test files must not break importing this module.
+  return resource === 'graph'
+    ? { label: 'Microsoft Graph', getValid: getValidGraphToken }
+    : { label: 'Assignments', getValid: getValidAssignmentsToken };
+}
+
+/**
+ * Optional resources currently flagged as needing a sign-in. A flag clears
+ * itself once the session holds an unexpired token again: the on-demand
+ * guard serves that token without any exchange, so a stale flag must not
+ * keep sending teams_login down the sign-in path.
+ */
 export function optionalResourcesNeedingSignIn(): OnDemandResource[] {
+  for (const resource of [...optionalSignInNeeded]) {
+    if (optionalResourceConfig(resource).getValid()) {
+      optionalSignInNeeded.delete(resource);
+    }
+  }
   return [...optionalSignInNeeded];
 }
 
@@ -193,11 +211,23 @@ export function optionalResourcesNeedingSignIn(): OnDemandResource[] {
  * Optional features never launch a browser, refresh core credentials, or return
  * an error that would trigger the server's auto-login.
  */
-function onDemandExchange(resource: OnDemandResource, label: string, getValid: () => string | null): Promise<Result<string>> {
+function onDemandExchange(resource: OnDemandResource, label: string, getValid: () => string | null, viaLogin = false): Promise<Result<string>> {
   return serializeRefresh(async () => {
+    if (viaLogin) {
+      // Sign-in just ran: a token the session already holds needs no
+      // exchange, and whatever the outcome the flag is spent — a later
+      // on-demand auth-state failure re-arms it, so a resource sign-in
+      // cannot fix stops forcing a sign-in on every login.
+      const cached = getValid();
+      if (cached) {
+        optionalSignInNeeded.delete(resource);
+        return ok(cached);
+      }
+    }
     const result = await refreshTokensViaHttp(resource);
+    if (viaLogin) optionalSignInNeeded.delete(resource);
     if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
-      optionalSignInNeeded.add(resource);
+      if (!viaLogin) optionalSignInNeeded.add(resource);
       return err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
         `${label} could not be authorized: ${result.error.message}`,
         { retryable: false }));
@@ -237,12 +267,8 @@ function refreshOnDemandToken(resource: OnDemandResource, label: string, getVali
  * must not stand this down (same reasoning as refreshCoreTokensViaHttp).
  */
 export function refreshOptionalTokenForLogin(resource: OnDemandResource): Promise<Result<string>> {
-  // Resolved at call time, not module scope: partial token-extractor mocks in
-  // unrelated test files must not break importing this module.
-  const cfg = resource === 'graph'
-    ? { label: 'Microsoft Graph', getValid: getValidGraphToken }
-    : { label: 'Assignments', getValid: getValidAssignmentsToken };
-  return onDemandExchange(resource, cfg.label, cfg.getValid);
+  const cfg = optionalResourceConfig(resource);
+  return onDemandExchange(resource, cfg.label, cfg.getValid, true);
 }
 
 /** Acquire the optional EDU Assignments token. */

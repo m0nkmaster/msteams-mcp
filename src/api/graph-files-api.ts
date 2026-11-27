@@ -85,9 +85,15 @@ export async function downloadFile(url: string, outputPath: string): Promise<Res
 
   const tokenResult = await requireGraphTokenAsync();
   if (!tokenResult.ok) {
+    const cause = tokenResult.error;
+    // Only the auth-state failure gets login advice: ACCESS_DENIED (consent,
+    // Conditional Access) and transport errors keep their own suggestions —
+    // teams_login cannot fix them and the loop breaker would not apply.
+    if (cause.code !== ErrorCode.AUTH_INTERACTION_REQUIRED) {
+      return err(cause);
+    }
     // The code's default suggestions talk about EDU Assignments — the wrong
     // context for file downloads (same fix as chat attachments).
-    const cause = tokenResult.error;
     return err(createError(cause.code,
       `File downloads need Microsoft Graph, which could not be authorized: ${cause.message}`,
       {

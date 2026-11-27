@@ -291,6 +291,7 @@ describe('refreshTokensViaBrowser', () => {
   });
 
   it('does not flag ACCESS_DENIED or in-progress-gate failures', async () => {
+    vi.mocked(getValidGraphToken).mockReturnValue(null);
     vi.mocked(refreshTokensViaHttp).mockResolvedValue({
       ok: false,
       error: createError(ErrorCode.ACCESS_DENIED, 'consent required'),
@@ -298,20 +299,79 @@ describe('refreshTokensViaBrowser', () => {
     await refreshGraphToken();
     expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
 
+    // The gate must hold even for an auth-state failure: if it were bypassed
+    // the exchange would run and flag the resource.
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_EXPIRED, 'refresh token expired'),
+    });
     setBrowserLoginInProgress(true);
     try {
       await refreshGraphToken();
     } finally {
       setBrowserLoginInProgress(false);
     }
+    expect(refreshTokensViaHttp).toHaveBeenCalledTimes(1);
     expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
   });
 
-  it('refreshOptionalTokenForLogin exchanges during a sign-in and updates the flag', async () => {
+  it.each([ErrorCode.TIMEOUT, ErrorCode.UNKNOWN, ErrorCode.NETWORK_ERROR, ErrorCode.API_ERROR])(
+    'does not flag a %s on-demand failure — sign-in cannot fix it',
+    async (code) => {
+      vi.mocked(getValidGraphToken).mockReturnValue(null);
+      vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+        ok: false,
+        error: createError(code, 'failed'),
+      });
+
+      await refreshGraphToken();
+
+      expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+    },
+  );
+
+  it('clears the flag when the exchange succeeds but yields no token', async () => {
+    vi.mocked(getValidGraphToken).mockReturnValue(null);
     vi.mocked(refreshTokensViaHttp).mockResolvedValue({
       ok: false,
-      error: createError(ErrorCode.AUTH_REQUIRED, 'no refresh token'),
+      error: createError(ErrorCode.AUTH_EXPIRED, 'AADSTS700084'),
     });
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).toContain('graph');
+
+    // Exchange ok but the extractor still finds nothing: API_ERROR, and the
+    // flag is spent — a sign-in cannot fix an audience mismatch.
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    const result = await refreshGraphToken();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(ErrorCode.API_ERROR);
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+  });
+
+  it('clears a flag once the session holds an unexpired token again', async () => {
+    vi.mocked(getValidGraphToken).mockReturnValue(null);
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_EXPIRED, 'AADSTS700084'),
+    });
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).toContain('graph');
+
+    // The on-demand guard serves this token without any exchange, so the
+    // flag is moot and must not keep sending login down the sign-in path.
+    vi.mocked(getValidGraphToken).mockReturnValue('cached-graph-token');
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+  });
+
+  it('refreshOptionalTokenForLogin exchanges during a sign-in and spends the flag', async () => {
+    vi.mocked(getValidGraphToken).mockReturnValue(null);
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_EXPIRED, 'AADSTS700084'),
+    });
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).toContain('graph');
 
     setBrowserLoginInProgress(true);
     try {
@@ -320,7 +380,9 @@ describe('refreshTokensViaBrowser', () => {
 
       expect(result.ok).toBe(false);
       expect(refreshTokensViaHttp).toHaveBeenCalledWith('graph');
-      expect(optionalResourcesNeedingSignIn()).toContain('graph');
+      // The post-sign-in attempt is spent: a failed re-mint does not re-flag
+      // — the next on-demand auth-state failure does.
+      expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
     } finally {
       setBrowserLoginInProgress(false);
     }
@@ -329,6 +391,25 @@ describe('refreshTokensViaBrowser', () => {
     vi.mocked(getValidGraphToken).mockReturnValue('graph-token');
     const recovered = await refreshOptionalTokenForLogin('graph');
     expect(recovered.ok).toBe(true);
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+  });
+
+  it('refreshOptionalTokenForLogin serves a cached token without an exchange', async () => {
+    vi.mocked(getValidGraphToken).mockReturnValue(null);
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_EXPIRED, 'AADSTS700084'),
+    });
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).toContain('graph');
+
+    // Sign-in saved a fresh Graph token: no exchange, no warning, flag gone.
+    vi.mocked(getValidGraphToken).mockReturnValue('fresh-graph-token');
+    vi.mocked(refreshTokensViaHttp).mockClear();
+    const result = await refreshOptionalTokenForLogin('graph');
+
+    expect(result).toEqual({ ok: true, value: 'fresh-graph-token' });
+    expect(refreshTokensViaHttp).not.toHaveBeenCalled();
     expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
   });
 

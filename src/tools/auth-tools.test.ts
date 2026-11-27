@@ -375,6 +375,17 @@ describe('teams_login fast path requires usable messaging', () => {
     expect(refreshOptionalTokenForLogin).toHaveBeenCalledWith('graph');
   });
 
+  it('does not re-mint optional tokens when messaging stays unusable after sign-in', async () => {
+    vi.mocked(optionalResourcesNeedingSignIn).mockReturnValue(['graph']);
+    vi.mocked(extractMessageAuth).mockReturnValue(null);
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(false);
+    expect(refreshOptionalTokenForLogin).not.toHaveBeenCalled();
+  });
+
   it('names the Skype exchange when the refresh succeeded but messaging stays unusable', async () => {
     vi.mocked(extractMessageAuth).mockReturnValue(null);
     vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: false });

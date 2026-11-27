@@ -1252,7 +1252,14 @@ describe('prepareChatAttachments', () => {
 
     const result = await prepareChatAttachments(CHAT, [file]);
 
-    expect(result).toMatchObject({ ok: false, error: { code: ErrorCode.ACCESS_DENIED } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.ACCESS_DENIED, message: 'no consent' },
+    });
+    // ACCESS_DENIED keeps its own suggestions — teams_login cannot fix consent.
+    if (!result.ok) {
+      expect(result.error.suggestions?.join(' ') ?? '').not.toContain('teams_login');
+    }
     expect(mockHttp).not.toHaveBeenCalled();
     expect(mockMessageAuth).not.toHaveBeenCalled();
   });

@@ -189,4 +189,22 @@ describe('downloadFile', () => {
     });
     expect(mockHttp).not.toHaveBeenCalled();
   });
+
+  it('passes a non-auth Graph-token failure through with its own suggestions', async () => {
+    // ACCESS_DENIED (consent, Conditional Access) is not fixed by teams_login —
+    // it must keep its own suggestions instead of the login loop advice.
+    vi.mocked(requireGraphTokenAsync).mockResolvedValue(
+      err(createError(ErrorCode.ACCESS_DENIED, 'consent required by tenant admin')));
+
+    const result = await downloadFile(FILE_URL, join(dir, 'x'));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.ACCESS_DENIED, message: 'consent required by tenant admin' },
+    });
+    if (!result.ok) {
+      expect(result.error.suggestions?.join(' ') ?? '').not.toContain('teams_login');
+    }
+    expect(mockHttp).not.toHaveBeenCalled();
+  });
 });
