@@ -392,6 +392,37 @@ describe('refreshTokensViaBrowser', () => {
     const recovered = await refreshOptionalTokenForLogin('graph');
     expect(recovered.ok).toBe(true);
     expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+
+    // A later on-demand auth-state failure re-arms the flag — with no
+    // usable cached token, or the self-clear would drop it again.
+    vi.mocked(getValidGraphToken).mockReturnValue(null);
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_EXPIRED, 'AADSTS700084'),
+    });
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).toContain('graph');
+
+    // Clean up the module-level flag for the tests that follow.
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+  });
+
+  it('spends the flag even when the login-path exchange throws', async () => {
+    vi.mocked(getValidGraphToken).mockReturnValue(null);
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_EXPIRED, 'AADSTS700084'),
+    });
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).toContain('graph');
+
+    vi.mocked(refreshTokensViaHttp).mockRejectedValue(new Error('session state write failed'));
+    const result = await refreshOptionalTokenForLogin('graph');
+
+    expect(result.ok).toBe(false);
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
   });
 
   it('refreshOptionalTokenForLogin serves a cached token without an exchange', async () => {

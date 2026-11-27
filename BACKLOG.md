@@ -93,6 +93,8 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 
 **Superseded/deferred:** the "serialize handleLogin; concurrent calls share one attempt" proposal is superseded — PR #3 made a second `teams_login` fail fast with "already in progress" instead. Known limit (documented in AGENTS.md): the flag Set is per process — the long-lived MCP server sees it, a fresh `msteams login` CLI process does not, so CLI login can still report "Already authenticated" while Graph is dead until Substrate nears expiry.
 
+**Thinking round (second-order), 2026-11-27 — accepted:** (1) an AI client that ignores the warning still costs one headless SSO (~17 s, no window) per on-demand failure — bounded, and the flag re-arms only on real failures; (2) a plain `teams_login` can now open a visible window solely because Graph/Assignments is flagged — accepted earlier, and the spent-flag design means it cannot repeat every login; (3) a flag is not set by failures during the sign-in window itself (the in-progress gate returns before the exchange) — self-corrects on the next on-demand failure; (4) self-clear uses "unexpired" not "fresh": a flag can clear while a cached token has <10 min left, so a login in that window reports "Already authenticated" and the resource dies minutes later — rare, self-corrects on the next failure cycle, and the loop-breaker advice covers it; (5) `warnings[]` plus the appended message sentence is the loop breaker — clients that read only `message` still see it.
+
 ## CLI drops everything after the first newline under `npm run` on Windows
 
 **Added:** 2026-11-26 (George Murga).

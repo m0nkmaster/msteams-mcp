@@ -214,18 +214,17 @@ export function optionalResourcesNeedingSignIn(): OnDemandResource[] {
 function onDemandExchange(resource: OnDemandResource, label: string, getValid: () => string | null, viaLogin = false): Promise<Result<string>> {
   return serializeRefresh(async () => {
     if (viaLogin) {
-      // Sign-in just ran: a token the session already holds needs no
-      // exchange, and whatever the outcome the flag is spent — a later
-      // on-demand auth-state failure re-arms it, so a resource sign-in
-      // cannot fix stops forcing a sign-in on every login.
+      // The post-sign-in attempt is spent before anything else: even a throw
+      // or the refresh deadline must not leave the flag re-arming every
+      // login — a later on-demand auth-state failure re-arms it. A token the
+      // session already holds needs no exchange.
+      optionalSignInNeeded.delete(resource);
       const cached = getValid();
       if (cached) {
-        optionalSignInNeeded.delete(resource);
         return ok(cached);
       }
     }
     const result = await refreshTokensViaHttp(resource);
-    if (viaLogin) optionalSignInNeeded.delete(resource);
     if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
       if (!viaLogin) optionalSignInNeeded.add(resource);
       return err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
