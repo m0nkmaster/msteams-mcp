@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { getToolDefinitions } from '../tools/registry.js';
 import {
   UsageError,
@@ -123,6 +124,113 @@ describe('parseToolArgs', () => {
 
   it('does not require parameters that --help only wants to read about', () => {
     expect(parse('teams_send_message', ['--help']).help).toBe(true);
+  });
+});
+
+describe('parseToolArgs --content-file', () => {
+  const sendMessage = tool('teams_send_message');
+  const editMessage = tool('teams_edit_message');
+
+  it('reads multi-line content for send_message and keeps later flags parsed', () => {
+    const content = 'First line „quoted” →\n\nSecond paragraph with diacritics: ăâîșț';
+    const seen: string[] = [];
+    const { args } = parseToolArgs(
+      sendMessage,
+      ['--content-file', 'msg.md', '--files', 'a,b', '--conversationId', '19:xyz'],
+      'send_message',
+      (pathOrDash) => { seen.push(pathOrDash); return content; }
+    );
+
+    expect(seen).toEqual(['msg.md']);
+    expect(args.content).toBe(content);
+    expect(args.files).toEqual(['a', 'b']);
+    expect(args.conversationId).toBe('19:xyz');
+  });
+
+  it('accepts --content-file for edit_message too', () => {
+    const { args } = parseToolArgs(
+      editMessage,
+      ['--conversationId', '19:abc', '--messageId', 'msg-1', '--content-file', 'edit.md'],
+      'edit_message',
+      () => 'replacement body'
+    );
+
+    expect(args.content).toBe('replacement body');
+  });
+
+  it('normalises BOM, CRLF and trailing newlines but keeps internal blank lines', () => {
+    const { args } = parseToolArgs(
+      sendMessage,
+      ['--content-file', 'msg.md'],
+      'send_message',
+      () => '\uFEFFline one\r\n\r\nline two  \r\n\r\n'
+    );
+
+    expect(args.content).toBe('line one\n\nline two  ');
+  });
+
+  it('passes "-" through to the reader for stdin', () => {
+    const seen: string[] = [];
+    parseToolArgs(sendMessage, ['--content-file', '-'], 'send_message', (pathOrDash) => {
+      seen.push(pathOrDash);
+      return 'from stdin';
+    });
+
+    expect(seen).toEqual(['-']);
+  });
+
+  it('rejects --content-file together with --content', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content', 'hi', '--content-file', 'msg.md'],
+      'send_message',
+      () => 'file body'
+    )).toThrow(/not both/);
+  });
+
+  it('rejects --content-file together with a positional content value', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['positional body', '--content-file', 'msg.md'],
+      'send_message',
+      () => 'file body'
+    )).toThrow(/not both/);
+  });
+
+  it('turns a read failure into a UsageError naming the path', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content-file', 'missing.md'],
+      'send_message',
+      () => { throw new Error("ENOENT: no such file or directory, open 'missing.md'"); }
+    )).toThrow(/missing\.md/);
+  });
+
+  it('rejects an empty or whitespace-only file', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content-file', 'empty.md'],
+      'send_message',
+      () => '  \n\n\t\n'
+    )).toThrow(UsageError);
+  });
+
+  it('is an unknown flag for tools without a content parameter', () => {
+    expect(() => parseToolArgs(
+      tool('teams_search'),
+      ['hi', '--content-file', 'msg.md'],
+      'search',
+      () => 'body'
+    )).toThrow(UsageError);
+  });
+
+  it('reads a real file with the default reader', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url));
+    const { args } = parseToolArgs(sendMessage, ['--content-file', fixture]);
+
+    expect(args.content).toContain('diacritice românești');
+    expect(args.content).toContain('**Acesta este bold.**');
+    expect(args.content).toContain('  - element imbricat');
   });
 });
 

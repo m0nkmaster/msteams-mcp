@@ -6,11 +6,16 @@
  * without touching the CLI.
  */
 
+import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 /** Thrown for anything the user can fix by retyping the command (exit code 2). */
 export class UsageError extends Error {}
+
+/** Schema property that takes the message text, and the flag that reads it from a file. */
+export const CONTENT_PROP = 'content';
+export const CONTENT_FILE_FLAG = 'content-file';
 
 /** The subset of JSON Schema the tool definitions use. */
 export interface SchemaProp {
@@ -132,8 +137,25 @@ function parseJson(raw: string, flag: string): unknown {
 /** One-line reminder of a command's flags, used in every usage error. */
 function flagHint(props: Record<string, SchemaProp>, label: string): string {
   const flags = Object.keys(props).map(name => `--${name}`).join(' ') || '(none)';
-  return `Flags for '${label}': ${flags}\nRun 'msteams help ${label}' for details.`;
+  const contentFile = props[CONTENT_PROP]?.type === 'string' ? ` --${CONTENT_FILE_FLAG} <path|->` : '';
+  return `Flags for '${label}': ${flags}${contentFile}\nRun 'msteams help ${label}' for details.`;
 }
+
+/** Reads the --content-file value: a path, or '-' for stdin (fd 0). */
+const defaultReadContentFile = (pathOrDash: string): string =>
+  readFileSync(pathOrDash === '-' ? 0 : pathOrDash, 'utf8');
+
+/**
+ * Normalises file text for a message: strip a leading UTF-8 BOM, convert
+ * CRLF to LF, and drop trailing newlines only - other whitespace is content.
+ */
+function normalizeContentFileText(raw: string): string {
+  return raw
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+$/, '');
+}
+
 
 export interface ParsedToolArgs {
   args: Record<string, unknown>;
@@ -148,7 +170,12 @@ export interface ParsedToolArgs {
  * coerced to the schema's types, and an unknown flag is a usage error rather
  * than something the server has to reject.
  */
-export function parseToolArgs(tool: Tool, argv: string[], label = tool.name): ParsedToolArgs {
+export function parseToolArgs(
+  tool: Tool,
+  argv: string[],
+  label = tool.name,
+  readContent: (pathOrDash: string) => string = defaultReadContentFile
+): ParsedToolArgs {
   const props = schemaProps(tool);
 
   const options: Record<string, { type: 'boolean' | 'string'; short?: string }> = { ...GLOBAL_FLAGS };
@@ -157,6 +184,11 @@ export function parseToolArgs(tool: Tool, argv: string[], label = tool.name): Pa
 
   for (const [name, prop] of Object.entries(props)) {
     options[name] = { type: optionType(prop) };
+  }
+  // --content-file exists only where the schema has a string `content`
+  // property; elsewhere it stays an unknown-flag usage error.
+  if (props[CONTENT_PROP]?.type === 'string') {
+    options[CONTENT_FILE_FLAG] = { type: 'string' };
   }
   for (const [alias, target] of Object.entries(FLAG_ALIASES)) {
     if (props[target] && !options[alias]) options[alias] = { type: optionType(props[target]) };
@@ -195,7 +227,7 @@ export function parseToolArgs(tool: Tool, argv: string[], label = tool.name): Pa
 
   const args: Record<string, unknown> = {};
   for (const [flag, raw] of Object.entries(parsed.values)) {
-    if (flag === 'json' || flag === 'help') continue;
+    if (flag === 'json' || flag === 'help' || flag === CONTENT_FILE_FLAG) continue;
     const key = FLAG_ALIASES[flag] ?? flag;
     args[key] = typeof raw === 'boolean' ? raw : coerce(props[key], String(raw), flag);
   }
@@ -216,6 +248,27 @@ export function parseToolArgs(tool: Tool, argv: string[], label = tool.name): Pa
       args[positional] = coerce(props[positional], value, positional);
       missing.splice(missing.indexOf(positional), 1);
     }
+  }
+
+  const contentFileArg = parsed.values[CONTENT_FILE_FLAG];
+  if (contentFileArg !== undefined) {
+    if (args[CONTENT_PROP] !== undefined) {
+      throw new UsageError('give the message as text or --content-file, not both');
+    }
+    let raw: string;
+    try {
+      raw = readContent(String(contentFileArg));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new UsageError(`Cannot read --content-file '${contentFileArg}': ${reason}`);
+    }
+    const text = normalizeContentFileText(raw);
+    if (!text.trim()) {
+      throw new UsageError(`--content-file '${contentFileArg}' is empty or only whitespace.`);
+    }
+    args[CONTENT_PROP] = text;
+    const contentIndex = missing.indexOf(CONTENT_PROP);
+    if (contentIndex !== -1) missing.splice(contentIndex, 1);
   }
 
   if (missing.length > 0) {

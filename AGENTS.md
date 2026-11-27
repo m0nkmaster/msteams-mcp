@@ -225,6 +225,13 @@ colour and emoji only when `process.stdout.isTTY` and `NO_COLOR` is unset, and
 exit codes 0 success / 1 tool failure / 2 malformed command. `--json` prints the
 tool's own payload, not the MCP envelope.
 
+On Windows, never pass a multi-line argument through `npm run cli`: npm launches
+the script via `cmd.exe`, which truncates the argument list at the first newline
+- the message goes out with only its first paragraph, later flags like `--files`
+are silently dropped, and the CLI still reports ok. For multi-line message text
+use `--content-file <path>` (`-` reads stdin) on `send_message`/`edit_message`, or
+bypass npm entirely: `node node_modules/tsx/dist/cli.mjs src/cli.ts ...`.
+
 ```bash
 npm run cli                                     # Command index
 npm run cli -- help send_message                # One command in detail
@@ -234,6 +241,8 @@ npm run cli -- login                            # Log in / re-login (tries silen
 npm run cli -- login --force true               # DESTRUCTIVE: wipes all local login data; user approval only
 npm run cli -- search "your query" --json       # Tool payload as JSON
 npm run cli -- search "your query" --from 25 --size 25  # Pagination
+npm run cli -- send_message --content-file msg.md --files a.pdf   # Multi-line body from a file
+node node_modules/tsx/dist/cli.mjs src/cli.ts send_message --content-file msg.md  # Same, bypassing npm/cmd.exe
 ```
 
 ### Unit tests

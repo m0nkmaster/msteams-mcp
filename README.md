@@ -314,7 +314,7 @@ msteams search "query" --json | jq '.results[0].conversationId'
 **Command form:** `msteams <command> [value] [--flag value]`.
 
 - **Commands** are the tool names without the `teams_`/`get_` prefix (`search`, `send_message`, `thread`, `meetings`). Any unambiguous abbreviation works, so `send` reaches `send_message`; the full tool name always works too.
-- **Flags** are the tool's own parameters, in camelCase (`--conversationId`, `--threadRootId`, `--fromUrl`). A few short aliases exist where they read better: `--to`, `--msg`, `--reply`, `--user`, `--force`. Booleans work bare (`--markRead`) or with a value (`--markRead false`). Unknown flags are rejected with the list of valid ones.
+- **Flags** are the tool's own parameters, in camelCase (`--conversationId`, `--threadRootId`, `--fromUrl`). A few short aliases exist where they read better: `--to`, `--msg`, `--reply`, `--user`, `--force`. Booleans work bare (`--markRead`) or with a value (`--markRead false`). Unknown flags are rejected with the list of valid ones. Commands with a `content` parameter (`send_message`, `edit_message`) also take `--content-file <path>` (`-` for stdin) to read multi-line message text from a file - on Windows prefer this over passing the text inline through `npm run`, which truncates arguments at the first newline.
 - **The first bare value** goes to the command's main parameter: `msteams search "query"` is `--query "query"`.
 - **Output** goes to stdout, diagnostics to stderr, so pipes and redirects behave. Colour and emoji appear only on a terminal, and `NO_COLOR` turns them off.
 - **Exit codes:** `0` success, `1` the tool failed, `2` the command was malformed.

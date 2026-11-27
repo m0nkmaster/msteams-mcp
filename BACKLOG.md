@@ -98,3 +98,5 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 **Proposal:** add a `--content-file <path>` (or `-` for stdin) option for `content`-style parameters in `src/cli/resolve.ts`, and document in AGENTS.md (CLI as test harness) that multi-line arguments must not go through `npm run` on Windows.
 
 **Done when:** a test covers reading content from a file; AGENTS.md documents the trap; a multi-line message with flags after it sends intact on Windows.
+
+**Status:** Done 2026-11-27 — `--content-file <path|->` added for tools with a string `content` parameter (`teams_send_message`, `teams_edit_message`); BOM/CRLF/trailing-newline normalisation; conflicts with `--content`/positional and empty files are usage errors; AGENTS.md + README document the `npm run`/cmd.exe trap. PR: PR_LINK_PLACEHOLDER.
