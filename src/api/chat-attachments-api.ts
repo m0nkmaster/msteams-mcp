@@ -161,7 +161,7 @@ const SHORT_NAME_SEGMENT = /^[^.~\s]{1,6}~\d{1,6}(\.[^.\s]{1,3})?$/i;
  * and leaks NTLM — then 8.3 short-name segments below the root, then NTFS
  * alternate data streams.
  */
-export function windowsLexicalRefusal(candidate: string, root: string): string | null {
+export function windowsLexicalRefusal(candidate: string, root: string, checkShortNames = true): string | null {
   if (candidate.startsWith('\\\\') || candidate.startsWith('//')) {
     return 'must not be a UNC or device path';
   }
@@ -169,7 +169,9 @@ export function windowsLexicalRefusal(candidate: string, root: string): string |
   const lexicalRoot = path.win32.resolve(root);
   const relative = path.win32.relative(lexicalRoot, lexicalCandidate);
   const segments = relative.split(/[\\/]/).filter(s => s !== '' && s !== '.');
-  if (segments.some(segment => SHORT_NAME_SEGMENT.test(segment))) {
+  // Callers whose paths are realpath-resolved anyway (--content-file) gain
+  // nothing from the 8.3 scan and risk false positives on '~N' filenames.
+  if (checkShortNames && segments.some(segment => SHORT_NAME_SEGMENT.test(segment))) {
     return 'looks like an 8.3 short name; pass the long path';
   }
   if (lexicalCandidate.indexOf(':', 2) !== -1) {

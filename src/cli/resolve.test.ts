@@ -276,9 +276,27 @@ describe('parseToolArgs --content-file', () => {
     const fixtureDir = dirname(fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url)));
     vi.stubEnv('INIT_CWD', fixtureDir);
     vi.stubEnv('npm_lifecycle_event', 'cli');
+    // npm also sets npm_package_json to the running package's manifest; INIT_CWD
+    // is trusted only when that manifest sits at the process cwd.
+    vi.stubEnv('npm_package_json', fileURLToPath(new URL('../../package.json', import.meta.url)));
     try {
       const { args } = parseToolArgs(sendMessage, ['--content-file', 'multiline-message.md']);
       expect(args.content).toContain('diacritice românești');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('ignores a stale INIT_CWD inherited outside an npm run', () => {
+    // A shell spawned inside an npm script still carries npm_lifecycle_event
+    // and INIT_CWD; a direct `node cli.ts` call must use the real cwd.
+    const fixtureDir = dirname(fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url)));
+    vi.stubEnv('INIT_CWD', fixtureDir);
+    vi.stubEnv('npm_lifecycle_event', 'cli');
+    vi.stubEnv('npm_package_json', `${fixtureDir}/package.json`);
+    try {
+      expect(() => parseToolArgs(sendMessage, ['--content-file', 'multiline-message.md']))
+        .toThrow(UsageError);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -382,9 +400,24 @@ describe('parseToolArgs --content-file', () => {
     expect(contentFilePathRefusal(fixture)).toBeNull();
   });
 
+  it('refuses credential directory names at any depth', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/.ssh/id_rsa', import.meta.url));
+    expect(contentFilePathRefusal(fixture)).toMatch(/credential|dotfiles|dot-directories/);
+  });
+
+  it('does not refuse ordinary tilde names as 8.3 short names', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/notes~1.md', import.meta.url));
+    expect(contentFilePathRefusal(fixture)).toBeNull();
+  });
+
+  it('refuses paths that cannot be resolved instead of reading unchecked', () => {
+    expect(contentFilePathRefusal('/definitely/not/a/real/path.txt')).toMatch(/could not be resolved/);
+  });
+
   it('refuses non-regular files and oversized content', () => {
     const fixture = fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url));
     expect(contentFilePathRefusal(fixture, [], 10)).toMatch(/MB limit/);
+    expect(contentFilePathRefusal(dirname(fixture))).toMatch(/not a regular file/);
     expect(contentFilePathRefusal(fixture)).toBeNull();
   });
 

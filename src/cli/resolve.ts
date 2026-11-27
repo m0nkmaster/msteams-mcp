@@ -6,7 +6,7 @@
  * without touching the CLI.
  */
 
-import { readFileSync, readSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { isatty } from 'node:tty';
@@ -167,12 +167,16 @@ function decodeContentFile(buf: Buffer): string {
     encoding = 'utf-16be';
     bytes = buf.subarray(2);
   }
+  const decoder = new TextDecoder(encoding, { fatal: true });
   try {
-    return new TextDecoder(encoding, { fatal: true }).decode(bytes);
+    return decoder.decode(bytes);
   } catch {
     throw new Error(`file is not valid ${encoding === 'utf-8' ? 'UTF-8' : 'UTF-16'} - save it as UTF-8`);
   }
 }
+
+/** Directory names that hold credentials at any depth (unlike the home-top dot rule). */
+const CREDENTIAL_DIR_NAMES = new Set(['.git', '.ssh', '.aws', '.azure', '.gnupg', '.docker', '.kube']);
 
 /** Realpath when possible, plain resolve otherwise (protected dirs may not exist). */
 function resolveRealLocal(p: string): string {
@@ -199,7 +203,7 @@ export function contentFilePathRefusal(
   // Windows lexical traps before any fs call: UNC/device paths would open
   // an SMB session on realpath/stat and leak NTLM.
   if (process.platform === 'win32') {
-    const refusal = windowsLexicalRefusal(candidate, path.parse(candidate).root);
+    const refusal = windowsLexicalRefusal(candidate, path.parse(candidate).root, false);
     if (refusal) return `--content-file path ${refusal}: ${candidate}`;
   }
 
@@ -207,8 +211,13 @@ export function contentFilePathRefusal(
   try {
     // .native resolves Windows 8.3 short names that plain realpathSync keeps.
     realPath = realpathSync.native(candidate);
-  } catch {
-    return null; // unreadable - the reader reports "Cannot read ..."
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown';
+    return `--content-file could not be resolved (${code}): ${candidate}`;
+  }
+
+  if (realPath.split(/[\\/]/).some(s => CREDENTIAL_DIR_NAMES.has(s.toLowerCase()))) {
+    return `--content-file path is inside a credential directory: ${candidate}`;
   }
 
   // Dot-paths are where credentials live. Inside the home directory only
@@ -245,17 +254,17 @@ export function contentFilePathRefusal(
   return null;
 }
 
-/** Reads stdin up to maxBytes; throws UsageError past the cap. */
-function readStdinCapped(maxBytes: number): Buffer {
+/** Reads an fd up to maxBytes; throws UsageError past the cap. */
+function readFdCapped(fd: number, maxBytes: number): Buffer {
   const chunks: Buffer[] = [];
   const chunk = Buffer.allocUnsafe(64 * 1024);
   let total = 0;
   for (;;) {
-    const n = readSync(0, chunk, 0, chunk.length, null);
+    const n = readSync(fd, chunk, 0, chunk.length, null);
     if (n === 0) break;
     total += n;
     if (total > maxBytes) {
-      throw new UsageError(`--content-file - exceeds the ${maxBytes / (1024 * 1024)} MB limit.`);
+      throw new UsageError(`--content-file exceeds the ${maxBytes / (1024 * 1024)} MB limit.`);
     }
     chunks.push(Buffer.from(chunk.subarray(0, n)));
   }
@@ -268,18 +277,45 @@ const defaultReadContentFile = (pathOrDash: string): string => {
     if (isatty(0)) {
       throw new UsageError('--content-file - reads stdin; pipe the message in or pass a file path');
     }
-    return decodeContentFile(readStdinCapped(MAX_SIMPLE_UPLOAD_BYTES));
+    return decodeContentFile(readFdCapped(0, MAX_SIMPLE_UPLOAD_BYTES));
   }
   // `npm run cli` runs the script with cwd = the package root while the
-  // caller's directory survives in INIT_CWD - but only trust INIT_CWD inside
-  // an npm run; a directly-invoked CLI (the documented bypass) uses cwd.
-  const base = process.env.npm_lifecycle_event
+  // caller's directory survives in INIT_CWD. Trust INIT_CWD only inside a
+  // real npm run for this package: npm_lifecycle_event alone is inherited by
+  // shells spawned from npm scripts, and npm_package_json proves the run.
+  const npmPkg = process.env.npm_package_json;
+  const pkgDir = npmPkg ? path.dirname(path.resolve(npmPkg)) : null;
+  const cwdResolved = path.resolve(process.cwd());
+  const sameDir = pkgDir !== null && (
+    process.platform === 'win32' || process.platform === 'darwin'
+      ? pkgDir.toLowerCase() === cwdResolved.toLowerCase()
+      : pkgDir === cwdResolved
+  );
+  const base = process.env.npm_lifecycle_event && sameDir
     ? (process.env.INIT_CWD ?? process.cwd())
     : process.cwd();
   const target = path.resolve(base, pathOrDash);
   const refusal = contentFilePathRefusal(target);
   if (refusal) throw new UsageError(refusal);
-  return decodeContentFile(readFileSync(target));
+  // Read the resolved real path through an fd with a hard byte cap: the
+  // guard checked realPath, and reading target could follow a swapped link,
+  // while stat-then-readFileSync misses files that grow or lie about size.
+  const realPath = realpathSync.native(target);
+  let fd: number;
+  try {
+    fd = openSync(realPath, 'r');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown';
+    throw new Error(`cannot open: ${code}`);
+  }
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new UsageError(`--content-file is not a regular file: ${target}`);
+    }
+    return decodeContentFile(readFdCapped(fd, MAX_SIMPLE_UPLOAD_BYTES));
+  } finally {
+    closeSync(fd);
+  }
 };
 
 /**
@@ -306,6 +342,9 @@ export interface ParsedToolArgs {
  * Flags are whatever the schema declares (plus the aliases above), values are
  * coerced to the schema's types, and an unknown flag is a usage error rather
  * than something the server has to reject.
+ *
+ * `readContent` is a test seam: the --content-file path guard lives inside
+ * `defaultReadContentFile`, so an injected reader bypasses it.
  */
 export function parseToolArgs(
   tool: Tool,
