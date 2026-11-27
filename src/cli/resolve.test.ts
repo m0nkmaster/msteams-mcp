@@ -6,16 +6,22 @@
  * can be derived from the schemas.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+import { isatty } from 'node:tty';
 import { getToolDefinitions } from '../tools/registry.js';
 import {
   UsageError,
+  contentFilePathRefusal,
   parseToolArgs,
   positionalProp,
   resolveToolName,
   shortName,
 } from './resolve.js';
-import { firstSentence } from './help.js';
+import { firstSentence, renderToolHelp } from './help.js';
+
+vi.mock('node:tty', () => ({ isatty: vi.fn(() => false) }));
 
 const tools = getToolDefinitions();
 const names = tools.map(tool => tool.name);
@@ -123,6 +129,304 @@ describe('parseToolArgs', () => {
 
   it('does not require parameters that --help only wants to read about', () => {
     expect(parse('teams_send_message', ['--help']).help).toBe(true);
+  });
+});
+
+describe('parseToolArgs --content-file', () => {
+  const sendMessage = tool('teams_send_message');
+  const editMessage = tool('teams_edit_message');
+
+  it('reads multi-line content for send_message and keeps later flags parsed', () => {
+    const content = 'First line „quoted” →\n\nSecond paragraph with diacritics: ăâîșț';
+    const seen: string[] = [];
+    const { args } = parseToolArgs(
+      sendMessage,
+      ['--content-file', 'msg.md', '--files', 'a,b', '--conversationId', '19:xyz'],
+      'send_message',
+      (pathOrDash) => { seen.push(pathOrDash); return content; }
+    );
+
+    expect(seen).toEqual(['msg.md']);
+    expect(args.content).toBe(content);
+    expect(args.files).toEqual(['a', 'b']);
+    expect(args.conversationId).toBe('19:xyz');
+  });
+
+  it('accepts --content-file for edit_message too', () => {
+    const { args } = parseToolArgs(
+      editMessage,
+      ['--conversationId', '19:abc', '--messageId', 'msg-1', '--content-file', 'edit.md'],
+      'edit_message',
+      () => 'replacement body'
+    );
+
+    expect(args.content).toBe('replacement body');
+  });
+
+  it('normalises BOM, CRLF and trailing newlines but keeps internal blank lines', () => {
+    const { args } = parseToolArgs(
+      sendMessage,
+      ['--content-file', 'msg.md'],
+      'send_message',
+      () => '\uFEFFline one\r\n\r\nline two  \r\n\r\n'
+    );
+
+    expect(args.content).toBe('line one\n\nline two  ');
+  });
+
+  it('passes "-" through to the reader for stdin', () => {
+    const seen: string[] = [];
+    parseToolArgs(sendMessage, ['--content-file', '-'], 'send_message', (pathOrDash) => {
+      seen.push(pathOrDash);
+      return 'from stdin';
+    });
+
+    expect(seen).toEqual(['-']);
+  });
+
+  it('rejects --content-file together with --content', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content', 'hi', '--content-file', 'msg.md'],
+      'send_message',
+      () => 'file body'
+    )).toThrow(/not both/);
+  });
+
+  it('rejects --content-file together with a positional content value', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['positional body', '--content-file', 'msg.md'],
+      'send_message',
+      () => 'file body'
+    )).toThrow(/not both/);
+  });
+
+  it('turns a read failure into a UsageError naming the path', () => {
+    let error: unknown;
+    try {
+      parseToolArgs(
+        sendMessage,
+        ['--content-file', 'missing.md'],
+        'send_message',
+        () => { throw new Error('boom'); }
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(UsageError);
+    expect((error as Error).message).toBe("Cannot read --content-file 'missing.md': boom");
+  });
+
+  it('rejects an empty or whitespace-only file', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content-file', 'empty.md'],
+      'send_message',
+      () => '  \n\n\t\n'
+    )).toThrow(UsageError);
+  });
+
+  it('is an unknown flag for tools without a content parameter', () => {
+    expect(() => parseToolArgs(
+      tool('teams_search'),
+      ['hi', '--content-file', 'msg.md'],
+      'search',
+      () => 'body'
+    )).toThrow(UsageError);
+  });
+
+  it('reads a real file with the default reader', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url));
+    const { args } = parseToolArgs(sendMessage, ['--content-file', fixture]);
+
+    expect(args.content).toContain('diacritice românești');
+    expect(args.content).toContain('**Acesta este bold.**');
+    expect(args.content).toContain('  - element imbricat');
+  });
+
+  it('decodes a UTF-16LE file (Windows PowerShell output) instead of sending NUL garbage', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/utf16-message.md', import.meta.url));
+    const { args } = parseToolArgs(sendMessage, ['--content-file', fixture]);
+
+    expect(args.content).toContain('diacritice: ă â î ș ț');
+    expect(args.content).not.toContain('\u0000');
+  });
+
+  it('rejects a file that is not valid UTF-8', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/ansi-message.md', import.meta.url));
+    expect(() => parseToolArgs(sendMessage, ['--content-file', fixture]))
+      .toThrow(UsageError);
+    expect(() => parseToolArgs(sendMessage, ['--content-file', fixture]))
+      .toThrow(/UTF-8/);
+  });
+
+  it('rejects content containing NUL bytes (UTF-16 saved without a BOM)', () => {
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content-file', 'x.md'],
+      'send_message',
+      () => 'a\u0000b'
+    )).toThrow(UsageError);
+  });
+
+  it('resolves relative --content-file paths against INIT_CWD, not the package root', () => {
+    // `npm run cli` sets cwd to the package root but keeps the caller's
+    // directory in INIT_CWD - a relative path must resolve there.
+    const fixtureDir = dirname(fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url)));
+    vi.stubEnv('INIT_CWD', fixtureDir);
+    vi.stubEnv('npm_lifecycle_event', 'cli');
+    // npm also sets npm_package_json to the running package's manifest; INIT_CWD
+    // is trusted only when that manifest sits at the process cwd.
+    vi.stubEnv('npm_package_json', fileURLToPath(new URL('../../package.json', import.meta.url)));
+    try {
+      const { args } = parseToolArgs(sendMessage, ['--content-file', 'multiline-message.md']);
+      expect(args.content).toContain('diacritice românești');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('ignores a stale INIT_CWD inherited outside an npm run', () => {
+    // A shell spawned inside an npm script still carries npm_lifecycle_event
+    // and INIT_CWD; a direct `node cli.ts` call must use the real cwd.
+    const fixtureDir = dirname(fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url)));
+    vi.stubEnv('INIT_CWD', fixtureDir);
+    vi.stubEnv('npm_lifecycle_event', 'cli');
+    vi.stubEnv('npm_package_json', `${fixtureDir}/package.json`);
+    try {
+      expect(() => parseToolArgs(sendMessage, ['--content-file', 'multiline-message.md']))
+        .toThrow(UsageError);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refuses "-" on a TTY instead of blocking on stdin', () => {
+    vi.mocked(isatty).mockReturnValueOnce(true);
+    expect(() => parseToolArgs(sendMessage, ['--content-file', '-']))
+      .toThrow(/reads stdin/);
+  });
+
+  it('does not read the file when --help is present', () => {
+    const result = parseToolArgs(
+      sendMessage,
+      ['--content-file', '-', '--help'],
+      'send_message',
+      () => { throw new Error('must not read'); }
+    );
+    expect(result.help).toBe(true);
+  });
+
+  it('rejects the conflict before reading the file', () => {
+    let calls = 0;
+    expect(() => parseToolArgs(
+      sendMessage,
+      ['--content', 'hi', '--content-file', 'f.md'],
+      'send_message',
+      () => { calls++; return 'x'; }
+    )).toThrow(/not both/);
+    expect(calls).toBe(0);
+  });
+
+  it('rejects --content-file together with --content on edit_message too', () => {
+    expect(() => parseToolArgs(
+      editMessage,
+      ['--conversationId', '19:abc', '--messageId', 'msg-1', '--content', 'x', '--content-file', 'f.md'],
+      'edit_message',
+      () => 'y'
+    )).toThrow(/not both/);
+  });
+
+  it('mentions --content-file in usage errors for content tools only', () => {
+    expect(() => parseToolArgs(sendMessage, ['--nope'], 'send_message'))
+      .toThrow(/--content-file <path\|->/);
+    try {
+      parseToolArgs(tool('teams_search'), ['--nope']);
+      expect.unreachable('expected a UsageError');
+    } catch (e) {
+      expect((e as Error).message).not.toContain('content-file');
+    }
+  });
+
+  it('lists --content-file in per-command help for content tools only', () => {
+    expect(renderToolHelp(tools, sendMessage)).toContain('--content-file');
+    expect(renderToolHelp(tools, editMessage)).toContain('--content-file');
+    expect(renderToolHelp(tools, tool('teams_search'))).not.toContain('content-file');
+  });
+
+  it('decodes UTF-16 only when it is well-formed', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/utf16-truncated.md', import.meta.url));
+    expect(() => parseToolArgs(sendMessage, ['--content-file', fixture]))
+      .toThrow(/UTF-16/);
+  });
+
+  it('resolves relative paths against INIT_CWD only inside an npm run', () => {
+    // INIT_CWD is inherited by every descendant of an npm process; the
+    // documented bypass (`node ... cli.ts`) must use the real cwd instead.
+    const fixtureDir = dirname(fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url)));
+    vi.stubEnv('INIT_CWD', fixtureDir);
+    vi.stubEnv('npm_lifecycle_event', '');
+    try {
+      expect(() => parseToolArgs(sendMessage, ['--content-file', 'multiline-message.md']))
+        .toThrow(UsageError);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refuses dot-directories that are direct children of the home directory', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/.hidden/secret.txt', import.meta.url));
+    // homeDir is injectable so the "direct child of home" rule is testable:
+    // treat src/__fixtures__ as home, making .hidden/ a top-level dot-dir.
+    const fixturesDir = dirname(dirname(fixture));
+    expect(contentFilePathRefusal(fixture, [], undefined, fixturesDir))
+      .toMatch(/dotfiles|dot-directories/);
+    expect(contentFilePathRefusal(fixture, [], undefined, dirname(fixturesDir))).toBeNull();
+  });
+
+  it('refuses well-known credential file names', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/_netrc', import.meta.url));
+    expect(() => parseToolArgs(sendMessage, ['--content-file', fixture]))
+      .toThrow(/credential file/);
+  });
+
+  it('refuses paths inside protected directories', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/protected/secret.txt', import.meta.url));
+    const protectedDir = dirname(fixture);
+    // contentFilePathRefusal takes the forbidden roots explicitly so the
+    // check is testable without touching the real config/app-data dirs.
+    expect(contentFilePathRefusal(fixture, [protectedDir])).toMatch(/protected directory/);
+    expect(contentFilePathRefusal(fixture)).toBeNull();
+  });
+
+  it('refuses credential directory names at any depth', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/.ssh/id_rsa', import.meta.url));
+    expect(contentFilePathRefusal(fixture)).toMatch(/credential|dotfiles|dot-directories/);
+  });
+
+  it('does not refuse ordinary tilde names as 8.3 short names', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/notes~1.md', import.meta.url));
+    expect(contentFilePathRefusal(fixture)).toBeNull();
+  });
+
+  it('refuses paths that cannot be resolved instead of reading unchecked', () => {
+    expect(contentFilePathRefusal('/definitely/not/a/real/path.txt')).toMatch(/could not be resolved/);
+  });
+
+  it('refuses non-regular files and oversized content', () => {
+    const fixture = fileURLToPath(new URL('../__fixtures__/multiline-message.md', import.meta.url));
+    expect(contentFilePathRefusal(fixture, [], 10)).toMatch(/MB limit/);
+    expect(contentFilePathRefusal(dirname(fixture))).toMatch(/not a regular file/);
+    expect(contentFilePathRefusal(fixture)).toBeNull();
+  });
+
+  it.runIf(process.platform === 'win32')('refuses UNC paths before touching the filesystem', () => {
+    expect(contentFilePathRefusal('\\\\attacker\\share\\x.txt')).toMatch(/UNC|device/);
+  });
+
+  it.runIf(process.platform !== 'win32')('refuses device files like /dev/zero', () => {
+    expect(contentFilePathRefusal('/dev/zero')).toMatch(/not a regular file/);
   });
 });
 

@@ -7,7 +7,7 @@
  */
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { FLAG_ALIASES, positionalProp, requiredProps, schemaProps, shortName } from './resolve.js';
+import { CONTENT_FILE_FLAG, CONTENT_PROP, FLAG_ALIASES, positionalProp, requiredProps, schemaProps, shortName } from './resolve.js';
 import { bold, dim, termWidth, wrap } from './render.js';
 
 /**
@@ -97,6 +97,19 @@ export function renderToolHelp(tools: Tool[], tool: Tool): string {
     lines.push('', bold('Flags'));
     const column = Math.min(28, Math.max(...entries.map(([name, prop]) => `--${name} ${flagLabel(prop)}`.trim().length)) + 2);
 
+    const pushFlag = (flag: string, detail: string) => {
+      const wrapped = wrap(detail, column + 2, 2);
+
+      // A flag too long for the column takes a line of its own.
+      if (flag.length >= column) {
+        lines.push(`  ${bold(flag)}`);
+        for (const line of wrapped) lines.push(`  ${' '.repeat(column)}${line}`);
+        return;
+      }
+      lines.push(`  ${bold(flag.padEnd(column))}${wrapped[0] ?? ''}`);
+      for (const line of wrapped.slice(1)) lines.push(`  ${' '.repeat(column)}${line}`);
+    };
+
     for (const [name, prop] of entries) {
       const flag = `--${name} ${flagLabel(prop)}`.trim();
       const alias = aliasesFor(name);
@@ -105,16 +118,14 @@ export function renderToolHelp(tools: Tool[], tool: Tool): string {
         alias.length ? `(or ${alias.join(', ')})` : '',
         prop.description ?? '',
       ].filter(Boolean).join(' ');
-      const wrapped = wrap(detail, column + 2, 2);
+      pushFlag(flag, detail);
+    }
 
-      // A flag too long for the column takes a line of its own.
-      if (flag.length >= column) {
-        lines.push(`  ${bold(flag)}`);
-        for (const line of wrapped) lines.push(`  ${' '.repeat(column)}${line}`);
-        continue;
-      }
-      lines.push(`  ${bold(flag.padEnd(column))}${wrapped[0] ?? ''}`);
-      for (const line of wrapped.slice(1)) lines.push(`  ${' '.repeat(column)}${line}`);
+    if (props[CONTENT_PROP]?.type === 'string') {
+      pushFlag(
+        `--${CONTENT_FILE_FLAG} <path|->`,
+        'Read the message text from a file instead of --content ("-" reads stdin). Keeps line breaks; use it for multi-line messages.'
+      );
     }
   }
 

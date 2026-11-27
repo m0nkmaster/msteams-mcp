@@ -98,3 +98,21 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 **Proposal:** add a `--content-file <path>` (or `-` for stdin) option for `content`-style parameters in `src/cli/resolve.ts`, and document in AGENTS.md (CLI as test harness) that multi-line arguments must not go through `npm run` on Windows.
 
 **Done when:** a test covers reading content from a file; AGENTS.md documents the trap; a multi-line message with flags after it sends intact on Windows.
+
+**Status:** Implemented 2026-11-27, pending the live Windows send check — `--content-file <path|->` added for tools with a string `content` parameter (`teams_send_message`, `teams_edit_message`); UTF-8/UTF-16 decoding, INIT_CWD-relative paths, BOM/CRLF/trailing-newline normalisation; conflicts with `--content`/positional and empty files are usage errors; AGENTS.md + README document the `npm run`/cmd.exe trap. PR: https://github.com/george-cm/msteams-mcp/pull/5.
+
+**Thinking round (pre-mortem, 2026-11-27) — decisions:**
+- Size cap reuses `MAX_SIMPLE_UPLOAD_BYTES` (4 MB) and stdin is capped the same; Teams' own message-size limit is enforced server-side, so an oversized send surfaces the API error rather than a local guess.
+- The path guard mirrors `--files` minus the upload root, but the dot-path rule is rescoped: inside the home directory only direct children are refused (keeps `~/.ssh`, `~/.aws`, `~/.config`, `~/.env`-style secrets out) so project dot-dirs like `.tmp`/`.worktrees` — the documented scratch locations — stay usable; outside home every dot segment is refused and dot-file basenames are refused anywhere. Review round 3 added a fixed credential-directory list (`.git`, `.ssh`, `.aws`, `.azure`, `.gnupg`, `.docker`, `.kube`) refused at any depth. Accepted residual: a non-credential dot-directory nested deeper than the home top level (`~/a/b/.config/x`) is readable — weaker than the `--files` any-depth rule, traded for usability.
+- cmd.exe still mangles other argument shapes under `npm run` (spaces, `&`, `%`): same trap class as newlines; the documented direct-`node` bypass is the mitigation, not more parsing.
+- `-` piped through `npm run` → cmd.exe → node on Windows is not verified end-to-end; the live check should include `type msg.md | npm run cli -- send_message --content-file -` (or bypass npm). Under mintty/Git Bash `-` waits for EOF — documented in AGENTS.md.
+- A path starting with `-` parses as a flag (use `./-name`); UTF-16 without BOM is refused by the NUL check; UTF-32 decays to NULs and is refused; OneDrive on-demand placeholders may hydrate on read — all accepted edges.
+- Only `content`-bearing tools get the flag (schema-driven, so future tools inherit it); `--files` is a comma list and needs no multi-line form.
+
+## CLI silently drops a bare value when its parameter was already given as a flag
+
+**Added:** 2026-11-27 (review of the `--content-file` change; pre-existing bug, not introduced there).
+
+**Problem:** in `src/cli/resolve.ts`, a positional value is only applied when `args[positional] === undefined`, so `msteams send_message "hello" --content "bye"` sends "bye" and discards "hello" with no error; same for `edit_message "text" --conversationId X --messageId M --content-file f`.
+
+**Proposal:** throw a UsageError when the positional's parameter is already set.
