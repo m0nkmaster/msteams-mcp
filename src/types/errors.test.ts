@@ -22,6 +22,7 @@ describe('createError', () => {
       'Do NOT skip this step or tell the user Teams is unavailable',
       'After login succeeds, retry the original request',
       'Only if that teams_login fails or signs in the wrong account, ask the user to approve teams_login with { "forceNew": true }: it deletes all local login data (browser profile, cookies, every signed-in account) and forces an interactive sign-in',
+      'If teams_login reports success but the same request fails again with an authentication error, stop and tell the user instead of calling teams_login again',
     ]);
   });
 
@@ -33,6 +34,7 @@ describe('createError', () => {
       'Do NOT skip this step or tell the user Teams is unavailable',
       'After login succeeds, retry the original request',
       'Only if that teams_login fails or signs in the wrong account, ask the user to approve teams_login with { "forceNew": true }: it deletes all local login data (browser profile, cookies, every signed-in account) and forces an interactive sign-in',
+      'If teams_login reports success but the same request fails again with an authentication error, stop and tell the user instead of calling teams_login again',
     ]);
   });
 

@@ -168,10 +168,25 @@ describe('downloadFile', () => {
     expect(await downloadFile(FILE_URL, join(dir, 'x'))).toMatchObject({ ok: false, error: { code: ErrorCode.ACCESS_DENIED } });
   });
 
-  it('passes through an unavailable Graph token unchanged', async () => {
+  it('rewraps an unavailable Graph token with download-specific guidance', async () => {
+    // AUTH_INTERACTION_REQUIRED's defaults talk about EDU Assignments — the
+    // wrong context for file downloads (same fix as chat attachments).
     const unavailable = err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED, 'Microsoft Graph could not be authorized'));
     vi.mocked(requireGraphTokenAsync).mockResolvedValue(unavailable);
-    expect(await downloadFile(FILE_URL, join(dir, 'x'))).toEqual(unavailable);
+
+    const result = await downloadFile(FILE_URL, join(dir, 'x'));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: ErrorCode.AUTH_INTERACTION_REQUIRED,
+        message: expect.stringContaining('File downloads need Microsoft Graph, which could not be authorized'),
+        suggestions: expect.arrayContaining([
+          expect.stringContaining('teams_login (without forceNew)'),
+          expect.stringContaining('stop and tell the user instead of calling teams_login again'),
+        ]),
+      },
+    });
     expect(mockHttp).not.toHaveBeenCalled();
   });
 });

@@ -21,7 +21,8 @@ import {
   extractCsaToken,
 } from '../auth/token-extractor.js';
 import { coreSessionReady, messagingUsable } from '../auth/core-credentials.js';
-import { awaitRefreshQueue, refreshCoreTokensViaHttp, coreSessionUsable, setBrowserLoginInProgress, isBrowserLoginInProgress } from '../auth/token-refresh.js';
+import { awaitRefreshQueue, optionalResourcesNeedingSignIn, refreshCoreTokensViaHttp, refreshOptionalTokenForLogin, coreSessionUsable, setBrowserLoginInProgress, isBrowserLoginInProgress } from '../auth/token-refresh.js';
+import type { OnDemandResource } from '../auth/token-refresh-http.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import { ErrorCode, createError, type McpError } from '../types/errors.js';
 import { TOKEN_VALID_THRESHOLD_MINUTES } from '../constants.js';
@@ -156,6 +157,38 @@ async function messagingAuthFailure(forceNewMayHelp: boolean): Promise<ToolResul
   };
 }
 
+const OPTIONAL_RESOURCE_LABELS: Record<OnDemandResource, string> = {
+  assignments: 'Assignments',
+  graph: 'Microsoft Graph',
+};
+
+/**
+ * After a successful sign-in, re-mint every optional resource flagged as
+ * needing one. Core Teams already works, so a failure stays a success with a
+ * warning that names the resource and forbids another login loop.
+ */
+async function refreshFlaggedOptionalTokens(): Promise<{ note: string; warnings: string[] }> {
+  const note: string[] = [];
+  const warnings: string[] = [];
+  for (const resource of optionalResourcesNeedingSignIn()) {
+    const label = OPTIONAL_RESOURCE_LABELS[resource];
+    const result = await refreshOptionalTokenForLogin(resource);
+    if (result.ok) continue;
+    const sentence = `${label} is still unavailable after sign-in: ${result.error.message} Do not call teams_login again for this; tell the user ${label} is still unavailable and continue with other Teams tools.`;
+    warnings.push(sentence);
+    note.push(` ${sentence}`);
+  }
+  return { note: note.join(''), warnings };
+}
+
+/** Success payload with optional-token warnings folded into message + data. */
+function loginSuccessData(baseMessage: string, optional: { note: string; warnings: string[] }): Record<string, unknown> {
+  return {
+    message: baseMessage + optional.note,
+    ...(optional.warnings.length > 0 ? { warnings: optional.warnings } : {}),
+  };
+}
+
 /** Failure returned when a teams_login browser sign-in is already running. */
 function loginInProgressFailure(): ToolResult {
   return {
@@ -214,19 +247,27 @@ async function handleLogin(
       }
     }
     if (messagingUsable()) {
-      const refreshedStatus = getSubstrateTokenStatus();
-      return {
-        success: true,
-        data: {
-          message: `Already authenticated. Token valid for ${refreshedStatus.minutesRemaining} more minutes.`,
-          tokenStatus: {
-            expiresAt: refreshedStatus.expiresAt,
-            minutesRemaining: refreshedStatus.minutesRemaining,
+      // An optional resource flagged as needing sign-in (e.g. Graph's SPA
+      // refresh token past its 24h limit) is not fixed by "Already
+      // authenticated" — continue to headless SSO, which re-mints it.
+      const needingSignIn = optionalResourcesNeedingSignIn();
+      if (needingSignIn.length === 0) {
+        const refreshedStatus = getSubstrateTokenStatus();
+        return {
+          success: true,
+          data: {
+            message: `Already authenticated. Token valid for ${refreshedStatus.minutesRemaining} more minutes.`,
+            tokenStatus: {
+              expiresAt: refreshedStatus.expiresAt,
+              minutesRemaining: refreshedStatus.minutesRemaining,
+            },
           },
-        },
-      };
+        };
+      }
+      log.warn('login', `Optional resources flagged as needing sign-in (${needingSignIn.join(', ')}); continuing to headless SSO`);
+    } else {
+      log.warn('login', 'Substrate token is valid but messaging auth is unusable; continuing to browser login');
     }
-    log.warn('login', 'Substrate token is valid but messaging auth is unusable; continuing to browser login');
   }
 
   // Headless-first strategy:
@@ -261,11 +302,10 @@ async function handleLogin(
       const failure = await messagingAuthFailure(true);
       if (failure) return failure;
 
+      const optional = await refreshFlaggedOptionalTokens();
       return {
         success: true,
-        data: {
-          message: 'Login completed silently via SSO. Session has been saved.',
-        },
+        data: loginSuccessData('Login completed silently via SSO. Session has been saved.', optional),
       };
     } catch (error) {
       log.warn('login:headless', `Headless SSO failed, falling back to visible browser: ${error instanceof Error ? error.message : String(error)}`);
@@ -291,11 +331,10 @@ async function loginInVisibleBrowser(): Promise<ToolResult> {
   const failure = await messagingAuthFailure(false);
   if (failure) return failure;
 
+  const optional = await refreshFlaggedOptionalTokens();
   return {
     success: true,
-    data: {
-      message: 'Login completed successfully. Session has been saved.',
-    },
+    data: loginSuccessData('Login completed successfully. Session has been saved.', optional),
   };
 }
 

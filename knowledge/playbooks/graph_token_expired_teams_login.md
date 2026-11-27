@@ -16,7 +16,7 @@ stale_after: 2027-05-25
 1. `npm run cli -- login` (or `teams_login` without `forceNew`). It tried headless SSO and printed "Login completed silently via SSO" in about 17 s, no window.
 2. Retry the call.
 
-Plain `teams_login` only reaches headless SSO (which re-mints the Graph token) when the Substrate token has under 10 minutes left or messaging auth is still unusable after one HTTP refresh; otherwise it returns "Already authenticated" without refreshing Graph (tracked in BACKLOG.md).
+Plain `teams_login` reaches headless SSO whenever an optional resource (Graph, Assignments) was flagged by a failed on-demand refresh, re-mints it after sign-in, and returns a warning that forbids another login loop if it still fails. The flag is per process: the long-lived MCP server sees it, but a fresh `msteams login` CLI process does not — in the CLI, if login says "Already authenticated" the Graph token can still be dead until the Substrate token is near expiry.
 
 ## Do not
 

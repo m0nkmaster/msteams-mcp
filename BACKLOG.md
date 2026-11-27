@@ -89,6 +89,10 @@ Work items not yet scheduled. Strategic direction lives in [ROADMAP.md](ROADMAP.
 
 **Done when:** a test shows a remembered Graph refusal sends plain login to headless SSO; concurrent `teams_login` calls share one attempt; the loop-breaking suggestion is pinned by a test.
 
+**Status:** Implemented 2026-11-27, pending the live Windows check — an auth-state failure (AUTH_EXPIRED/AUTH_REQUIRED, e.g. AADSTS700084) on an on-demand optional refresh now flags that resource for the process (`optionalResourcesNeedingSignIn`); plain `teams_login` skips "Already authenticated" while anything is flagged, signs in, then re-mints each flagged resource via `refreshOptionalTokenForLogin` (no profile gate — login owns it). Persistent failure returns success with `data.warnings` + a do-not-call-again sentence. AUTH_REQUIRED/AUTH_EXPIRED defaults, attachment advice and file-download advice all carry the loop breaker. PR: PR_LINK_PLACEHOLDER.
+
+**Superseded/deferred:** the "serialize handleLogin; concurrent calls share one attempt" proposal is superseded — PR #3 made a second `teams_login` fail fast with "already in progress" instead. Known limit (documented in AGENTS.md): the flag Set is per process — the long-lived MCP server sees it, a fresh `msteams login` CLI process does not, so CLI login can still report "Already authenticated" while Graph is dead until Substrate nears expiry.
+
 ## CLI drops everything after the first newline under `npm run` on Windows
 
 **Added:** 2026-11-26 (George Murga).

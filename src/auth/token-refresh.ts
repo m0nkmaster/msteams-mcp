@@ -172,27 +172,38 @@ export function refreshCoreTokensViaHttp(): Promise<Result<void>> {
 }
 
 /**
+ * Optional resources whose last on-demand refresh failed with an auth-state
+ * error (the AUTH_EXPIRED/AUTH_REQUIRED branch below). Those need a real
+ * sign-in — headless SSO re-mints the SPA refresh token — so teams_login's
+ * fast path must not report "Already authenticated" while one is flagged.
+ * ACCESS_DENIED, TIMEOUT, API_ERROR and the in-progress gate never flag:
+ * sign-in cannot fix consent, Conditional Access or a wedged network.
+ * Per process: the long-lived MCP server sees the flag; a fresh CLI login
+ * process starts empty and keeps the fast path.
+ */
+const optionalSignInNeeded = new Set<OnDemandResource>();
+
+/** Optional resources currently flagged as needing a sign-in. */
+export function optionalResourcesNeedingSignIn(): OnDemandResource[] {
+  return [...optionalSignInNeeded];
+}
+
+/**
  * Acquire an optional resource's token on demand with a single HTTP exchange.
  * Optional features never launch a browser, refresh core credentials, or return
  * an error that would trigger the server's auto-login.
  */
-function refreshOnDemandToken(resource: OnDemandResource, label: string, getValid: () => string | null): Promise<Result<string>> {
-  // Same entry gate as the core refresh: the exchange writes session state.
-  // Optional resources never return AUTH_REQUIRED/AUTH_EXPIRED (that would
-  // trigger the server's auto-login), so this maps to AUTH_INTERACTION_REQUIRED.
-  if (isBrowserLoginInProgress()) {
-    return Promise.resolve(err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
-      `Teams sign-in is already in progress in another window; the ${label} token is unavailable until it finishes.`,
-      { retryable: false })));
-  }
+function onDemandExchange(resource: OnDemandResource, label: string, getValid: () => string | null): Promise<Result<string>> {
   return serializeRefresh(async () => {
     const result = await refreshTokensViaHttp(resource);
     if (!result.ok && (result.error.code === ErrorCode.AUTH_EXPIRED || result.error.code === ErrorCode.AUTH_REQUIRED)) {
+      optionalSignInNeeded.add(resource);
       return err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
         `${label} could not be authorized: ${result.error.message}`,
         { retryable: false }));
     }
     if (!result.ok) return result;
+    optionalSignInNeeded.delete(resource);
     const token = getValid();
     return token ? ok(token) : err(createError(ErrorCode.API_ERROR,
       `${label} token exchange did not return a valid token for the ${label} service.`,
@@ -206,6 +217,32 @@ function refreshOnDemandToken(resource: OnDemandResource, label: string, getVali
     return err(createError(ErrorCode.UNKNOWN,
       `${label} token refresh failed: ${message}`));
   });
+}
+
+function refreshOnDemandToken(resource: OnDemandResource, label: string, getValid: () => string | null): Promise<Result<string>> {
+  // Same entry gate as the core refresh: the exchange writes session state.
+  // Optional resources never return AUTH_REQUIRED/AUTH_EXPIRED (that would
+  // trigger the server's auto-login), so this maps to AUTH_INTERACTION_REQUIRED.
+  if (isBrowserLoginInProgress()) {
+    return Promise.resolve(err(createError(ErrorCode.AUTH_INTERACTION_REQUIRED,
+      `Teams sign-in is already in progress in another window; the ${label} token is unavailable until it finishes.`,
+      { retryable: false })));
+  }
+  return onDemandExchange(resource, label, getValid);
+}
+
+/**
+ * Re-mint an optional token right after a sign-in: teams_login owns the
+ * profile for the whole window, so the isBrowserLoginInProgress entry gate
+ * must not stand this down (same reasoning as refreshCoreTokensViaHttp).
+ */
+export function refreshOptionalTokenForLogin(resource: OnDemandResource): Promise<Result<string>> {
+  // Resolved at call time, not module scope: partial token-extractor mocks in
+  // unrelated test files must not break importing this module.
+  const cfg = resource === 'graph'
+    ? { label: 'Microsoft Graph', getValid: getValidGraphToken }
+    : { label: 'Assignments', getValid: getValidAssignmentsToken };
+  return onDemandExchange(resource, cfg.label, cfg.getValid);
 }
 
 /** Acquire the optional EDU Assignments token. */

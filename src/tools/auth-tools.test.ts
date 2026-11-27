@@ -16,7 +16,7 @@ vi.mock('../auth/token-extractor.js', () => ({
 }));
 
 vi.mock('../auth/token-refresh-http.js', () => ({ refreshTokensViaHttp: vi.fn() }));
-vi.mock('../auth/token-refresh.js', () => ({ refreshCoreTokensViaHttp: vi.fn(), awaitRefreshQueue: vi.fn(), setBrowserLoginInProgress: vi.fn(), isBrowserLoginInProgress: vi.fn(), coreSessionUsable: vi.fn() }));
+vi.mock('../auth/token-refresh.js', () => ({ refreshCoreTokensViaHttp: vi.fn(), awaitRefreshQueue: vi.fn(), setBrowserLoginInProgress: vi.fn(), isBrowserLoginInProgress: vi.fn(), coreSessionUsable: vi.fn(), optionalResourcesNeedingSignIn: vi.fn(() => []), refreshOptionalTokenForLogin: vi.fn() }));
 vi.mock('../browser/context.js', () => ({ createBrowserContext: vi.fn(), closeBrowser: vi.fn() }));
 vi.mock('../browser/auth.js', () => ({ ensureAuthenticated: vi.fn() }));
 vi.mock('../utils/auth-guards.js', () => ({ resetAssignmentsAvailability: vi.fn(), clearRegionCache: vi.fn() }));
@@ -32,7 +32,7 @@ import {
   extractSkypeSpacesToken,
 } from '../auth/token-extractor.js';
 import { refreshTokensViaHttp } from '../auth/token-refresh-http.js';
-import { awaitRefreshQueue, refreshCoreTokensViaHttp, setBrowserLoginInProgress, isBrowserLoginInProgress, coreSessionUsable } from '../auth/token-refresh.js';
+import { awaitRefreshQueue, coreSessionUsable, isBrowserLoginInProgress, optionalResourcesNeedingSignIn, refreshCoreTokensViaHttp, refreshOptionalTokenForLogin, setBrowserLoginInProgress } from '../auth/token-refresh.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import { ensureAuthenticated } from '../browser/auth.js';
 import { ErrorCode } from '../types/errors.js';
@@ -59,6 +59,7 @@ describe('teams_login core credential top-up', () => {
     vi.mocked(coreSessionUsable).mockImplementation(
       () => extractSubstrateToken() !== null && extractMessageAuth() !== null,
     );
+    vi.mocked(optionalResourcesNeedingSignIn).mockReturnValue([]);
   });
 
   it('mints the missing CSA token when the session is otherwise valid', async () => {
@@ -159,6 +160,7 @@ describe('teams_login fast path requires usable messaging', () => {
     vi.mocked(coreSessionUsable).mockImplementation(
       () => extractSubstrateToken() !== null && extractMessageAuth() !== null,
     );
+    vi.mocked(optionalResourcesNeedingSignIn).mockReturnValue([]);
     vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
     vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
     vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: true, minutesRemaining: 60 });
@@ -298,6 +300,79 @@ describe('teams_login fast path requires usable messaging', () => {
       expect(result.error.message).toContain('Substrate');
     }
     expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
+  });
+
+  it('runs headless SSO instead of the fast path when an optional resource needs sign-in', async () => {
+    // Graph's SPA refresh token hit its 24h limit: the flag makes a plain
+    // login re-mint it instead of reporting "Already authenticated" forever.
+    vi.mocked(optionalResourcesNeedingSignIn).mockReturnValue(['graph']);
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: true, minutesRemaining: 600 });
+    vi.mocked(refreshOptionalTokenForLogin).mockResolvedValue({ ok: true, value: 'graph-token' });
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(String(result.data.message)).not.toContain('Already authenticated');
+      expect(result.data.warnings).toBeUndefined();
+    }
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: true });
+    expect(refreshOptionalTokenForLogin).toHaveBeenCalledWith('graph');
+  });
+
+  it('warns instead of looping when the optional resource still fails after sign-in', async () => {
+    vi.mocked(optionalResourcesNeedingSignIn).mockReturnValue(['graph']);
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: true, minutesRemaining: 600 });
+    vi.mocked(refreshOptionalTokenForLogin).mockResolvedValue({
+      ok: false,
+      error: { code: ErrorCode.AUTH_INTERACTION_REQUIRED, message: 'AADSTS700084', retryable: false, suggestions: [] },
+    } as never);
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    // Core Teams works, so this stays a success — but the warning must stop
+    // the AI from calling teams_login again for the same failure.
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const warnings = result.data.warnings as string[];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('Microsoft Graph');
+      expect(warnings[0]).toContain('Do not call teams_login again');
+      expect(String(result.data.message)).toContain('still unavailable');
+    }
+  });
+
+  it('keeps the fast path when no optional resource is flagged', async () => {
+    vi.mocked(optionalResourcesNeedingSignIn).mockReturnValue([]);
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: true, minutesRemaining: 600 });
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(String(result.data.message)).toContain('Already authenticated');
+    }
+    expect(createBrowserContext).not.toHaveBeenCalled();
+    expect(refreshOptionalTokenForLogin).not.toHaveBeenCalled();
+  });
+
+  it('re-mints the flagged optional token after a visible sign-in too', async () => {
+    vi.mocked(optionalResourcesNeedingSignIn).mockReturnValue(['graph']);
+    vi.mocked(extractMessageAuth).mockReturnValue({ skypeToken: 's', authToken: 'a', userMri: '8:orgid:u' });
+    vi.mocked(getMessageAuthStatus).mockReturnValue({ hasToken: true, minutesRemaining: 600 });
+    vi.mocked(refreshOptionalTokenForLogin).mockResolvedValue({ ok: true, value: 'graph-token' });
+    vi.mocked(ensureAuthenticated)
+      .mockRejectedValueOnce(new Error('headless SSO needs interaction'))
+      .mockResolvedValue(undefined);
+
+    const result = await loginTool.handler({ forceNew: false });
+
+    expect(result.success).toBe(true);
+    expect(createBrowserContext).toHaveBeenCalledWith({ headless: false });
+    expect(refreshOptionalTokenForLogin).toHaveBeenCalledWith('graph');
   });
 
   it('names the Skype exchange when the refresh succeeded but messaging stays unusable', async () => {

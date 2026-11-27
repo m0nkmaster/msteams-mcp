@@ -22,13 +22,14 @@ vi.mock('./token-refresh-http.js', () => ({
   refreshTokensViaHttp: vi.fn(),
 }));
 
-import { awaitRefreshQueue, refreshTokensViaBrowser, refreshAssignmentsToken, refreshCoreTokensViaHttp, refreshGraphToken, setBrowserLoginInProgress } from './token-refresh.js';
+import { awaitRefreshQueue, optionalResourcesNeedingSignIn, refreshAssignmentsToken, refreshCoreTokensViaHttp, refreshGraphToken, refreshOptionalTokenForLogin, refreshTokensViaBrowser, setBrowserLoginInProgress } from './token-refresh.js';
 import {
   extractSubstrateToken,
   extractMessageAuth,
   extractSkypeSpacesToken,
   extractCsaToken,
   getMessageAuthStatus,
+  getValidGraphToken,
 } from './token-extractor.js';
 import { refreshTokensViaHttp } from './token-refresh-http.js';
 import type { Result } from '../types/result.js';
@@ -269,6 +270,66 @@ describe('refreshTokensViaBrowser', () => {
     } finally {
       setBrowserLoginInProgress(false);
     }
+  });
+
+  it('flags a resource whose on-demand refresh fails with an auth-state error', async () => {
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_EXPIRED, 'AADSTS700084: refresh token expired'),
+    });
+
+    const result = await refreshGraphToken();
+
+    expect(result.ok).toBe(false);
+    expect(optionalResourcesNeedingSignIn()).toContain('graph');
+
+    // Clean up the module-level flag for the tests that follow.
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    vi.mocked(getValidGraphToken).mockReturnValue('graph-token');
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+  });
+
+  it('does not flag ACCESS_DENIED or in-progress-gate failures', async () => {
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.ACCESS_DENIED, 'consent required'),
+    });
+    await refreshGraphToken();
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+
+    setBrowserLoginInProgress(true);
+    try {
+      await refreshGraphToken();
+    } finally {
+      setBrowserLoginInProgress(false);
+    }
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
+  });
+
+  it('refreshOptionalTokenForLogin exchanges during a sign-in and updates the flag', async () => {
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({
+      ok: false,
+      error: createError(ErrorCode.AUTH_REQUIRED, 'no refresh token'),
+    });
+
+    setBrowserLoginInProgress(true);
+    try {
+      // The login owns the profile, so the entry gate must not stand this down.
+      const result = await refreshOptionalTokenForLogin('graph');
+
+      expect(result.ok).toBe(false);
+      expect(refreshTokensViaHttp).toHaveBeenCalledWith('graph');
+      expect(optionalResourcesNeedingSignIn()).toContain('graph');
+    } finally {
+      setBrowserLoginInProgress(false);
+    }
+
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    vi.mocked(getValidGraphToken).mockReturnValue('graph-token');
+    const recovered = await refreshOptionalTokenForLogin('graph');
+    expect(recovered.ok).toBe(true);
+    expect(optionalResourcesNeedingSignIn()).not.toContain('graph');
   });
 
   it('awaitRefreshQueue also waits for refreshes enqueued while it waits', async () => {
